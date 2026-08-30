@@ -25,7 +25,9 @@ def workspace_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def settings(workspace_dir: Path) -> Settings:
-    return Settings(host="127.0.0.1", port=0, auth_token=TEST_TOKEN, workspace_dir=workspace_dir)
+    return Settings(
+        host="127.0.0.1", port=0, auth_token=TEST_TOKEN, workspace_dir=workspace_dir
+    )
 
 
 @pytest.fixture

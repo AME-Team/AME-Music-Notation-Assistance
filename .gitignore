@@ -22,6 +22,9 @@ frontend/.vite/
 *.pth
 *.ckpt
 
+# AME AI Review System — init --with-engines が生成する TS エンジンサイドカー(利用者固有・再生成物)
+.ame-review/engines-ts/
+
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -13,6 +13,7 @@ APIサーバは生き残る」ことをテストするため)。
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import time
@@ -50,8 +51,13 @@ def run_dummy_stage(job_id: str, params: dict) -> None:
 
 def main() -> int:
     # #79: Windows コンソールの既定コードページに関わらず UTF-8 で出力する。
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    # sys.stdout/stderr は typeshed 上 TextIO 型で reconfigure() を持たないため、
+    # 実体である TextIOWrapper の場合のみ呼び出す(pytest の capsys 等、
+    # TextIOWrapper でないストリームに差し替えられていても worker を落とさない)。
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr.reconfigure(encoding="utf-8")
 
     job_id, stage, params_json = sys.argv[1], sys.argv[2], sys.argv[3]
     params = json.loads(params_json) if params_json else {}

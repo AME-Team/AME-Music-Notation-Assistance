@@ -1,0 +1,69 @@
+---
+# AME AI Review System — PR レビュー呼び出しラッパ (配布先用)。
+# `ame-ai-reviewer init` で生成される。v0.2.8 はリリースタグ (例: v1.0.0) に置換される。
+# 更新は v0.2.8 の差し替えのみ。本体は reusable workflow 側を参照する。
+# Issue コメントでは発火しない。secrets 登録のエンジン情報 (Issue #40) も引き継ぐ。
+
+name: AI Code Review (Command)
+
+"on":
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "レビュー対象 PR 番号（手動実行時）"
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# Issue #68: issue_comment は Issue と PR の両方で発火するが、PR コメント以外は
+# ジョブ if で弾く。残る skipped run を同一 PR/Issue ごとにグループ化して履歴の
+# ノイズを抑える (cancel はレビュー途中のトークン無駄遣いを避けるため行わない)。
+concurrency:
+  group: review-command-${{ github.event.issue.number || inputs.pr_number || github.run_id }}
+  cancel-in-progress: false
+jobs:
+  review:
+    # Issue #81: コマンド判定の単一情報源は reusable workflow の is-review-command
+    # パーサー (本文の先頭行を完全一致 or " " 区切りで判定)。ここは軽量な前置フィルタで、
+    # 誤判定はパーサー側で弾く。"/request-review\n<理由>" のような改行区切り本文でも
+    # 発火できるよう /request-review は先頭一致とし、/review は /reviewer 等への
+    # 誤発火を避けるため完全一致 or " " 区切りのみとする。
+    # 注意: GitHub 式言語はダブルクォート不可・"\n" エスケープ不可のため、
+    # 改行区切り対応には startsWith(body, '/request-review') が必要になる。
+    # /request-reviewer 等の誤発火は startsWith でジョブが起動しても、パーサーが
+    # run_review=false を返し実処理 (AI レビュー) は一切実行されない (コストは起動のみ)。
+    if: >-
+      github.event_name == 'workflow_dispatch' || (github.event.issue.pull_request != null &&
+       github.event.comment.user.login != 'ame-ai-reviewer[bot]' &&
+       (startsWith(github.event.comment.body, '/request-review') ||
+        github.event.comment.body == '/review' ||
+        startsWith(github.event.comment.body, '/review ')))
+    uses: AME-Team/AME-AI-Review-System/.github/workflows/review-command.yml@v0.2.8
+    with:
+      # Issue #104: reusable workflow 側が type: string で受け取るため、
+      # 配布先ラッパで fromJSON() による数値化は不要。workflow_dispatch の
+      # inputs.pr_number (文字列) もそのまま渡せ、issue_comment の number も
+      # string 入力へは自動的に文字列化される。
+      pr_number: ${{ inputs.pr_number || github.event.issue.number }}
+      # Issue #71: workflow_dispatch 時は github.event.comment が無く command が空になる。
+      # 空文字は || で /request-review へフォールバックし、手動実行でも判定を通す。
+      command: ${{ github.event.comment.body || '/request-review' }}
+      system_ref: v0.2.8
+      review_engine: ${{ vars.REVIEW_ENGINE || '' }}
+      review_model: ${{ vars.REVIEW_MODEL || '' }}
+      reply_model: ${{ vars.REPLY_MODEL || '' }}
+      review_thinking: ${{ vars.REVIEW_THINKING || '' }}
+    secrets:
+      app-id: ${{ secrets.AME_AI_REVIEWER_APP_ID }}
+      private-key: ${{ secrets.AME_AI_REVIEWER_APP_PRIVATE_KEY }}
+      opencode-auth-b64: ${{ secrets.OPENCODE_AUTH_B64 }}
+      antigravity-oauth-b64: ${{ secrets.ANTIGRAVITY_OAUTH_B64 }}
+      gemini-oauth-b64: ${{ secrets.GEMINI_OAUTH_B64 }}
+      review-engine: ${{ secrets.REVIEW_ENGINE }}
+      review-model: ${{ secrets.REVIEW_MODEL }}
+      reply-model: ${{ secrets.REPLY_MODEL }}
+      review-thinking: ${{ secrets.REVIEW_THINKING }}

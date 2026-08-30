@@ -1,0 +1,100 @@
+---
+# AME AI Review System — pre-commit profile: full
+# Python + Node + Shell + 設定ファイル + Secret + AI レビューの包括セット。
+# (各フックの実行には対応ツールのインストールが必要。不要なフックは削除してよい)
+minimum_pre_commit_version: "4.0.0"
+# Issue #82: ai-review-state-reset (stages: [post-commit]) が standard install で
+# 入るよう post-commit を明示する。既存クローンで pre-commit install 済みの場合は
+#   pre-commit install -t pre-commit -t post-commit
+# を再実行すること。
+default_install_hook_types: [pre-commit, post-commit]
+fail_fast: true
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        additional_dependencies: []
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        # Issue #69: lockfile の圧縮トークンを typo と誤検知するため除外。
+        # Issue #80: .ame-review/engines-ts/ (TS 側エンジン SDK) も誤検知回避のため除外。
+        exclude: "(pnpm-lock\\.yaml|package-lock\\.json|yarn\\.lock)$|^\\.ame-review/engines-ts/"
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: [--strict]
+        # Issue #69: lockfile (数千行・長行) は yamllint --strict で大量エラーになるため除外。
+        exclude: "(pnpm-lock\\.yaml|.*-lock\\.(yaml|json)|yarn\\.lock)$"
+
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+
+  # =========================================================================
+  # AME AI Review System — Gate 1 AI review hooks
+  # pre-commit が `language: python` の venv へ wheel を自動導入するため、
+  # 絶対パスのハードコードは不要 (各環境で解決される)。初回実行時のみ
+  # GitHub Releases の wheel 取得にネットワークが必要 (以降はキャッシュ)。
+  # オフライン/制限環境では `ame-ai-reviewer init --python <path>` を使うと
+  # `language: system` で生成され、事前に導入した Python で実行される。
+  # 供給チェーン対策として wheel は `#sha256=` で内容を固定する (Issue #84)。
+  # claude / antigravity エンジン利用時は `additional_dependencies` へ
+  # 対応する Python SDK を追加すること (init --engine で自動追加、手動編集時は
+  # 手動追加が必要) (Issue #114)。
+  # 各フックの additional_dependencies は常に同一に保つこと (init 生成時は単一の
+  # 定義から全フックへ一律展開される。手動編集時は 3 フックすべてを揃えること)。
+  # =========================================================================
+  - repo: local
+    hooks:
+      - id: ai-skip-guard
+        name: "AI review skip guard (Issue #26)"
+        entry: python -m ame_ai_review_system.skip_guard
+        language: python
+        additional_dependencies:
+          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.8/ame_ai_review_system-0.2.8-py3-none-any.whl#sha256=94f951ba6027fd795df625b76b37c0f091757ff3ee42fb6c66ce8b9a426302b7
+          - claude-agent-sdk
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: ai-precommit-review
+        name: "AI Code Review (pre-commit)"
+        entry: python -m ame_ai_review_system.precommit_review
+        language: python
+        additional_dependencies:
+          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.8/ame_ai_review_system-0.2.8-py3-none-any.whl#sha256=94f951ba6027fd795df625b76b37c0f091757ff3ee42fb6c66ce8b9a426302b7
+          - claude-agent-sdk
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: ai-review-state-reset
+        name: "AI review state reset (post-commit)"
+        entry: python -m ame_ai_review_system.post_commit_reset
+        language: python
+        additional_dependencies:
+          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.8/ame_ai_review_system-0.2.8-py3-none-any.whl#sha256=94f951ba6027fd795df625b76b37c0f091757ff3ee42fb6c66ce8b9a426302b7
+          - claude-agent-sdk
+        pass_filenames: false
+        always_run: true
+        stages: [post-commit]

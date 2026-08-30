@@ -1,0 +1,31 @@
+# yamllint 設定(厳格)。--strict で警告もエラー扱いにする。
+# AME-AI-Review-System の pre-commit プリセットが生成する .pre-commit-config.yaml は
+# sha256 固定の wheel URL(Issue #84)を additional_dependencies に埋め込むため、
+# 1行が非常に長くなる(200文字超)。この1ファイルのみ ignore し、それ以外は
+# line-length: 100 で運用する。
+---
+extends: default
+
+ignore: |
+  node_modules/
+  frontend/node_modules/
+  .ame-review/engines-ts/
+  .pre-commit-config.yaml
+
+rules:
+  line-length:
+    max: 100
+    level: error
+  document-start:
+    present: true
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: true
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: enable
+  empty-lines:
+    max: 1
+  indentation:
+    spaces: 2
+    indent-sequences: true

@@ -1,7 +1,8 @@
+---
 name: CI
 
 # NFR-08′: 本アプリは Windows 11 x64 専用のため、CI も windows-latest で実行する。
-on:
+"on":
   push:
     branches: [main]
   pull_request:

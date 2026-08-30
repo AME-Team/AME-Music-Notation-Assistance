@@ -51,7 +51,9 @@ def test_project_lifecycle(client: TestClient, tiny_wav_bytes: bytes) -> None:
     assert resp.json()["id"] == project_id
 
     # play (range request)
-    resp = client.get(f"/api/projects/{project_id}/audio/original", headers={"Range": "bytes=0-9"})
+    resp = client.get(
+        f"/api/projects/{project_id}/audio/original", headers={"Range": "bytes=0-9"}
+    )
     assert resp.status_code == 206
     assert resp.headers["content-range"].startswith("bytes 0-9/")
     assert len(resp.content) == 10

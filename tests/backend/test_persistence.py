@@ -12,7 +12,9 @@ def test_project_survives_process_restart_simulation(
     workspace_dir: Path, tiny_wav_bytes: bytes
 ) -> None:
     service_before = ProjectService(workspace_dir=workspace_dir)
-    project = service_before.create_project(original_filename="restart.wav", content=tiny_wav_bytes)
+    project = service_before.create_project(
+        original_filename="restart.wav", content=tiny_wav_bytes
+    )
     project_id = project["id"]
 
     # 「プロセス再起動」をシミュレートする: DBコネクションを閉じ、新しい
@@ -31,10 +33,14 @@ def test_project_survives_process_restart_simulation(
     assert service_after.audio_path(project_id).exists()
 
 
-def test_japanese_filename_round_trips(workspace_dir: Path, tiny_wav_bytes: bytes) -> None:
+def test_japanese_filename_round_trips(
+    workspace_dir: Path, tiny_wav_bytes: bytes
+) -> None:
     """#79: 日本語ファイル名でも UTF-8 で正しく保存・復元できること。"""
     service = ProjectService(workspace_dir=workspace_dir)
-    project = service.create_project(original_filename="曲名テスト.wav", content=tiny_wav_bytes)
+    project = service.create_project(
+        original_filename="曲名テスト.wav", content=tiny_wav_bytes
+    )
 
     db.close_connection(workspace_dir / "db.sqlite3")
     reloaded = ProjectService(workspace_dir=workspace_dir).get_project(project["id"])

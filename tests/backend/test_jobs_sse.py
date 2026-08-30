@@ -28,7 +28,11 @@ async def _collect_sse_events(client: httpx.AsyncClient, job_id: str) -> list[di
         async for line in resp.aiter_lines():
             if line.startswith("data: "):
                 events.append(json.loads(line.removeprefix("data: ")))
-            if events and events[-1].get("status") in ("succeeded", "failed", "cancelled"):
+            if events and events[-1].get("status") in (
+                "succeeded",
+                "failed",
+                "cancelled",
+            ):
                 break
     return events
 
@@ -65,7 +69,9 @@ async def test_unknown_stage_is_rejected(
     assert resp.status_code == 422
 
 
-async def test_job_cancel(async_client: httpx.AsyncClient, tiny_wav_bytes: bytes) -> None:
+async def test_job_cancel(
+    async_client: httpx.AsyncClient, tiny_wav_bytes: bytes
+) -> None:
     project_id = await _create_project(async_client, tiny_wav_bytes)
     resp = await _run_dummy_stage(async_client, project_id, {})
     job_id = resp.json()["job_id"]
