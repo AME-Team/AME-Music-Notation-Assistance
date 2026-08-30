@@ -1,0 +1,18 @@
+# NSIS(Windows専用)パッケージング設定の雛形(#82 §5/§7, M6で本格運用予定)。
+# M0時点ではビルドが通ることの確認までを目的とし、実配布(署名・自動更新等)はM6で詰める。
+appId: com.ame-team.music-notation-assistance
+productName: AME Music Notation Assistance
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+# Q-17(#82): Python ランタイムの同梱方式(PyInstaller / embeddable Python + venv / 別インストール)
+# はM6までに決定する。M0時点ではbackend/ディレクトリを含めていない。
+win:
+  target: nsis
+  artifactName: ${productName}-${version}-setup.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

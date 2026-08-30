@@ -1,0 +1,97 @@
+name: CI
+
+# NFR-08′: 本アプリは Windows 11 x64 専用のため、CI も windows-latest で実行する。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: uv sync
+        working-directory: backend
+        run: uv sync
+      - name: ruff check
+        working-directory: backend
+        run: uv run ruff check .
+      - name: ruff format --check
+        working-directory: backend
+        run: uv run ruff format --check .
+      - name: pytest
+        run: uv run --project backend pytest -q
+
+  frontend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+      - name: biome check
+        working-directory: frontend
+        run: npm run lint
+      - name: typecheck
+        working-directory: frontend
+        run: npm run typecheck
+      - name: vitest
+        working-directory: frontend
+        run: npm test
+
+  typegen-check:
+    # NFR-09: Pydantic スキーマ(OpenAPI) → TS 型の生成物が最新であることを検証する。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: uv sync (backend)
+        working-directory: backend
+        run: uv sync
+      - name: export OpenAPI schema
+        working-directory: backend
+        run: uv run python scripts/export_openapi.py
+      - name: npm ci (frontend)
+        working-directory: frontend
+        run: npm ci
+      - name: generate TS types
+        working-directory: frontend
+        run: npm run typegen
+      - name: fail if generated files are stale
+        run: git diff --exit-code -- backend/openapi.json frontend/src/api/generated.ts
+
+  e2e:
+    runs-on: windows-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: uv sync (backend)
+        working-directory: backend
+        run: uv sync
+      - name: npm ci (frontend)
+        working-directory: frontend
+        run: npm ci
+      - name: build
+        working-directory: frontend
+        run: npm run build
+      - name: playwright e2e (Electron smoke test)
+        working-directory: frontend
+        run: npm run test:e2e

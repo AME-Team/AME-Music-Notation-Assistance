@@ -1,0 +1,58 @@
+{
+  "name": "ame-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev:renderer": "vite",
+    "dev:electron:watch": "tsc -p tsconfig.electron.json --watch",
+    "dev:electron:start": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron:watch\" \"npm:dev:electron:start\"",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build": "npm run build:renderer && npm run build:electron",
+    "start": "npm run build && electron .",
+    "typegen": "openapi-typescript ../backend/openapi.json -o src/api/generated.ts",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5",
+    "opensheetmusicdisplay": "^1",
+    "react": "^19",
+    "react-dom": "^19",
+    "tone": "^15",
+    "tree-kill": "^1",
+    "wavesurfer.js": "^7",
+    "zustand": "^5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2",
+    "@playwright/test": "^1",
+    "@tailwindcss/vite": "^4",
+    "@types/node": "^24",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "concurrently": "^9",
+    "cross-env": "^7",
+    "electron": "^38",
+    "electron-builder": "^26",
+    "openapi-typescript": "^7",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vite": "^7",
+    "vitest": "^3",
+    "wait-on": "^8"
+  },
+  "allowScripts": {
+    "electron@38.8.6": true,
+    "esbuild@0.28.2": true,
+    "electron-winstaller@5.4.0": true,
+    "gl@9.0.0-rc.10": true
+  }
+}

@@ -1,0 +1,72 @@
+[project]
+name = "ame-backend"
+version = "0.1.0"
+description = "AME Music Notation Assistance — backend (FastAPI)"
+authors = [
+    { name = "tarminjapan-ai-bot", email = "t.amemiya.0124.japan@gmail.com" }
+]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "anthropic==0.122.0",
+    "audio-separator==0.44.5",
+    "audioread>=3.1.0",
+    "beat-this==1.1.0",
+    "claude-agent-sdk==0.2.139",
+    "demucs-onnx==0.3.4",
+    "fastapi==0.141.1",
+    "httpx>=0.28.1",
+    "keyring>=25.7.0",
+    "librosa==1.0.0",
+    "mcp==1.29.0",
+    "mido>=1.3.3",
+    "music21==10.5.0",
+    "numpy==2.5.2",
+    "onnxruntime==1.28.0",
+    "partitura==1.9.0",
+    "piano-transcription-inference>=0.0.6",
+    "pydantic>=2,<3",
+    "scipy>=1.18.1",
+    "soundfile>=0.14.0",
+    "torch==2.10.0",
+    "torchaudio==2.10.0",
+    "torchcrepe>=0.0.24",
+    "uvicorn[standard]==0.52.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "hypothesis",
+    "ruff",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.uv]
+package = false
+
+# §13: torch runs CPU-only on this project (Radeon 780M iGPU has no CUDA path;
+# DirectML is opt-in via onnxruntime-directml, not via torch). Force the CPU
+# wheel index so we don't drag in multi-GB nvidia-* CUDA runtime packages that
+# are never used.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["app.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# B008: FastAPI の `Depends(...)` をデフォルト引数に書く公式イディオムのため無効化する。
+ignore = ["B008"]
+
+# pytest 設定はリポジトリ直下の pytest.ini を参照 (tests/ は backend/ の兄弟ディレクトリで、
+# pytest の ini 探索は「テストパスの祖先」を辿るため、ここに置いても読み込まれない)。
