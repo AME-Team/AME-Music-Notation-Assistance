@@ -100,3 +100,5 @@ CI(`typegen-check` job)がこの2ファイルの最新性を `git diff --exit-co
 | フロント型チェック | `cd frontend && npm run typecheck` |
 | フロント単体テスト | `cd frontend && npm test` |
 | Electron E2E | `cd frontend && npm run build && npm run test:e2e` |
+
+<!-- Gate 2 動作確認用の一時変更(テスト後に削除予定) -->
