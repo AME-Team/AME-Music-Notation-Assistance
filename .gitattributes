@@ -1,2 +1,7 @@
+# windows-latest の GitHub Actions ランナーは Git の core.autocrlf=true が既定のため、
+# 指定しないとチェックアウト時に LF 管理のソースがすべて CRLF に変換され、Biome/ruff format
+# 等の「フォーマット済みファイルとの一致」チェックが軒並み失敗する。.bat 以外は LF に固定する。
+* text=auto eol=lf
+
 # Windows専用アプリのため、cmd.exe が確実にパースできるよう .bat は常にCRLFで保持する。
 *.bat text eol=crlf
