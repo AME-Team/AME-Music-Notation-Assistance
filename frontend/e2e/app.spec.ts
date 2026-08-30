@@ -1,7 +1,11 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { _electron as electron, expect, test } from "@playwright/test";
+
+// package.json の "type": "module" により __dirname は使えないため import.meta.url から導出する。
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * #1/#15 の受け入れ条件を検証するスモークテスト:
