@@ -38,6 +38,7 @@ class JobManager:
     _write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _processes: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
     _subscribers: dict[str, list[asyncio.Queue]] = field(default_factory=dict)
+    _cancel_requested: set[str] = field(default_factory=set)
 
     def _conn(self) -> sqlite3.Connection:
         return db.get_connection(self.workspace_dir / "db.sqlite3")
@@ -68,7 +69,10 @@ class JobManager:
         return row
 
     async def cancel_job(self, job_id: str) -> None:
-        self.get_job(job_id)  # raises if missing
+        job = self.get_job(job_id)
+        if job["status"] in ("succeeded", "failed", "cancelled"):
+            return  # 既に終了しているジョブへの後追いキャンセルは無視する
+        self._cancel_requested.add(job_id)
         process = self._processes.get(job_id)
         if process is not None and process.returncode is None:
             proc.kill_process_tree(process.pid)
@@ -115,6 +119,13 @@ class JobManager:
             conn.commit()
 
     async def _run_job(self, job_id: str, stage: str, params: dict) -> None:
+        # #13/Windows実機で発覚したレース: create_job() が asyncio.create_task で
+        # このコルーチンをスケジュールした直後に cancel_job() が呼ばれると、
+        # このコルーチンが実行され始める前にジョブは既に "cancelled" 確定済みのことがある。
+        if job_id in self._cancel_requested:
+            self._cancel_requested.discard(job_id)
+            return
+
         await self._update_job(job_id, status="running")
         await self._publish(job_id, {"job_id": job_id, "status": "running", "progress": 0.0})
 
@@ -122,6 +133,11 @@ class JobManager:
         cmd = [sys.executable, "-m", "app.worker.dsp_main", job_id, stage, json.dumps(params)]
         process = await proc.spawn_json_lines_worker(cmd, env=env, cwd=str(_BACKEND_DIR))
         self._processes[job_id] = process
+
+        # spawn の最中に cancel_job() が来ていた場合(_processes 未登録でkillできなかった)、
+        # ここで追いかけてkillする。
+        if job_id in self._cancel_requested and process.returncode is None:
+            proc.kill_process_tree(process.pid)
 
         assert process.stdout is not None
         async for raw_line in process.stdout:
@@ -132,9 +148,11 @@ class JobManager:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            # status は更新しない: cancel_job() が並行して "cancelled" を書き込んでいる
+            # 可能性があり、ここで "running" に上書きすると誤って failed 扱いになる
+            # (Windows実機で実際に踏んだレース)。
             await self._update_job(
                 job_id,
-                status="running",
                 progress=event.get("progress", 0.0),
                 message=event.get("message"),
             )
@@ -142,6 +160,7 @@ class JobManager:
 
         exit_code = await process.wait()
         self._processes.pop(job_id, None)
+        self._cancel_requested.discard(job_id)
 
         current = self.get_job(job_id)
         if current["status"] == "cancelled":

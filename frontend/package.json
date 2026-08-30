@@ -6,11 +6,11 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev:renderer": "vite",
-    "dev:electron:watch": "tsc -p tsconfig.electron.json --watch",
+    "dev:electron:watch": "node scripts/mark-cjs.mjs && tsc -p tsconfig.electron.json --watch",
     "dev:electron:start": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron:watch\" \"npm:dev:electron:start\"",
     "build:renderer": "vite build",
-    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/mark-cjs.mjs",
     "build": "npm run build:renderer && npm run build:electron",
     "start": "npm run build && electron .",
     "typegen": "openapi-typescript ../backend/openapi.json -o src/api/generated.ts",

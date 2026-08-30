@@ -18,6 +18,12 @@ workspace/   実行時生成データ(.gitignore対象)。SQLite・プロジェ�
 `backend/app/domain/` は外部ライブラリに一切依存しない(§5.2)。Score IR・編集オペレーション・
 検証ロジックは将来ここに実装し、単体テストを厚くする方針を維持すること。
 
+## クイックスタート(Windows)
+
+初回セットアップ(`uv sync` / `npm install`)からアプリ起動まで、リポジトリ直下の
+[`start.bat`](start.bat) をダブルクリックする(またはコマンドプロンプトで実行する)だけで
+1コマンドで完了する。事前に [`uv`](https://docs.astral.sh/uv/) と Node.js は導入しておくこと。
+
 ## セットアップ
 
 ### バックエンド
