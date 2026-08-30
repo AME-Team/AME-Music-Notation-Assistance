@@ -133,7 +133,9 @@ app.whenReady().then(async () => {
   mainWindow = createWindow();
 
   backend = await startBackend((status, detail) => {
-    mainWindow?.webContents.send("backend:status", status, detail);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("backend:status", status, detail);
+    }
   });
 });
 

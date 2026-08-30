@@ -123,8 +123,14 @@ export async function startBackend(
     onStatus("ready");
   }
 
+  // アプリ終了時に stop() が意図的に kill した場合は "error" 通知しない。
+  // このフラグが無いと、終了処理で BrowserWindow が既に破棄された後に
+  // webContents.send() を呼ぼうとして "Object has been destroyed" で
+  // メインプロセスがクラッシュする(#77)。
+  let stopping = false;
+
   child.on("exit", (code) => {
-    if (code !== 0 && code !== null) {
+    if (!stopping && code !== 0 && code !== null) {
       onStatus("error", `backend exited unexpectedly (code ${code})`);
     }
   });
@@ -133,6 +139,7 @@ export async function startBackend(
     baseUrl,
     token,
     stop: async () => {
+      stopping = true;
       if (child.pid) await killTree(child.pid);
       await rm(lockPath(), { force: true });
     },
