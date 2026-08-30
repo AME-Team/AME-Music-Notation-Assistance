@@ -1,0 +1,2 @@
+# Windows専用アプリのため、cmd.exe が確実にパースできるよう .bat は常にCRLFで保持する。
+*.bat text eol=crlf
