@@ -7,13 +7,15 @@ NFR-10 / NFR-10′: 127.0.0.1 のみにバインドし、`/health` を除く全 
 from __future__ import annotations
 
 import argparse
+import math
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import jobs, projects
+from app.api import jobs, media, projects
 from app.config import Settings, load_settings
 from app.services.job_service import JobManager
 from app.services.project_service import ProjectService
@@ -48,12 +50,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse(status_code=401, content={"detail": "invalid or missing token"})
         return await call_next(request)
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """NaN/Infinity 拒否バリデーション(#20-M1レビュー指摘の追加ラウンド)を追加すると、
+
+        FastAPI の既定の422レスポンスは `errors()[]["input"]` に実際に送られてきた
+        NaN/Infinity値をそのまま含める。Starlette の `JSONResponse` は
+        `allow_nan=False` でシリアライズするため、そのNaN/Infinity値自体がレスポンス
+        シリアライズで例外を起こし、意図した422ではなく素の500になってしまう。
+        JSON非互換な値は文字列表現に置き換えてから返す。
+        """
+        errors = []
+        for error in exc.errors():
+            error = dict(error)
+            value = error.get("input")
+            if isinstance(value, float) and not math.isfinite(value):
+                error["input"] = str(value)
+            errors.append(error)
+        return JSONResponse(status_code=422, content={"detail": errors})
+
     @app.get("/health")
     async def health() -> dict:
         return {"status": "ok"}
 
     app.include_router(projects.router)
     app.include_router(jobs.router)
+    app.include_router(media.router)
 
     return app
 

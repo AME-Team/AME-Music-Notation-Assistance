@@ -4,7 +4,7 @@ MP3 → MIDI/MusicXML の自動採譜・AI整音アシスタント。**Windows 1
 Electron(TypeScript) + Python(FastAPI) 構成。設計の全文は GitHub Issue に転記されている
 (#72〜#76 が v0.4、#82 が Windows専用化+Electron採用のv0.5追補で最優先)。
 
-このドキュメントは M0(#1)時点の状態を記す。
+このドキュメントは M1(#2)着手時点の状態を記す。
 
 ## ディレクトリ構成
 
@@ -75,6 +75,32 @@ CI(`typegen-check` job)がこの2ファイルの最新性を `git diff --exit-co
 - **ローカル認証**: Electron main が起動時にトークンを生成し環境変数でバックエンドへ渡す。全API(`/health`除く)で `X-AME-Token` を検証する(NFR-10′)
 - **ブラウザ標準の `EventSource` は認証ヘッダを送れない**ため、フロントの SSE 購読は `fetch` + `ReadableStream` を自前実装している(`frontend/src/lib/sse.ts`)
 
+## DSP パイプライン(M1)
+
+`backend/app/pipeline/` にステージ実装、`backend/app/api/media.py` に配信APIがある。
+
+| ステージ / API | 実装 | 説明 |
+| :--- | :--- | :--- |
+| Stage 1 分離 | `pipeline/separate.py` | `demucs-onnx`。プリセット `fast`/`standard`/`high_quality` → `htdemucs`/`htdemucs_6s`/`htdemucs_ft`。出力は32bit float WAV(`workspace/{id}/stems/{name}.wav`) |
+| Stage 2 ビート推定 | `pipeline/beat.py` | `beat-this`。`pipeline/time_signature.py` で拍子を自前導出(beat-this は拍子を出力しない)。出力は `workspace/{id}/analysis/beatmap.json` |
+| BeatGridEditor 補正 | `pipeline/beatmap_edit.py` | オフセット/固定BPM上書き/ダウンビート回転/小節ごとの拍子上書きを純粋関数として実装 |
+| 波形ピーク | `pipeline/peaks.py` | 初回リクエスト時に計算し `analysis/peaks/{name}.json` にキャッシュ |
+
+ジョブとして実行するステージは `POST /api/projects/{id}/stages/{stage}/run` の `stage` に
+`"separate"` または `"beat"` を指定する(`params: {preset, execution_provider}` は separate のみ)。
+
+メディア・解析API(`api/media.py`):
+
+| Method | Path | 説明 |
+| :--- | :--- | :--- |
+| GET | `/api/projects/{id}/audio/original` | 原曲配信(Range対応) |
+| GET | `/api/projects/{id}/audio/stems/{name}` | ステム配信(Range対応) |
+| GET | `/api/projects/{id}/analysis/peaks/{name}` | 波形ピーク(`name="original"` またはステム名) |
+| GET | `/api/projects/{id}/analysis/beatmap` | `beatmap.json` |
+| PATCH | `/api/projects/{id}/analysis/beatmap` | BeatGridEditor の手動補正を反映(`source: "manual"` になる) |
+
+DirectML Execution Provider の実測ベンチマーク(Q-13, #17)は別途対応予定(詳細は次節)。
+
 ## 既知の制約(Known Limitations)
 
 このリポジトリの自動テストは Linux 環境で実行されているため、以下は **Windows 11 実機での
@@ -91,12 +117,32 @@ CI(`typegen-check` job)がこの2ファイルの最新性を `git diff --exit-co
 
 `ffmpeg` の同梱方式(`beat-this` が非WAV入力に要求する)は未解決のまま(#79 参照、M6のQ-17と関連)。
 
+**Stage 1分離が途中で失敗した場合のファイル一貫性**: `run_separate_stage` はステムを1つずつ
+アトミックに書き込むが、途中で例外が発生すると新旧のステムファイルが混在した状態で残る
+(波形ピークキャッシュと分離ステージのメタデータ(`params_hash`)はどちらも無効化されるため、
+少なくとも矛盾した波形データが表示され続けたり、混在ステムが誤ってスキップ判定でそのまま
+使い回されたりすることは無い)。完全な一貫性(全ステムをステージング先に書いてから
+ディレクトリごと入れ替える等)は未実装。
+
+**`os.replace` によるアトミック置換とWindowsのファイルロック**: `storage.write_json` /
+`_write_wav_atomically` は一時ファイル→`os.replace` でアトミックに書き込むが、Windowsでは
+置換先を他プロセス(例: `/audio/stems/{name}` を配信中の `FileResponse`)が開いたままだと
+`PermissionError` になりうる(POSIXでは同時オープン中でも置換できるため、この開発環境の
+Linux上のテストでは検出されない)。ジョブ失敗時にはリトライ(再実行)で解消できるが、
+配信中の置換が頻発する場合はリトライ付きの置換に変更する必要があり、Windows実機での
+挙動確認が必要。
+
 ## テスト
 
 | 対象 | コマンド |
 | :--- | :--- |
-| バックエンド全体 | `uv run --project backend pytest`(repo直下) |
+| バックエンド(高速、既定) | `uv run --project backend pytest`(repo直下) |
+| バックエンド(実モデル検証、`slow`) | `uv run --project backend pytest -m slow` |
 | フロントLint/Format | `cd frontend && npm run lint` |
 | フロント型チェック | `cd frontend && npm run typecheck` |
 | フロント単体テスト | `cd frontend && npm test` |
 | Electron E2E | `cd frontend && npm run build && npm run test:e2e` |
+
+`slow` マーカーが付いたテストは `demucs-onnx`(htdemucs_6s, 約258MB)や `beat-this` の
+チェックポイント(約77MB)を実際にダウンロード・推論するため、既定の `pytest` 実行からは
+除外される(`pytest.ini` の `addopts`)。CI はこの2系統を別ステップとして両方実行する。
