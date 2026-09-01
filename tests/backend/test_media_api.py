@@ -51,6 +51,25 @@ def test_stem_audio_404_before_separation(
     assert resp.status_code == 404
 
 
+def test_stem_audio_content_type_matches_openapi_declaration(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): OpenAPIで宣言した `audio/wav` が
+
+    実際のレスポンスヘッダとも一致するべき。`FileResponse` が既定の
+    `mimetypes.guess_type()` に頼ると、Linux環境では `.wav` が `audio/x-wav` に
+    解決され、宣言と実態が食い違ってしまう。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+    stems_dir = storage.stems_dir(settings.workspace_dir, project_id)
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    (stems_dir / "vocals.wav").write_bytes(tiny_wav_bytes)
+
+    resp = client.get(f"/api/projects/{project_id}/audio/stems/vocals")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/wav"
+
+
 def test_beatmap_404_before_beat_stage(
     client: TestClient, tiny_wav_bytes: bytes
 ) -> None:

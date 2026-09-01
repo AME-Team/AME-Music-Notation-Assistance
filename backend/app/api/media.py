@@ -23,7 +23,37 @@ def _ensure_project_exists(project_id: str, service: ProjectService) -> None:
         raise HTTPException(status_code=404, detail="project not found") from exc
 
 
-@router.get("/audio/original")
+_AUDIO_BINARY_SCHEMA = {"type": "string", "format": "binary"}
+
+
+def _audio_responses(media_type: str) -> dict:
+    """バイナリ音声配信エンドポイント用の `responses=` を組み立てる。
+
+    `get_original_audio`/`get_stem_audio` で同一構造(200+206、`_AUDIO_BINARY_SCHEMA`)
+    を重複させると、将来ステータスやスキーマを変える際に2箇所を揃え忘れて食い違う
+    リスクがあるため、共通ヘルパーに集約する(#21-M1レビュー指摘の追加ラウンド)。
+    200単独ではなく206も宣言するのは、Range リクエストに Starlette FileResponse が
+    ネイティブに 206 Partial Content で応答するため(§11.6のシーク再生対応)。
+    """
+    return {
+        200: {"content": {media_type: {"schema": _AUDIO_BINARY_SCHEMA}}},
+        206: {"content": {media_type: {"schema": _AUDIO_BINARY_SCHEMA}}},
+    }
+
+
+@router.get(
+    "/audio/original",
+    # OpenAPIコントラクトが実態(Range対応のバイナリ音声配信)を反映するよう明示する。
+    # `response_class=FileResponse` を明示しないと、戻り値型注釈だけからは
+    # FastAPIが既定の `application/json`(空スキーマ)応答も併記してしまい、生成
+    # されたTS型に `"application/json": unknown` が `audio/*` と並存し続ける
+    # (#21-M1レビュー指摘の追加ラウンド)。`response_class` を明示することで
+    # FastAPIに「既定はJSONではない」と伝え、既定のJSON応答を出させない。
+    # 実際は原曲の拡張子が可変(mp3/wav/flac/m4a)なため、コンテンツタイプは
+    # `audio/*` として汎用的に宣言する。
+    response_class=FileResponse,
+    responses=_audio_responses("audio/*"),
+)
 async def get_original_audio(
     project_id: str, service: ProjectService = Depends(get_project_service)
 ) -> FileResponse:
@@ -43,7 +73,14 @@ async def get_original_audio(
     return FileResponse(path)
 
 
-@router.get("/audio/stems/{name}")
+@router.get(
+    "/audio/stems/{name}",
+    # get_original_audio と同じ理由でresponse_classを明示する。ステムは常に .wav
+    # 固定(#16)なので、原曲(可変拡張子)と異なり具体的なコンテンツタイプ
+    # (audio/wav)を宣言できる(#21-M1レビュー指摘の追加ラウンド)。
+    response_class=FileResponse,
+    responses=_audio_responses("audio/wav"),
+)
 async def get_stem_audio(
     project_id: str,
     name: str,
@@ -59,7 +96,12 @@ async def get_stem_audio(
     path = storage.stems_dir(settings.workspace_dir, project_id) / f"{name}.wav"
     if not path.exists():
         raise HTTPException(status_code=404, detail="stem not found")
-    return FileResponse(path)
+    # media_typeを明示する(#21-M1レビュー指摘の追加ラウンド): 未指定だとFileResponseは
+    # `mimetypes.guess_type()` に頼るが、Linux環境では `.wav` が `audio/x-wav` に
+    # 解決されることが多く、OpenAPIで宣言した `audio/wav` と実際のレスポンスヘッダが
+    # 食い違ってしまう(OS依存で不定にもなる)。ステムは常に .wav 固定(#16)なので、
+    # 宣言と一致する固定値をここで明示できる。
+    return FileResponse(path, media_type="audio/wav")
 
 
 @router.get("/analysis/peaks/{name}", response_model=PeaksResponse)

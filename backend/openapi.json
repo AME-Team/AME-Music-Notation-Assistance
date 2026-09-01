@@ -160,47 +160,6 @@
         }
       }
     },
-    "/api/projects/{project_id}/audio/original": {
-      "get": {
-        "tags": [
-          "projects"
-        ],
-        "summary": "Get Original Audio",
-        "description": "§11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。",
-        "operationId": "get_original_audio_api_projects__project_id__audio_original_get",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Project Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/projects/{project_id}/stages/{stage}/run": {
       "post": {
         "tags": [
@@ -379,10 +338,392 @@
           }
         }
       }
+    },
+    "/api/projects/{project_id}/audio/original": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "Get Original Audio",
+        "description": "§11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。\n\n原曲は拡張子が可変(mp3/wav/flac/m4a)なため、DBに記録された `audio_format` を\n介して `service.audio_path()` で解決する(`storage.find_original_audio()` の\nようなファイルシステム側の拡張子探索には頼らない)。一方、分離後のステムは\n常に固定で `.wav`(#16の出力仕様)であり、DBに形式を持たせる意味が無いため、\n下の `get_stem_audio` は `storage` 経由で直接パスを組み立てる。同一ファイル内で\n解決方式が2通りあるのは、この拡張子が可変か固定かの違いに起因する意図的な差分。",
+        "operationId": "get_original_audio_api_projects__project_id__audio_original_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "audio/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "content": {
+              "audio/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "description": "Partial Content"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/audio/stems/{name}": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "Get Stem Audio",
+        "description": "#16/#21: ステム配信。Range 対応(既存の /audio/original と同じパターン)。\n\nステムは常に `.wav` 固定(#16)なのでDB参照は不要。`get_original_audio` との\nパス解決方式の違いについては同関数のdocstringを参照。",
+        "operationId": "get_stem_audio_api_projects__project_id__audio_stems__name__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "content": {
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "description": "Partial Content"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/analysis/peaks/{name}": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "Get Peaks",
+        "description": "#21: 波形ピークデータ。初回計算し `analysis/peaks/{name}.json` にキャッシュする。\n\n`async def` ではなく通常の `def` にする(#20-M1レビュー指摘の追加ラウンド)。\n初回計算時は `compute_peaks`(`sf.read` によるWAV全体の読み込み+numpy計算)を\n呼ぶため、`async def` のままだとイベントループを直接ブロックし、SSEでのジョブ\n進捗配信など他の同時リクエスト全体を止めてしまう(NFR-04の「重いDSPはWorker\nプロセスへ分離する」方針とも矛盾する)。FastAPIは同期`def`のエンドポイントを\n自動的にスレッドプールで実行するため、これだけでイベントループを塞がなくなる。",
+        "operationId": "get_peaks_api_projects__project_id__analysis_peaks__name__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PeaksResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/analysis/beatmap": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "Get Beatmap",
+        "description": "#18: `beatmap.json` をそのまま返す。",
+        "operationId": "get_beatmap_api_projects__project_id__analysis_beatmap_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Beatmap"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "media"
+        ],
+        "summary": "Patch Beatmap",
+        "description": "#20 BeatGridEditor: 手動補正を beatmap.json に反映する(FR-04)。",
+        "operationId": "patch_beatmap_api_projects__project_id__analysis_beatmap_patch",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BeatmapEditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Beatmap"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "BeatEntry": {
+        "properties": {
+          "time_sec": {
+            "type": "number",
+            "title": "Time Sec"
+          },
+          "beat_in_bar": {
+            "type": "integer",
+            "title": "Beat In Bar"
+          },
+          "bar": {
+            "type": "integer",
+            "title": "Bar"
+          }
+        },
+        "type": "object",
+        "required": [
+          "time_sec",
+          "beat_in_bar",
+          "bar"
+        ],
+        "title": "BeatEntry"
+      },
+      "Beatmap": {
+        "properties": {
+          "beats": {
+            "items": {
+              "$ref": "#/components/schemas/BeatEntry"
+            },
+            "type": "array",
+            "title": "Beats"
+          },
+          "downbeats_sec": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Downbeats Sec"
+          },
+          "time_signatures": {
+            "items": {
+              "$ref": "#/components/schemas/TimeSignatureEntry"
+            },
+            "type": "array",
+            "title": "Time Signatures"
+          },
+          "tempo_map": {
+            "items": {
+              "$ref": "#/components/schemas/TempoMapEntry"
+            },
+            "type": "array",
+            "title": "Tempo Map"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "auto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "beats",
+          "downbeats_sec",
+          "time_signatures",
+          "tempo_map",
+          "confidence"
+        ],
+        "title": "Beatmap"
+      },
+      "BeatmapEditRequest": {
+        "properties": {
+          "offset_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset Sec"
+          },
+          "bpm_override": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bpm Override"
+          },
+          "rotate_downbeat": {
+            "type": "boolean",
+            "title": "Rotate Downbeat",
+            "default": false
+          },
+          "time_signature_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TimeSignatureEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "BeatmapEditRequest",
+        "description": "#20 BeatGridEditor: 送られたフィールドのみ順に適用する(オフセット→BPM→回転→拍子)。"
+      },
       "Body_create_project_api_projects_post": {
         "properties": {
           "file": {
@@ -474,6 +815,35 @@
           "updated_at"
         ],
         "title": "Job"
+      },
+      "PeaksResponse": {
+        "properties": {
+          "duration_sec": {
+            "type": "number",
+            "title": "Duration Sec"
+          },
+          "sample_rate": {
+            "type": "integer",
+            "title": "Sample Rate"
+          },
+          "peaks": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Peaks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "duration_sec",
+          "sample_rate",
+          "peaks"
+        ],
+        "title": "PeaksResponse"
       },
       "Project": {
         "properties": {
@@ -574,6 +944,52 @@
           "progress"
         ],
         "title": "StageStatus"
+      },
+      "TempoMapEntry": {
+        "properties": {
+          "bar": {
+            "type": "integer",
+            "title": "Bar"
+          },
+          "beat": {
+            "type": "number",
+            "title": "Beat"
+          },
+          "bpm": {
+            "type": "number",
+            "title": "Bpm"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bar",
+          "beat",
+          "bpm"
+        ],
+        "title": "TempoMapEntry"
+      },
+      "TimeSignatureEntry": {
+        "properties": {
+          "bar": {
+            "type": "integer",
+            "title": "Bar"
+          },
+          "numerator": {
+            "type": "integer",
+            "title": "Numerator"
+          },
+          "denominator": {
+            "type": "integer",
+            "title": "Denominator"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bar",
+          "numerator",
+          "denominator"
+        ],
+        "title": "TimeSignatureEntry"
       },
       "ValidationError": {
         "properties": {
