@@ -109,7 +109,12 @@ DirectML Execution Provider の実測ベンチマーク(Q-13, #17)は別途対�
 - `python.exe` がアプリ終了後に残らないことの確認(Linux では同等のプロセス残留確認で代替検証)
 - Windows 資格情報マネージャー経由の API キー解決(`keyring` 経由。Linux では環境変数のみで
   フォールバックすることを確認済み)
-- DirectML Execution Provider(Radeon 780M での実測ベンチマークは M1 で実施)
+- DirectML Execution Provider(Radeon 780M での実測ベンチマークは M1 で実施。
+  `uv run --project backend python backend/scripts/benchmark_separation.py <音声ファイル>
+  --preset standard --out report.md` で計測する。この開発サンドボックス(Linux)の
+  `onnxruntime` は DirectML を含まないため、`DmlExecutionProvider` が検出できず自動的に
+  CPU計測のみになる。NFR-01(実性能に基づく最終的な推奨設定)の確定にはWindows実機での
+  再実行結果が必要)
 - Windows Defender / SmartScreen の未署名バイナリ警告(署名方針は M6 の Q-17 で決定)
 - `frontend/e2e/app.spec.ts`(Playwright, Electron 実起動スモークテスト)は Chromium を
   ヘッドで動かすため `libgtk-3` 等のシステムライブラリが必要。この開発サンドボックスには
