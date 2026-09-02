@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -52,6 +53,28 @@ def test_audio_fingerprint_changes_when_file_is_modified(tmp_path: Path) -> None
     first = audio_fingerprint(path)
 
     path.write_bytes(b"b" * 200)  # サイズを変えて更新
+    second = audio_fingerprint(path)
+
+    assert first != second
+
+
+def test_audio_fingerprint_changes_when_content_differs_at_same_size_and_mtime(
+    tmp_path: Path,
+) -> None:
+    """回帰(#21-M1レビュー指摘): rsync等でサイズ+mtimeを保持したままコピーされても、
+
+    内容が違えば指紋も変わるべき(サイズ+mtimeのみだと将来の原曲差し替え機能で
+    古いステム/beatmapを誤って使い回してしまう)。
+    """
+    path = tmp_path / "source.wav"
+    path.write_bytes(b"a" * 100)
+    first = audio_fingerprint(path)
+
+    stat_before = path.stat()
+    path.write_bytes(b"z" * 100)  # 同じサイズ・違う内容
+    os.utime(
+        path, ns=(stat_before.st_atime_ns, stat_before.st_mtime_ns)
+    )  # mtimeも揃える
     second = audio_fingerprint(path)
 
     assert first != second

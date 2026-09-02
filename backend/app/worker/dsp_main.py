@@ -17,6 +17,7 @@ import io
 import json
 import sys
 import time
+from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -64,6 +65,41 @@ def run_dummy_stage(job_id: str, params: dict) -> None:
         time.sleep(0.05)
 
 
+def _separate_artifacts_exist(workspace_dir: Path, project_id: str) -> Callable[[dict], bool]:
+    """separateステージの `should_skip_stage(artifacts_exist=...)` コールバックを組み立てる。
+
+    (#21-M1レビュー指摘の追加ラウンド)
+    - ハッシュが一致しても、メタデータに記録された期待ステム名が現在ディスク上に
+      ある集合に全て含まれていなければスキップしない。ジョブが強制終了され
+      `except BaseException` クリーンアップ(メタデータ削除)が走らなかった場合や、
+      ステムを(一部だけでも)手動削除した場合に、旧メタデータだけが残って欠落した
+      成果物をそのまま使い回してしまうのを防ぐ。「1つでも存在すればOK」という緩い
+      判定だと部分削除を見逃すため部分集合判定にする。完全一致(`==`)ではなく部分
+      集合にするのは、モデル切替の残骸等で無関係な余分な .wav がディレクトリに
+      残っていても、期待した成果物自体は全て揃っていればそれでよく、余分ファイルの
+      存在だけでスキップ最適化(§6)が永久に無効化されるのは望ましくないため。
+    - `meta` に `artifact_names` キーが無い場合(この機能を追加する前に書かれた
+      旧メタデータ)は fail-closed でスキップしない。`set() <= 任意の集合` は
+      空集合の部分集合判定として常にTrueになる(vacuous truth)ため、キー欠如を
+      「チェック不要」と誤解釈するとこの機能追加自体が無意味になってしまう。
+      再実行すれば新形式のメタデータで自己修復するため、一度だけ余分な実行が
+      発生するに留まる。
+    - `set(...).issubset(...)` を使う(`<=` ではなく): `list_stem_names()` は
+      実際には `set[str]` を返すため `<=` でも動作するが、`issubset()` は
+      任意のiterableを受け付けるためより頑健で、将来 `list_stem_names()` の
+      戻り値型が変わっても壊れにくい。
+    """
+
+    def _check(meta: dict) -> bool:
+        if "artifact_names" not in meta:
+            return False
+        return set(meta["artifact_names"]).issubset(
+            storage.list_stem_names(workspace_dir, project_id)
+        )
+
+    return _check
+
+
 def run_separate_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
     """#16: Stage 1 音源分離。§6: パラメータ不変・入力不変ならスキップする。"""
     preset = params.get("preset", "standard")
@@ -85,7 +121,13 @@ def run_separate_stage(job_id: str, project_id: str, workspace_dir: Path, params
         audio_fingerprint_value=audio_fingerprint(audio_path),
         package_version=demucs_onnx_version,
     )
-    if storage.should_skip_stage(workspace_dir, project_id, "separate", hash_value):
+    if storage.should_skip_stage(
+        workspace_dir,
+        project_id,
+        "separate",
+        hash_value,
+        artifacts_exist=_separate_artifacts_exist(workspace_dir, project_id),
+    ):
         emit(
             {
                 "job_id": job_id,
@@ -149,6 +191,17 @@ def run_separate_stage(job_id: str, project_id: str, workspace_dir: Path, params
             "model": resolved_model,
             "preset": preset,
         },
+        # 次回実行時のスキップ判定で、期待するステムが全てディスク上に揃っているか
+        # (部分集合として)確認するために記録する(#21-M1レビュー指摘の追加ラウンド)。
+        # `written` のキーは `run_separation` の型注釈上 `dict[str, Path]` で、
+        # 常に拡張子無しの裸のステム名(`storage.list_stem_names()` と同じ形式)
+        # であることが前提。`str()` はこの前提の上で型チェッカーに意図を明示する
+        # ためのもので、キーの実体が変わった場合(例えばフルパスの `Path` に
+        # なった場合)まで自動的に吸収するものではない -- その場合は `str()` を
+        # 通しても `list_stem_names()` の拡張子無しステム名とは形式が食い違い、
+        # 比較は依然として常にFalseになる。その変更をするなら、この関数側の
+        # 正規化ではなく `run_separation` の戻り値契約自体を見直すこと。
+        artifact_names=sorted(str(name) for name in written),
     )
     emit(
         {
@@ -185,7 +238,16 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path) -> None:
         sort_keys=True,
     )
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
-    if storage.should_skip_stage(workspace_dir, project_id, "beat", hash_value):
+    if storage.should_skip_stage(
+        workspace_dir,
+        project_id,
+        "beat",
+        hash_value,
+        # separateステージと同じ理由(#21-M1レビュー指摘の追加ラウンド): beatmap.json
+        # を手動削除してもメタデータだけ残っていれば、GET /analysis/beatmap が
+        # 404を返し続けるのに再実行では復旧しない、という事故を防ぐ。
+        artifacts_exist=lambda _meta: storage.beatmap_path(workspace_dir, project_id).exists(),
+    ):
         emit(
             {
                 "job_id": job_id,

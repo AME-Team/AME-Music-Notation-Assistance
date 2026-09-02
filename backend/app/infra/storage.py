@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -124,19 +125,60 @@ def write_stage_metadata(
     *,
     params_hash: str,
     provider_versions: dict,
+    artifact_names: list[str] | None = None,
 ) -> None:
     """NFR-11: 実行パラメータ・使用モデル・プロバイダのバージョンを成果物メタデータに記録する。
 
     §6: パラメータのハッシュも記録し、入力・パラメータ不変ならスキップできるようにする。
+
+    `artifact_names`(省略可)は、このステージが実際に書き出した成果物名の一覧
+    (例: separateステージのステム名)。`should_skip_stage` の `artifacts_exist`
+    コールバックが、記録した成果物名がディスク上の現在の成果物集合に全て含まれる
+    か(部分集合として)確認できるようにする(#21-M1レビュー指摘の追加ラウンド:
+    一部だけ手動削除された場合、単に「1つでも存在すればOK」という判定では
+    見逃してしまうため。完全一致ではなく部分集合にするのは、モデル切替の残骸等
+    の無関係な余分ファイルが残っていてもスキップ最適化を永久に無効化しないため)。
     """
-    write_json(
-        stage_metadata_path(workspace_dir, project_id, stage),
-        {"stage": stage, "params_hash": params_hash, "versions": provider_versions},
-    )
+    meta: dict = {"stage": stage, "params_hash": params_hash, "versions": provider_versions}
+    if artifact_names is not None:
+        meta["artifact_names"] = artifact_names
+    write_json(stage_metadata_path(workspace_dir, project_id, stage), meta)
 
 
-def should_skip_stage(workspace_dir: Path, project_id: str, stage: str, params_hash: str) -> bool:
-    """§6: 直前の実行と同じパラメータハッシュなら再実行をスキップしてよいと判定する。"""
+def should_skip_stage(
+    workspace_dir: Path,
+    project_id: str,
+    stage: str,
+    params_hash: str,
+    *,
+    artifacts_exist: Callable[[dict], bool] | None = None,
+) -> bool:
+    """§6: 直前の実行と同じパラメータハッシュなら再実行をスキップしてよいと判定する。
+
+    `artifacts_exist`(省略可)は、ハッシュが一致した場合に実際の成果物(ステム
+    ファイル/beatmap.json等)が存在するかも確認するコールバック(#21-M1レビュー
+    指摘の追加ラウンド)。ハッシュだけで判定すると、(1) ステム/beatmap.jsonを
+    (一部だけでも)手動削除してもメタデータだけ残っていれば配信APIが404を
+    返し続ける、(2) 分離実行中にジョブが強制終了され `run_separate_stage` の
+    `except BaseException` クリーンアップ(メタデータ削除)が走らなかった場合に
+    旧プリセットのメタデータが残ったまま残留する、という2つのシナリオでスキップ
+    が誤判定される。
+
+    コールバックには読み込み済みの `meta` 辞書を渡す(#21-M1レビュー指摘の
+    追加ラウンド)。呼び出し元が `write_stage_metadata` に記録した期待成果物
+    名一覧を `meta` から読み、現在のディスク状態と突き合わせられるようにする。
+
+    既知の限界(#21-M1レビュー指摘の追加ラウンド): この仕組みはファイル名の
+    存在/欠落しか検証しない。`_write_wav_atomically`/`write_json` はいずれも
+    一時ファイル→`os.replace` で単一ファイル単位のアトミック性は保証するため、
+    ある1つのステムファイルが中途半端な内容のまま残ることは無いが、「複数の
+    ステムファイルにまたがる更新」自体はアトミックではない。そのため、
+    強制終了のタイミング次第では、同名のステムファイルが(直前の別プリセット
+    実行によって)*完全に書き終わった別内容*で存在し、名前だけを見る限り
+    「揃っている」ように見えてしまうケースまでは検出できない。この限界を
+    完全に塞ぐには、成果物ディレクトリ全体をステージング→アトミックに入れ替える
+    設計への変更が必要(README「既知の制約」の分離失敗時の一貫性の記述と同種)。
+    """
     meta_path = stage_metadata_path(workspace_dir, project_id, stage)
     if not meta_path.exists():
         return False
@@ -144,7 +186,23 @@ def should_skip_stage(workspace_dir: Path, project_id: str, stage: str, params_h
         meta = read_json(meta_path)
     except (json.JSONDecodeError, OSError):
         return False
-    return meta.get("params_hash") == params_hash
+    if meta.get("params_hash") != params_hash:
+        return False
+    if artifacts_exist is None:
+        return True
+    try:
+        # この関数はメタデータ読み取り不能なら再実行させるfail-safe設計。
+        # `artifacts_exist` はディスクI/O(例: `list_stem_names` の `glob`)を
+        # 行うため、権限エラー等の一時的なOSErrorで無防備に例外を送出すると、
+        # 「スキップ判定できない→再実行」ではなく「ジョブ全体が未処理例外で
+        # クラッシュする」という、この関数のfail-safe方針と矛盾する経路に
+        # なってしまう(#21-M1レビュー指摘の追加ラウンド)。TypeErrorも含めるのは、
+        # `meta["artifact_names"]` がJSONとしては有効でも非イテラブルな不正値
+        # (例: 数値)だった場合、呼び出し元が `set(...)` に通した際に送出しうる
+        # ため(壊れたメタデータもまた「判定できない」の一種として扱う)。
+        return artifacts_exist(meta)
+    except (OSError, TypeError):
+        return False
 
 
 def delete_project_dir(workspace_dir: Path, project_id: str) -> None:

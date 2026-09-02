@@ -60,10 +60,36 @@ def resolve_onnx_providers(execution_provider: str) -> list[str] | str:
     return _EP_TO_ONNX_PROVIDERS[execution_provider]
 
 
+_FINGERPRINT_EDGE_BYTES = 4096
+
+
 def audio_fingerprint(audio_path: Path) -> str:
-    """入力音源の同一性判定用の軽量な指紋(サイズ+更新時刻)。内容全体は読まない。"""
+    """入力音源の同一性判定用の軽量な指紋。内容全体は読まない。
+
+    サイズ+更新時刻に加え、先頭・末尾それぞれ最大4KiBのハッシュも含める
+    (#21-M1レビュー指摘の追加ラウンド)。サイズ+mtimeのみだと、将来の原曲
+    差し替え機能で rsync 等サイズとmtimeを保持したままコピーするツールを
+    使った場合、内容が変わっていてもスキップ判定が古いステム/beatmapを
+    使い回してしまう。ファイル全体は読まず先頭・末尾のみに留めることで、
+    「軽量な指紋」という設計意図(§6)は維持する。
+
+    既知の限界: サイズ・mtimeを保持したまま**ファイル中間部のみ**を書き換える
+    (先頭・末尾4KiBの範囲外だけを改変する)ケースは検出できない。head/tail方式は
+    「サイズ+mtimeを保持するコピーツール」というよくある実運用シナリオを主に
+    想定した設計であり、任意のバイト単位改変に対する暗号学的な完全性検証では
+    ない。より厳密な検証が必要になった場合はファイル全体のハッシュ化が必要。
+    """
     stat = audio_path.stat()
-    return f"{stat.st_size}:{stat.st_mtime_ns}"
+    size = stat.st_size
+    with audio_path.open("rb") as f:
+        head = f.read(_FINGERPRINT_EDGE_BYTES)
+        if size > _FINGERPRINT_EDGE_BYTES:
+            f.seek(max(size - _FINGERPRINT_EDGE_BYTES, 0))
+            tail = f.read(_FINGERPRINT_EDGE_BYTES)
+        else:
+            tail = b""
+    edge_hash = hashlib.sha256(head + tail).hexdigest()
+    return f"{size}:{stat.st_mtime_ns}:{edge_hash}"
 
 
 def params_hash(

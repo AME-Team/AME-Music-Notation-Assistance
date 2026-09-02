@@ -98,6 +98,164 @@ def test_rerunning_same_preset_skips_and_keeps_all_stems(
     assert {p.stem for p in stems_dir.glob("*.wav")} == set(stems)
 
 
+def test_separate_stage_reruns_if_metadata_predates_artifact_names_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): この機能を追加する前に書かれた
+
+    (`artifact_names`キーの無い)旧メタデータに対して、`set() <= 任意の集合`が
+    vacuous truthで常にTrueになる穴を突かれないよう、キー欠如時はfail-closed
+    (スキップしない)にするべき。再実行後は新形式で自己修復する。
+    """
+    project_id = "proj_test"
+    _setup_project(tmp_path, project_id)
+
+    stems = ["drums", "bass", "other", "vocals"]
+    call_count = 0
+
+    def _run(
+        audio_path: Path, output_dir: Path, *, preset: str, execution_provider: str
+    ):
+        nonlocal call_count
+        call_count += 1
+        return _fake_run_separation(stems)(
+            audio_path, output_dir, preset=preset, execution_provider=execution_provider
+        )
+
+    monkeypatch.setattr(dsp_main, "run_separation", _run)
+    params = {"preset": "standard", "execution_provider": "cpu"}
+    dsp_main.run_separate_stage("job1", project_id, tmp_path, params)
+    assert call_count == 1
+
+    # このステージのメタデータを、artifact_namesの無い旧形式に書き換える。
+    meta_path = storage.stage_metadata_path(tmp_path, project_id, "separate")
+    meta = storage.read_json(meta_path)
+    del meta["artifact_names"]
+    storage.write_json(meta_path, meta)
+
+    dsp_main.run_separate_stage("job2", project_id, tmp_path, params)
+    assert call_count == 2  # fail-closedで再実行された
+
+    # 自己修復: 3回目は新形式のメタデータでスキップされる。
+    dsp_main.run_separate_stage("job3", project_id, tmp_path, params)
+    assert call_count == 2
+
+
+def test_rerunning_same_preset_skips_despite_unrelated_stray_wav_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): artifacts_existは部分集合(`<=`)判定
+
+    であり完全一致(`==`)ではないため、期待した成果物とは無関係な余分な.wav
+    (例: 別プリセット実行が強制終了された際の残骸)がステムディレクトリに
+    残っていても、期待成果物自体が全て揃っていればスキップされるべき。完全
+    一致に戻すリファクタが将来意図せず行われた場合に検出できるよう固定化する。
+    """
+    project_id = "proj_test"
+    _setup_project(tmp_path, project_id)
+
+    stems = ["drums", "bass", "other", "vocals"]
+    call_count = 0
+
+    def _run(
+        audio_path: Path, output_dir: Path, *, preset: str, execution_provider: str
+    ):
+        nonlocal call_count
+        call_count += 1
+        return _fake_run_separation(stems)(
+            audio_path, output_dir, preset=preset, execution_provider=execution_provider
+        )
+
+    monkeypatch.setattr(dsp_main, "run_separation", _run)
+    params = {"preset": "standard", "execution_provider": "cpu"}
+    dsp_main.run_separate_stage("job1", project_id, tmp_path, params)
+    assert call_count == 1
+
+    # 無関係な余分な.wavを置く(例えば別プリセット実行の残骸を模擬する)。
+    stems_dir = storage.stems_dir(tmp_path, project_id)
+    _write_stub_wav(stems_dir / "unexpected_leftover.wav")
+
+    dsp_main.run_separate_stage("job2", project_id, tmp_path, params)
+    assert call_count == 1  # 余分ファイルの存在だけではスキップ最適化が壊れない
+
+
+def test_separate_stage_reruns_if_stems_deleted_despite_matching_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#21-M1レビュー指摘): メタデータのハッシュが一致していても、ステムが
+
+    (手動削除や、ジョブ強制終了で `except BaseException` クリーンアップが走らず
+    メタデータだけ残ったケースを想定して)存在しなければスキップせず再実行する。
+    """
+    project_id = "proj_test"
+    _setup_project(tmp_path, project_id)
+
+    stems = ["drums", "bass", "other", "vocals"]
+    call_count = 0
+
+    def _run(
+        audio_path: Path, output_dir: Path, *, preset: str, execution_provider: str
+    ):
+        nonlocal call_count
+        call_count += 1
+        return _fake_run_separation(stems)(
+            audio_path, output_dir, preset=preset, execution_provider=execution_provider
+        )
+
+    monkeypatch.setattr(dsp_main, "run_separation", _run)
+    params = {"preset": "fast", "execution_provider": "cpu"}
+    dsp_main.run_separate_stage("job1", project_id, tmp_path, params)
+    assert call_count == 1
+
+    # ステムを手動削除する(メタデータは残ったまま)。
+    stems_dir = storage.stems_dir(tmp_path, project_id)
+    for path in stems_dir.glob("*.wav"):
+        path.unlink()
+
+    dsp_main.run_separate_stage("job2", project_id, tmp_path, params)
+    assert call_count == 2  # ハッシュ一致でもスキップされず再実行された
+    assert {p.stem for p in stems_dir.glob("*.wav")} == set(stems)
+
+
+def test_separate_stage_reruns_if_only_some_stems_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): 全ステムではなく一部だけ(例:
+
+    vocals.wavのみ)手動削除された場合も、「1つでも存在すればOK」という緩い
+    判定では見逃してしまう。write_stage_metadataに記録した期待ステム名が
+    ディスク上の集合に全て含まれるか(部分集合として)まで確認し、欠けていれば
+    再実行させるべき。
+    """
+    project_id = "proj_test"
+    _setup_project(tmp_path, project_id)
+
+    stems = ["drums", "bass", "other", "vocals"]
+    call_count = 0
+
+    def _run(
+        audio_path: Path, output_dir: Path, *, preset: str, execution_provider: str
+    ):
+        nonlocal call_count
+        call_count += 1
+        return _fake_run_separation(stems)(
+            audio_path, output_dir, preset=preset, execution_provider=execution_provider
+        )
+
+    monkeypatch.setattr(dsp_main, "run_separation", _run)
+    params = {"preset": "standard", "execution_provider": "cpu"}
+    dsp_main.run_separate_stage("job1", project_id, tmp_path, params)
+    assert call_count == 1
+
+    # vocalsだけ手動削除する(他の3ステムとメタデータは残ったまま)。
+    stems_dir = storage.stems_dir(tmp_path, project_id)
+    (stems_dir / "vocals.wav").unlink()
+
+    dsp_main.run_separate_stage("job2", project_id, tmp_path, params)
+    assert call_count == 2  # 3ステムが残っていてもスキップされず再実行された
+    assert {p.stem for p in stems_dir.glob("*.wav")} == set(stems)
+
+
 def test_separate_stage_records_resolved_model_not_preset_label(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -130,8 +288,12 @@ def test_beat_stage_skips_when_audio_unchanged_preserving_manual_edits(
     call_count = 0
 
     class _FakeResult:
-        beats: list = []
-        downbeats_sec: list = []
+        def __init__(self) -> None:
+            # インスタンス属性にする(#21-M1レビュー指摘の追加ラウンド): クラス
+            # 属性の可変デフォルトはテスト間で共有されうるため、将来この値を
+            # 書き換えるテストが増えた際に意図しない状態漏れの温床になる。
+            self.beats: list = []
+            self.downbeats_sec: list = []
 
         def to_dict(self) -> dict:
             return {
@@ -163,6 +325,51 @@ def test_beat_stage_skips_when_audio_unchanged_preserving_manual_edits(
     assert call_count == 1
     assert storage.read_json(beatmap_path)["source"] == "manual"
     assert storage.read_json(beatmap_path)["downbeats_sec"] == [1.23]
+
+
+def test_beat_stage_reruns_if_beatmap_deleted_despite_matching_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#21-M1レビュー指摘): メタデータのハッシュが一致していても、beatmap.json
+
+    が(手動削除等で)存在しなければスキップせず再実行する。スキップし続けると
+    GET /analysis/beatmap が404を返し続け、再実行しても復旧しない事故になる。
+    """
+    project_id = "proj_test"
+    _setup_project(tmp_path, project_id)
+    call_count = 0
+
+    class _FakeResult:
+        def __init__(self) -> None:
+            # インスタンス属性にする(#21-M1レビュー指摘の追加ラウンド): クラス
+            # 属性の可変デフォルトはテスト間で共有されうるため、将来この値を
+            # 書き換えるテストが増えた際に意図しない状態漏れの温床になる。
+            self.beats: list = []
+            self.downbeats_sec: list = []
+
+        def to_dict(self) -> dict:
+            return {
+                "beats": [],
+                "downbeats_sec": [],
+                "time_signatures": [],
+                "tempo_map": [],
+                "confidence": 0.0,
+            }
+
+    def _fake_run_beat_estimation(audio_path: str) -> _FakeResult:
+        nonlocal call_count
+        call_count += 1
+        return _FakeResult()
+
+    monkeypatch.setattr(dsp_main, "run_beat_estimation", _fake_run_beat_estimation)
+    dsp_main.run_beat_stage("job1", project_id, tmp_path)
+    assert call_count == 1
+
+    storage.beatmap_path(tmp_path, project_id).unlink()
+
+    dsp_main.run_beat_stage("job2", project_id, tmp_path)
+    assert call_count == 2  # ハッシュ一致でもスキップされず再実行された
+    assert storage.beatmap_path(tmp_path, project_id).exists()
 
 
 def test_separation_failure_invalidates_peaks_cache_for_old_and_partial_stems(
@@ -273,8 +480,12 @@ def test_beat_stage_skips_write_if_beatmap_modified_during_estimation(
 
     # 先に一度実行し、beatmap.jsonを存在させる(sourceフィールド確認の前提)。
     class _FakeResult:
-        beats: list = []
-        downbeats_sec: list = []
+        def __init__(self) -> None:
+            # インスタンス属性にする(#21-M1レビュー指摘の追加ラウンド): クラス
+            # 属性の可変デフォルトはテスト間で共有されうるため、将来この値を
+            # 書き換えるテストが増えた際に意図しない状態漏れの温床になる。
+            self.beats: list = []
+            self.downbeats_sec: list = []
 
         def to_dict(self) -> dict:
             return {
