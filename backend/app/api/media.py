@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+
+import soundfile as sf
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
@@ -16,9 +19,16 @@ from app.services.project_service import ProjectNotFoundError, ProjectService
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["media"])
 
 
-def _ensure_project_exists(project_id: str, service: ProjectService) -> None:
+def _ensure_project_exists(project_id: str, service: ProjectService) -> dict:
+    """プロジェクトの存在を確認し、取得したレコードを返す。
+
+    戻り値は大半の呼び出し元では無視されるが、`get_peaks` は原曲パス解決に
+    必要な `audio_format` をここから再利用することで、`service.audio_path()`
+    が内部で行う `get_project` の再呼び出し(DBラウンドトリップの重複)を
+    避けられる(#21-M1レビュー指摘の追加ラウンド)。
+    """
     try:
-        service.get_project(project_id)
+        return service.get_project(project_id)
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
 
@@ -120,22 +130,71 @@ def get_peaks(
     プロセスへ分離する」方針とも矛盾する)。FastAPIは同期`def`のエンドポイントを
     自動的にスレッドプールで実行するため、これだけでイベントループを塞がなくなる。
     """
-    _ensure_project_exists(project_id, service)
+    project = _ensure_project_exists(project_id, service)
+
+    if name == "original":
+        # `service.audio_path()` は内部で `get_project` を再度呼ぶため、既に
+        # `_ensure_project_exists` で取得済みのレコードを渡せる
+        # `audio_path_for_project` を使う(#21-M1レビュー指摘の追加ラウンド):
+        # 本エンドポイントはキャッシュヒット時もステイル判定のため毎回 audio_path
+        # を解決するようになり、DBラウンドトリップの重複を避けたい。パス解決
+        # ロジック自体はサービス層の1箇所にまとまったままなので、API層が
+        # `storage.original_audio_path` の呼び出し方を再実装して二重管理に
+        # なることもない。
+        audio_path = service.audio_path_for_project(project)
+    else:
+        audio_path = storage.stems_dir(settings.workspace_dir, project_id) / f"{name}.wav"
 
     cache_path = storage.peaks_path(settings.workspace_dir, project_id, name)
     if cache_path.exists():
+        # キャッシュを返す前に元音源がまだ存在するか確認する(#21-M1レビュー
+        # 指摘の追加ラウンド): should_skip_stage同様、ステムがパイプライン外で
+        # (手動)削除されるケースを想定していないと、/audio/stems/{name} は
+        # 404を返すのにピークだけ200で返り続けてしまう。欠損していればキャッシュ
+        # ごと破棄し、以降のリクエストにも一貫して404を返す。
+        if not audio_path.exists():
+            cache_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=404, detail="audio file not found")
         return storage.read_json(cache_path)
-
-    if name == "original":
-        # プロジェクト存在は上の _ensure_project_exists で確認済み。
-        audio_path = service.audio_path(project_id)
-    else:
-        audio_path = storage.stems_dir(settings.workspace_dir, project_id) / f"{name}.wav"
 
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail="audio file not found")
 
-    result = compute_peaks(str(audio_path))
+    try:
+        result = compute_peaks(str(audio_path))
+    except sf.SoundFileError as exc:
+        # soundfile(libsndfile)は、開けないフォーマット(m4a/AAC等)では
+        # LibsndfileErrorを、ヘッダは有効だが読み取り中に壊れたファイル等では
+        # サブクラスの SoundFileRuntimeError を送出しうる(#21-M1レビュー指摘の
+        # 追加ラウンド)。両方とも共通の基底クラス `SoundFileError` で捕捉する。
+        # 原曲はmp3/wav/flac/m4aを受け付けるため(get_original_audioのdocstring
+        # 参照)、m4a原曲に対して本エンドポイントは未処理の500を返してしまって
+        # いた。デコード不能をクライアントの問題として415で返す(キャッシュも
+        # 作らない)。422ではなく415(Unsupported Media Type)にするのは、422は
+        # FastAPIのリクエスト検証エラーが既定で使うステータスであり、リクエスト
+        # 自体(URLパスの`name`パラメータ等)ではなく参照先の音源データそのものが
+        # 処理できないことを表すには415の方がRESTの意味論として正確なため
+        # (#21-M1レビュー指摘の追加ラウンド)。
+        # libsndfileの例外メッセージには渡したファイルのフルパス(workspace_dir
+        # 配下の実パス)が含まれるため、そのままdetailに含めるとサーバ内部の
+        # ディレクトリ構成をクライアントに漏らしてしまう(#21-M1レビュー指摘の
+        # 追加ラウンド)。detailは固定文言にし、詳細はサーバ側ログにのみ出す。
+        logging.getLogger(__name__).warning(
+            "peak computation failed to decode audio: project_id=%s name=%s: %s",
+            project_id,
+            name,
+            exc,
+        )
+        if not audio_path.exists():
+            # 上の存在チェックとこのcompute_peaks呼び出しの間に、ファイルが
+            # (パイプライン外で)削除されたレース。単なるデコード不能(415)
+            # ではなく欠損(404)として扱う(#21-M1レビュー指摘の追加ラウンド):
+            # 415のままだと、本PRが確立した「欠損時は一貫して404」という
+            # 契約と食い違う。
+            raise HTTPException(status_code=404, detail="audio file not found") from exc
+        raise HTTPException(
+            status_code=415, detail="could not decode audio for peak computation"
+        ) from exc
     storage.write_json(cache_path, result)
     return result
 

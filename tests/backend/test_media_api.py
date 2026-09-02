@@ -35,6 +35,119 @@ def test_peaks_endpoint_computes_and_caches(
     assert cache_path.exists()
 
 
+def test_peaks_endpoint_returns_415_for_undecodable_audio(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): libsndfileがデコードできない
+
+    フォーマット(例: m4a/AAC)の原曲に対しては、未処理の500ではなく415
+    (Unsupported Media Type)を返すべき(get_original_audioは原曲として
+    mp3/wav/flac/m4aを受け付ける)。422はFastAPIのリクエスト検証エラーの
+    既定ステータスであり、音源データ自体が処理できないことを表すには
+    不適切なため415を採用する。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+    # 原曲ファイルを、libsndfileがデコードできない中身(WAVヘッダを装わない
+    # 生バイト列)に差し替える。conftestのtiny_wav_bytesは実際にはWAVとして
+    # 有効なため、拡張子はwavのままだが中身を壊すことでデコード失敗を模擬する。
+    audio_path = storage.find_original_audio(settings.workspace_dir, project_id)
+    audio_path.write_bytes(b"not a real audio file")
+
+    resp = client.get(f"/api/projects/{project_id}/analysis/peaks/original")
+    assert resp.status_code == 415, resp.text
+
+    cache_path = storage.peaks_path(settings.workspace_dir, project_id, "original")
+    assert not cache_path.exists()  # デコード失敗時はキャッシュを作らない
+
+
+def test_peaks_endpoint_returns_404_if_file_deleted_during_decode(
+    client: TestClient,
+    settings: Settings,
+    tiny_wav_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): 存在チェックとcompute_peaks呼び出しの
+
+    間に(パイプライン外で)ファイルが削除されるレースが起きた場合、libsndfileの
+    システムエラーもLibsndfileErrorとして捕捉されうる。これを422(デコード不能)
+    ではなく、本PRが確立した「欠損時は一貫して404」という契約に合わせて404に
+    するべき。
+    """
+    import app.api.media as media_module
+
+    project_id = _create_project(client, tiny_wav_bytes)
+    audio_path = storage.find_original_audio(settings.workspace_dir, project_id)
+
+    def _compute_peaks_and_delete(path: str) -> dict:
+        # exists()チェック通過後、実際のデコード試行前にファイルが消えたことを模擬する。
+        audio_path.unlink()
+        import soundfile as sf
+
+        raise sf.LibsndfileError(1, prefix="simulated: file vanished mid-decode: ")
+
+    monkeypatch.setattr(media_module, "compute_peaks", _compute_peaks_and_delete)
+
+    resp = client.get(f"/api/projects/{project_id}/analysis/peaks/original")
+    assert resp.status_code == 404, resp.text
+
+
+def test_peaks_endpoint_invalidates_cache_and_404s_if_stem_deleted(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): ピークキャッシュ作成後にステムが
+
+    (パイプライン外で)手動削除された場合、/audio/stems/{name} は404になるのに
+    ピークだけ200で返り続けてはいけない。キャッシュ返却前に元音源の存在を
+    確認し、欠損していればキャッシュを破棄して404にするべき。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+    stems_dir = storage.stems_dir(settings.workspace_dir, project_id)
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    (stems_dir / "vocals.wav").write_bytes(tiny_wav_bytes)
+
+    resp = client.get(f"/api/projects/{project_id}/analysis/peaks/vocals")
+    assert resp.status_code == 200, resp.text
+    cache_path = storage.peaks_path(settings.workspace_dir, project_id, "vocals")
+    assert cache_path.exists()
+
+    (stems_dir / "vocals.wav").unlink()
+
+    resp = client.get(f"/api/projects/{project_id}/analysis/peaks/vocals")
+    assert resp.status_code == 404, resp.text
+    assert not cache_path.exists()  # 欠損検出時にキャッシュも破棄される
+
+
+def test_peaks_endpoint_invalidates_cache_and_404s_if_original_deleted(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): ステムだけでなく`name == "original"`
+
+    のケース(原曲が手動削除された場合)も同じキャッシュ無効化+404の経路を
+    通るべき。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+
+    resp = client.get(f"/api/projects/{project_id}/analysis/peaks/original")
+    assert resp.status_code == 200, resp.text
+    cache_path = storage.peaks_path(settings.workspace_dir, project_id, "original")
+    assert cache_path.exists()
+
+    audio_path = storage.find_original_audio(settings.workspace_dir, project_id)
+    audio_path.unlink()
+
+    resp = client.get(f"/api/projects/{project_id}/analysis/peaks/original")
+    assert resp.status_code == 404, resp.text
+    assert not cache_path.exists()
+
+    # 回帰(#21-M1レビュー指摘の追加ラウンド): 原曲を復元すれば、キャッシュが
+    # 破棄されているため正常に再計算・再キャッシュされ200に戻るべき
+    # (404を返すよう固定化されたままにならない)。
+    audio_path.write_bytes(tiny_wav_bytes)
+    resp = client.get(f"/api/projects/{project_id}/analysis/peaks/original")
+    assert resp.status_code == 200, resp.text
+    assert cache_path.exists()
+
+
 def test_peaks_endpoint_404_for_missing_stem(
     client: TestClient, tiny_wav_bytes: bytes
 ) -> None:
