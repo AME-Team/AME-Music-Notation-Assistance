@@ -140,8 +140,8 @@ export interface paths {
          * @description §11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。
          *
          *     原曲は拡張子が可変(mp3/wav/flac/m4a)なため、DBに記録された `audio_format` を
-         *     介して `service.audio_path()` で解決する(`storage.find_original_audio()` の
-         *     ようなファイルシステム側の拡張子探索には頼らない)。一方、分離後のステムは
+         *     介して `service.audio_path_for_project()` で解決する(`storage.find_original_audio()`
+         *     のようなファイルシステム側の拡張子探索には頼らない)。一方、分離後のステムは
          *     常に固定で `.wav`(#16の出力仕様)であり、DBに形式を持たせる意味が無いため、
          *     下の `get_stem_audio` は `storage` 経由で直接パスを組み立てる。同一ファイル内で
          *     解決方式が2通りあるのは、この拡張子が可変か固定かの違いに起因する意図的な差分。

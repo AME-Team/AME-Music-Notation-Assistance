@@ -345,7 +345,7 @@
           "media"
         ],
         "summary": "Get Original Audio",
-        "description": "§11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。\n\n原曲は拡張子が可変(mp3/wav/flac/m4a)なため、DBに記録された `audio_format` を\n介して `service.audio_path()` で解決する(`storage.find_original_audio()` の\nようなファイルシステム側の拡張子探索には頼らない)。一方、分離後のステムは\n常に固定で `.wav`(#16の出力仕様)であり、DBに形式を持たせる意味が無いため、\n下の `get_stem_audio` は `storage` 経由で直接パスを組み立てる。同一ファイル内で\n解決方式が2通りあるのは、この拡張子が可変か固定かの違いに起因する意図的な差分。",
+        "description": "§11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。\n\n原曲は拡張子が可変(mp3/wav/flac/m4a)なため、DBに記録された `audio_format` を\n介して `service.audio_path_for_project()` で解決する(`storage.find_original_audio()`\nのようなファイルシステム側の拡張子探索には頼らない)。一方、分離後のステムは\n常に固定で `.wav`(#16の出力仕様)であり、DBに形式を持たせる意味が無いため、\n下の `get_stem_audio` は `storage` 経由で直接パスを組み立てる。同一ファイル内で\n解決方式が2通りあるのは、この拡張子が可変か固定かの違いに起因する意図的な差分。",
         "operationId": "get_original_audio_api_projects__project_id__audio_original_get",
         "parameters": [
           {
