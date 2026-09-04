@@ -186,6 +186,13 @@ def should_skip_stage(
         meta = read_json(meta_path)
     except (json.JSONDecodeError, OSError):
         return False
+    if not isinstance(meta, dict):
+        # `read_json` はJSONとして有効なら何でも返す(例: メタデータファイルの
+        # 内容が `null` や配列であっても成功する)。dict以外だと直後の
+        # `meta.get(...)` がAttributeErrorを送出し、この関数のfail-safe方針
+        # (メタデータ読み取り不能なら再実行させる)に反してworkerのmainまで
+        # 未処理例外が伝播してしまう(#21-M1レビュー指摘の追加ラウンド)。
+        return False
     if meta.get("params_hash") != params_hash:
         return False
     if artifacts_exist is None:

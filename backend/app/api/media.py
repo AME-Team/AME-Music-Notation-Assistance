@@ -70,14 +70,21 @@ async def get_original_audio(
     """§11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。
 
     原曲は拡張子が可変(mp3/wav/flac/m4a)なため、DBに記録された `audio_format` を
-    介して `service.audio_path()` で解決する(`storage.find_original_audio()` の
-    ようなファイルシステム側の拡張子探索には頼らない)。一方、分離後のステムは
+    介して `service.audio_path_for_project()` で解決する(`storage.find_original_audio()`
+    のようなファイルシステム側の拡張子探索には頼らない)。一方、分離後のステムは
     常に固定で `.wav`(#16の出力仕様)であり、DBに形式を持たせる意味が無いため、
     下の `get_stem_audio` は `storage` 経由で直接パスを組み立てる。同一ファイル内で
     解決方式が2通りあるのは、この拡張子が可変か固定かの違いに起因する意図的な差分。
     """
-    _ensure_project_exists(project_id, service)
-    path = service.audio_path(project_id)
+    project = _ensure_project_exists(project_id, service)
+    # `service.audio_path(project_id)` ではなく、既に取得済みの `project` を
+    # `audio_path_for_project` に渡す(#21-M1レビュー指摘の追加ラウンド):
+    # 前者は内部で `get_project` を再実行してしまい、`get_peaks` 用に導入した
+    # 「取得済みレコードを再利用してDBラウンドトリップの重複を避ける」設計と
+    # 同一ファイル内で不整合になっていた。副次的に、この2回目の `get_project`
+    # と存在確認の間でプロジェクトが削除された場合の未捕捉
+    # `ProjectNotFoundError`(500)も回避できる。
+    path = service.audio_path_for_project(project)
     if not path.exists():
         raise HTTPException(status_code=404, detail="audio file not found")
     return FileResponse(path)

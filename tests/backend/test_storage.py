@@ -168,3 +168,30 @@ def test_should_skip_stage_false_when_artifact_names_is_malformed(
         )
         is False
     )
+
+
+def test_should_skip_stage_false_when_metadata_file_is_not_a_dict(
+    tmp_path: Path,
+) -> None:
+    """回帰(#21-M1レビュー指摘の追加ラウンド): メタデータファイルの中身がJSONと
+
+    しては有効でも(例: `null` や配列)dictでない場合、直後の `meta.get(...)`
+    がAttributeErrorを送出しうる。artifacts_existを渡さない経路(第一引数側の
+    `meta.get("params_hash")`)でもfail-safeにFalse(再実行)へフォールバックし、
+    workerのmainまで未処理例外を伝播させないべき。
+    """
+    storage.ensure_project_layout(tmp_path, "proj_a")
+    meta_path = storage.stage_metadata_path(tmp_path, "proj_a", "separate")
+    storage.write_json(meta_path, None)  # 不正な形式(dictであるべき)
+
+    assert storage.should_skip_stage(tmp_path, "proj_a", "separate", "h1") is False
+
+
+def test_should_skip_stage_false_when_metadata_file_is_a_list(
+    tmp_path: Path,
+) -> None:
+    storage.ensure_project_layout(tmp_path, "proj_a")
+    meta_path = storage.stage_metadata_path(tmp_path, "proj_a", "separate")
+    storage.write_json(meta_path, [1, 2, 3])  # 不正な形式(dictであるべき)
+
+    assert storage.should_skip_stage(tmp_path, "proj_a", "separate", "h1") is False
