@@ -26,6 +26,10 @@ jobs:
         run: uv run ruff format --check .
       - name: pytest
         run: uv run --project backend pytest -q
+      - name: pytest (slow, real model inference)
+        # pytest.ini の addopts がデフォルトで slow を除外するため、CI では明示的に
+        # 実モデル(demucs-onnx/beat-this)のダウンロード・推論を検証する。
+        run: uv run --project backend pytest -q -m slow
 
   frontend:
     runs-on: windows-latest

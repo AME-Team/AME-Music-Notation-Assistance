@@ -27,7 +27,13 @@ class Settings:
         return self.workspace_dir / "db.sqlite3"
 
 
-def _resolve_workspace_dir() -> Path:
+def resolve_workspace_dir() -> Path:
+    """workspace/ の場所を解決する。DSP Worker(別プロセス)からも呼ばれる(#16/#18)。
+
+    テストや JobManager は `Settings.workspace_dir` を直接インスタンス化して渡すため
+    環境変数を経由しないが、Worker はサブプロセスとして独立に起動されるため、
+    `job_service.py` が spawn 時に `AME_WORKSPACE_DIR` を明示的に設定して伝える。
+    """
     override = os.environ.get("AME_WORKSPACE_DIR")
     if override:
         return Path(override)
@@ -46,7 +52,7 @@ def load_settings(*, port: int = 0) -> Settings:
         host="127.0.0.1",  # NFR-10: 127.0.0.1 のみにバインド
         port=resolved_port,
         auth_token=os.environ.get("AME_BACKEND_TOKEN"),
-        workspace_dir=_resolve_workspace_dir(),
+        workspace_dir=resolve_workspace_dir(),
     )
 
 

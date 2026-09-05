@@ -99,8 +99,22 @@ class ProjectService:
         }
 
     def audio_path(self, project_id: str) -> Path:
-        project = self.get_project(project_id)
-        return storage.original_audio_path(self.workspace_dir, project_id, project["audio_format"])
+        return self.audio_path_for_project(self.get_project(project_id))
+
+    def audio_path_for_project(self, project: dict) -> Path:
+        """`get_project()` 等で取得済みのレコードから原曲パスを解決する。
+
+        `audio_path()` はこれを内部で使う薄いラッパー。呼び出し元が既に
+        プロジェクトレコードを持っている場合(例: `api/media.py` の
+        `get_peaks` が `_ensure_project_exists` の戻り値を再利用するケース)、
+        `audio_path()` 経由だと `get_project` が再度実行されDBラウンドトリップが
+        重複してしまう。API層がパス解決ロジック(`storage.original_audio_path`
+        の呼び出し方)を独自に再実装して二重管理になるのを避けるため、この
+        メソッドをサービス層に用意する(#21-M1レビュー指摘の追加ラウンド)。
+        """
+        return storage.original_audio_path(
+            self.workspace_dir, project["id"], project["audio_format"]
+        )
 
     def delete_project(self, project_id: str) -> None:
         self.get_project(project_id)  # raises if missing

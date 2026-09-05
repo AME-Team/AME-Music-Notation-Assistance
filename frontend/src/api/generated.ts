@@ -57,26 +57,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{project_id}/audio/original": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Original Audio
-         * @description §11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。
-         */
-        get: operations["get_original_audio_api_projects__project_id__audio_original_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/projects/{project_id}/stages/{stage}/run": {
         parameters: {
             query?: never;
@@ -148,10 +128,154 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/audio/original": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Original Audio
+         * @description §11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。
+         *
+         *     原曲は拡張子が可変(mp3/wav/flac/m4a)なため、DBに記録された `audio_format` を
+         *     介して `service.audio_path_for_project()` で解決する(`storage.find_original_audio()`
+         *     のようなファイルシステム側の拡張子探索には頼らない)。一方、分離後のステムは
+         *     常に固定で `.wav`(#16の出力仕様)であり、DBに形式を持たせる意味が無いため、
+         *     下の `get_stem_audio` は `storage` 経由で直接パスを組み立てる。同一ファイル内で
+         *     解決方式が2通りあるのは、この拡張子が可変か固定かの違いに起因する意図的な差分。
+         */
+        get: operations["get_original_audio_api_projects__project_id__audio_original_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/audio/stems/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stem Audio
+         * @description #16/#21: ステム配信。Range 対応(既存の /audio/original と同じパターン)。
+         *
+         *     ステムは常に `.wav` 固定(#16)なのでDB参照は不要。`get_original_audio` との
+         *     パス解決方式の違いについては同関数のdocstringを参照。
+         */
+        get: operations["get_stem_audio_api_projects__project_id__audio_stems__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/analysis/peaks/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Peaks
+         * @description #21: 波形ピークデータ。初回計算し `analysis/peaks/{name}.json` にキャッシュする。
+         *
+         *     `async def` ではなく通常の `def` にする(#20-M1レビュー指摘の追加ラウンド)。
+         *     初回計算時は `compute_peaks`(`sf.read` によるWAV全体の読み込み+numpy計算)を
+         *     呼ぶため、`async def` のままだとイベントループを直接ブロックし、SSEでのジョブ
+         *     進捗配信など他の同時リクエスト全体を止めてしまう(NFR-04の「重いDSPはWorker
+         *     プロセスへ分離する」方針とも矛盾する)。FastAPIは同期`def`のエンドポイントを
+         *     自動的にスレッドプールで実行するため、これだけでイベントループを塞がなくなる。
+         */
+        get: operations["get_peaks_api_projects__project_id__analysis_peaks__name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/analysis/beatmap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Beatmap
+         * @description #18: `beatmap.json` をそのまま返す。
+         */
+        get: operations["get_beatmap_api_projects__project_id__analysis_beatmap_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Beatmap
+         * @description #20 BeatGridEditor: 手動補正を beatmap.json に反映する(FR-04)。
+         */
+        patch: operations["patch_beatmap_api_projects__project_id__analysis_beatmap_patch"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BeatEntry */
+        BeatEntry: {
+            /** Time Sec */
+            time_sec: number;
+            /** Beat In Bar */
+            beat_in_bar: number;
+            /** Bar */
+            bar: number;
+        };
+        /** Beatmap */
+        Beatmap: {
+            /** Beats */
+            beats: components["schemas"]["BeatEntry"][];
+            /** Downbeats Sec */
+            downbeats_sec: number[];
+            /** Time Signatures */
+            time_signatures: components["schemas"]["TimeSignatureEntry"][];
+            /** Tempo Map */
+            tempo_map: components["schemas"]["TempoMapEntry"][];
+            /** Confidence */
+            confidence: number;
+            /**
+             * Source
+             * @default auto
+             */
+            source: string;
+        };
+        /**
+         * BeatmapEditRequest
+         * @description #20 BeatGridEditor: 送られたフィールドのみ順に適用する(オフセット→BPM→回転→拍子)。
+         */
+        BeatmapEditRequest: {
+            /** Offset Sec */
+            offset_sec?: number | null;
+            /** Bpm Override */
+            bpm_override?: number | null;
+            /**
+             * Rotate Downbeat
+             * @default false
+             */
+            rotate_downbeat: boolean;
+            time_signature_override?: components["schemas"]["TimeSignatureEntry"] | null;
+        };
         /** Body_create_project_api_projects_post */
         Body_create_project_api_projects_post: {
             /** File */
@@ -182,6 +306,15 @@ export interface components {
             created_at: string;
             /** Updated At */
             updated_at: string;
+        };
+        /** PeaksResponse */
+        PeaksResponse: {
+            /** Duration Sec */
+            duration_sec: number;
+            /** Sample Rate */
+            sample_rate: number;
+            /** Peaks */
+            peaks: number[][];
         };
         /** Project */
         Project: {
@@ -226,6 +359,24 @@ export interface components {
             status: string;
             /** Progress */
             progress: number;
+        };
+        /** TempoMapEntry */
+        TempoMapEntry: {
+            /** Bar */
+            bar: number;
+            /** Beat */
+            beat: number;
+            /** Bpm */
+            bpm: number;
+        };
+        /** TimeSignatureEntry */
+        TimeSignatureEntry: {
+            /** Bar */
+            bar: number;
+            /** Numerator */
+            numerator: number;
+            /** Denominator */
+            denominator: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -384,37 +535,6 @@ export interface operations {
             };
         };
     };
-    get_original_audio_api_projects__project_id__audio_original_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     run_stage_api_projects__project_id__stages__stage__run_post: {
         parameters: {
             query?: never;
@@ -529,6 +649,185 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_original_audio_api_projects__project_id__audio_original_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/*": string;
+                };
+            };
+            /** @description Partial Content */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/*": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_stem_audio_api_projects__project_id__audio_stems__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/wav": string;
+                };
+            };
+            /** @description Partial Content */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/wav": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_peaks_api_projects__project_id__analysis_peaks__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PeaksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_beatmap_api_projects__project_id__analysis_beatmap_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Beatmap"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_beatmap_api_projects__project_id__analysis_beatmap_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BeatmapEditRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Beatmap"];
                 };
             };
             /** @description Validation Error */

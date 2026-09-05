@@ -1,9 +1,11 @@
-"""プロジェクト CRUD API(#11, FR-01)。"""
+"""プロジェクト CRUD API(#11, FR-01)。
+
+メディア配信(`/audio/*` `/analysis/*`)は `api/media.py` にある(§14)。
+"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from fastapi.responses import FileResponse
 
 from app.api.deps import get_project_service
 from app.api.schemas import Project, ProjectList
@@ -50,17 +52,3 @@ async def delete_project(
         service.delete_project(project_id)
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
-
-
-@router.get("/{project_id}/audio/original")
-async def get_original_audio(
-    project_id: str, service: ProjectService = Depends(get_project_service)
-) -> FileResponse:
-    """§11.6: 原曲配信。HTTP Range 対応(Starlette FileResponse がネイティブに対応)。"""
-    try:
-        path = service.audio_path(project_id)
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="project not found") from exc
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="audio file not found")
-    return FileResponse(path)

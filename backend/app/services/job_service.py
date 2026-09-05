@@ -17,7 +17,7 @@ from pathlib import Path
 
 from app.infra import db, ids, proc
 
-VALID_STAGES = {"dummy"}
+VALID_STAGES = {"dummy", "separate", "beat"}
 
 # `python -m app.worker.dsp_main` を確実に解決するため、呼び出し元の CWD に関わらず
 # backend/ を明示的に子プロセスの cwd にする(app/services/job_service.py から2階層上)。
@@ -59,7 +59,7 @@ class JobManager:
             )
             conn.commit()
 
-        asyncio.create_task(self._run_job(job_id, stage, params))
+        asyncio.create_task(self._run_job(job_id, project_id, stage, params))
         return job_id
 
     def get_job(self, job_id: str) -> dict:
@@ -118,7 +118,7 @@ class JobManager:
             conn.execute(f"UPDATE jobs SET {columns} WHERE id = ?", (*fields.values(), job_id))
             conn.commit()
 
-    async def _run_job(self, job_id: str, stage: str, params: dict) -> None:
+    async def _run_job(self, job_id: str, project_id: str, stage: str, params: dict) -> None:
         # #13/Windows実機で発覚したレース: create_job() が asyncio.create_task で
         # このコルーチンをスケジュールした直後に cancel_job() が呼ばれると、
         # このコルーチンが実行され始める前にジョブは既に "cancelled" 確定済みのことがある。
@@ -129,8 +129,23 @@ class JobManager:
         await self._update_job(job_id, status="running")
         await self._publish(job_id, {"job_id": job_id, "status": "running", "progress": 0.0})
 
-        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-        cmd = [sys.executable, "-m", "app.worker.dsp_main", job_id, stage, json.dumps(params)]
+        env = {
+            **os.environ,
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            # #16/#18: Worker は別プロセスのため、JobManager が実際に使っている
+            # workspace_dir(テストでは tmp_path)を明示的に伝える(config.resolve_workspace_dir参照)。
+            "AME_WORKSPACE_DIR": str(self.workspace_dir),
+        }
+        cmd = [
+            sys.executable,
+            "-m",
+            "app.worker.dsp_main",
+            job_id,
+            project_id,
+            stage,
+            json.dumps(params),
+        ]
         process = await proc.spawn_json_lines_worker(cmd, env=env, cwd=str(_BACKEND_DIR))
         self._processes[job_id] = process
 
