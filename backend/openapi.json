@@ -458,6 +458,49 @@
         }
       }
     },
+    "/api/projects/{project_id}/stems": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "List Stems",
+        "description": "#21 TrackList: 分離済みステム名の一覧を返す(分離ステージ未実行時は空リスト)。\n\nフロントはこれでステム名を知るまで `/audio/stems/{name}` の存在する `name` を\n知る手段が無い(#16のプリセットごとにステム名の集合が異なるため、固定リストを\nハードコードできない)。空リストは404ではなく200で返す: 分離未実行は正常な\n初期状態であり、エラーではないため。",
+        "operationId": "list_stems_api_projects__project_id__stems_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StemListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{project_id}/analysis/peaks/{name}": {
       "get": {
         "tags": [
@@ -944,6 +987,23 @@
           "progress"
         ],
         "title": "StageStatus"
+      },
+      "StemListResponse": {
+        "properties": {
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Names"
+          }
+        },
+        "type": "object",
+        "required": [
+          "names"
+        ],
+        "title": "StemListResponse",
+        "description": "#21 TrackList: 分離済みステム名の一覧(拡張子抜き、順不同)。"
       },
       "TempoMapEntry": {
         "properties": {

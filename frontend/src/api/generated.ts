@@ -178,6 +178,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/stems": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Stems
+         * @description #21 TrackList: 分離済みステム名の一覧を返す(分離ステージ未実行時は空リスト)。
+         *
+         *     フロントはこれでステム名を知るまで `/audio/stems/{name}` の存在する `name` を
+         *     知る手段が無い(#16のプリセットごとにステム名の集合が異なるため、固定リストを
+         *     ハードコードできない)。空リストは404ではなく200で返す: 分離未実行は正常な
+         *     初期状態であり、エラーではないため。
+         */
+        get: operations["list_stems_api_projects__project_id__stems_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{project_id}/analysis/peaks/{name}": {
         parameters: {
             query?: never;
@@ -359,6 +384,14 @@ export interface components {
             status: string;
             /** Progress */
             progress: number;
+        };
+        /**
+         * StemListResponse
+         * @description #21 TrackList: 分離済みステム名の一覧(拡張子抜き、順不同)。
+         */
+        StemListResponse: {
+            /** Names */
+            names: string[];
         };
         /** TempoMapEntry */
         TempoMapEntry: {
@@ -730,6 +763,37 @@ export interface operations {
                 };
                 content: {
                     "audio/wav": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_stems_api_projects__project_id__stems_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StemListResponse"];
                 };
             };
             /** @description Validation Error */

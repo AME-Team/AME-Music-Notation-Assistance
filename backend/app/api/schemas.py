@@ -53,6 +53,12 @@ class PeaksResponse(BaseModel):
     peaks: list[list[float]]
 
 
+class StemListResponse(BaseModel):
+    """#21 TrackList: 分離済みステム名の一覧(拡張子抜き、順不同)。"""
+
+    names: list[str]
+
+
 class BeatEntry(BaseModel):
     time_sec: float
     beat_in_bar: int

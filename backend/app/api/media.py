@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app.api.deps import get_project_service, get_settings
-from app.api.schemas import Beatmap, BeatmapEditRequest, PeaksResponse
+from app.api.schemas import Beatmap, BeatmapEditRequest, PeaksResponse, StemListResponse
 from app.config import Settings
 from app.infra import storage
 from app.pipeline import beatmap_edit
@@ -119,6 +119,24 @@ async def get_stem_audio(
     # 食い違ってしまう(OS依存で不定にもなる)。ステムは常に .wav 固定(#16)なので、
     # 宣言と一致する固定値をここで明示できる。
     return FileResponse(path, media_type="audio/wav")
+
+
+@router.get("/stems", response_model=StemListResponse)
+async def list_stems(
+    project_id: str,
+    service: ProjectService = Depends(get_project_service),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """#21 TrackList: 分離済みステム名の一覧を返す(分離ステージ未実行時は空リスト)。
+
+    フロントはこれでステム名を知るまで `/audio/stems/{name}` の存在する `name` を
+    知る手段が無い(#16のプリセットごとにステム名の集合が異なるため、固定リストを
+    ハードコードできない)。空リストは404ではなく200で返す: 分離未実行は正常な
+    初期状態であり、エラーではないため。
+    """
+    _ensure_project_exists(project_id, service)
+    names = storage.list_stem_names(settings.workspace_dir, project_id)
+    return {"names": sorted(names)}
 
 
 @router.get("/analysis/peaks/{name}", response_model=PeaksResponse)

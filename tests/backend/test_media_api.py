@@ -20,6 +20,35 @@ def _create_project(client: TestClient, tiny_wav_bytes: bytes) -> str:
     return resp.json()["id"]
 
 
+def test_list_stems_returns_empty_before_separation(
+    client: TestClient, tiny_wav_bytes: bytes
+) -> None:
+    """#21 TrackList: 分離ステージ未実行時は空リストを200で返す(エラーではない)。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    resp = client.get(f"/api/projects/{project_id}/stems")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"names": []}
+
+
+def test_list_stems_returns_sorted_names_after_separation(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    project_id = _create_project(client, tiny_wav_bytes)
+    stems_dir = storage.stems_dir(settings.workspace_dir, project_id)
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("vocals", "drums", "bass"):
+        (stems_dir / f"{name}.wav").write_bytes(tiny_wav_bytes)
+
+    resp = client.get(f"/api/projects/{project_id}/stems")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"names": ["bass", "drums", "vocals"]}
+
+
+def test_list_stems_404_for_missing_project(client: TestClient) -> None:
+    resp = client.get("/api/projects/nonexistent/stems")
+    assert resp.status_code == 404
+
+
 def test_peaks_endpoint_computes_and_caches(
     client: TestClient, settings: Settings, tiny_wav_bytes: bytes
 ) -> None:
