@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import type { Project } from "./api/client";
 import { runDummyStage } from "./api/client";
-import { AudioPlayer } from "./components/AudioPlayer";
 import { JobMonitor } from "./components/JobMonitor";
 import { ProjectList } from "./components/ProjectList";
 import { ProjectUpload } from "./components/ProjectUpload";
+import { ProjectWorkspace } from "./components/ProjectWorkspace";
 import type { BackendStatus } from "./lib/electron-api";
 import { useJobStore } from "./stores/jobStore";
 
@@ -40,13 +40,13 @@ export function App() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6 p-6">
+    <div className="mx-auto max-w-4xl space-y-6 p-6">
       <h1 className="text-xl font-semibold text-gray-900">AME Music Notation Assistance</h1>
       <ProjectUpload />
       <ProjectList selectedId={selected?.id ?? null} onSelect={setSelected} />
       {selected && (
         <div className="space-y-3">
-          <AudioPlayer projectId={selected.id} />
+          <ProjectWorkspace key={selected.id} projectId={selected.id} />
           <button
             type="button"
             onClick={async () => {
