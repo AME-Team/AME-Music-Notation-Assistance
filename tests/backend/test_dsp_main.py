@@ -34,6 +34,31 @@ def _setup_project(workspace_dir: Path, project_id: str) -> None:
     (workspace_dir / project_id / "source.wav").write_bytes(b"RIFF....WAVEfmt ")
 
 
+def _write_valid_wav(
+    path: Path, *, num_frames: int = 800, sample_rate: int = 8000
+) -> None:
+    """`sf.info()` で実際にパースできる最小限の有効なWAVを書く(#24-M2)。
+
+    `_write_stub_wav` はヘッダの断片だけの意図的に不正なファイルで、
+    separate/beatステージのテスト(`audio_fingerprint` はバイト列を読むだけで
+    音声としてパースしない)には十分だが、transcribeステージは Score IR 初期化時に
+    `soundfile.info()` で原曲を実際にパースする(#23)ため、こちらが必要。
+    """
+    import wave
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(b"\x00\x00" * num_frames)
+
+
+def _setup_project_with_valid_source(workspace_dir: Path, project_id: str) -> None:
+    storage.ensure_project_layout(workspace_dir, project_id)
+    _write_valid_wav(workspace_dir / project_id / "source.wav")
+
+
 def test_switching_preset_removes_stale_stems_and_their_peaks_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -543,3 +568,215 @@ def test_beat_stage_skips_write_if_beatmap_modified_during_estimation(
     dsp_main.run_beat_stage("job3", project_id, tmp_path)
     assert call_count == 0  # 音源不変なのでスキップされ、推論は再実行されない
     assert storage.read_json(beatmap_path)["source"] == "manual"  # 手動補正は保持
+
+
+# --- #24: run_transcribe_stage --------------------------------------------------
+
+
+def _fake_transcription_result(
+    notes: list[tuple[float, float, int, int, bool]], pedals=()
+):
+    """`(onset_sec, duration_sec, midi, velocity, ghost_candidate)` のタプルから
+
+    `TranscriptionResult` を組み立てる、テスト用の `run_piano_transcription` フェイク。
+    """
+    from app.pipeline.transcribe.piano import NoteEvent, PedalEvent, TranscriptionResult
+
+    def _run(_audio_path: Path):
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=onset,
+                    duration_sec=duration,
+                    midi=midi,
+                    velocity=velocity,
+                    ghost_candidate=ghost,
+                )
+                for onset, duration, midi, velocity, ghost in notes
+            ],
+            pedals=[PedalEvent(start_sec=s, stop_sec=e) for s, e in pedals],
+        )
+
+    return _run
+
+
+def test_transcribe_stage_creates_score_ir_with_piano_part_and_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result(
+            [(0.0, 0.5, 60, 90, False), (0.5, 0.02, 64, 90, True)],
+            pedals=[(0.0, 1.0)],
+        ),
+    )
+
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+
+    from app.services.score_service import ScoreService
+
+    score = ScoreService(workspace_dir=tmp_path).read_score("proj_test")
+    part = score.find_part("piano")
+    assert part is not None
+    assert len(part.notes) == 2
+    assert {n.midi for n in part.notes} == {60, 64}
+    assert all(n.provenance == "amt" for n in part.notes)
+    ghost_note = next(n for n in part.notes if n.midi == 64)
+    assert ghost_note.flags == ["ghost_candidate"]  # 削除されず保持される(#24)
+    normal_note = next(n for n in part.notes if n.midi == 60)
+    assert normal_note.flags == []
+    assert len(part.pedals) == 1
+
+
+def test_transcribe_stage_raises_if_piano_stem_missing(tmp_path: Path) -> None:
+    """回帰(#24): pianoステムは`standard`プリセットでのみ生成される。無ければ
+
+    明示的なエラーにする(#16の`resolve_onnx_providers`と同じ設計方針)。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+
+    with pytest.raises(ValueError, match="piano stem not found"):
+        dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+
+
+def test_transcribe_stage_skips_when_input_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+
+    call_count = 0
+
+    def _counting_transcribe(audio_path: Path):
+        nonlocal call_count
+        call_count += 1
+        return _fake_transcription_result([(0.0, 0.5, 60, 90, False)])(audio_path)
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _counting_transcribe)
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
+
+    assert call_count == 1  # 2回目はハッシュが一致しスキップされる
+
+
+def test_transcribe_stage_reruns_if_piano_part_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#24-M2レビュー指摘の想定): Score IRやpianoパートが手動削除されても、
+
+    ハッシュ一致だけでスキップせず再実行する(#21-M1の`artifacts_exist`と同じ保護)。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+
+    call_count = 0
+
+    def _counting_transcribe(audio_path: Path):
+        nonlocal call_count
+        call_count += 1
+        return _fake_transcription_result([(0.0, 0.5, 60, 90, False)])(audio_path)
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _counting_transcribe)
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    assert call_count == 1
+
+    storage.score_current_path(tmp_path, project_id).unlink()
+
+    dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
+    assert call_count == 2  # ハッシュ一致でもスキップされず再実行された
+
+
+def test_transcribe_stage_preserves_non_amt_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#29の考え方の先取り): 将来M3で手動編集(provenance="user")が入っても、
+
+    再採譜がそれを消してはいけない。M2時点ではまだ手動編集経路が無いため、
+    Score IRを直接書き換えてこの状況を模擬する。
+    """
+    from app.domain.score import Note
+    from app.services.score_service import ScoreService
+
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+
+    # ユーザーが手動でノートを追加したと仮定する。
+    service = ScoreService(workspace_dir=tmp_path)
+    score = service.read_score(project_id)
+    part = score.find_part("piano")
+    assert part is not None
+    user_note = Note(
+        id=score.allocate_note_id(),
+        onset_sec=10.0,
+        duration_sec=1.0,
+        midi=72,
+        velocity=100,
+        provenance="user",
+    )
+    part.notes.append(user_note)
+    service.write_score(project_id, score)
+
+    # 音源を変えて再採譜させる(スキップさせない)。
+    (tmp_path / project_id / "stems" / "piano.wav").write_bytes(b"RIFF....WAVEfmt X")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 62, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
+
+    final_part = service.read_score(project_id).find_part("piano")
+    assert final_part is not None
+    provenances = {(n.provenance, n.midi) for n in final_part.notes}
+    assert ("user", 72) in provenances  # ユーザーのノートは保持される
+    assert ("amt", 62) in provenances  # 新しいAMT結果に差し替わる
+    assert ("amt", 60) not in provenances  # 古いAMT結果は消える
+
+
+def test_transcribe_stage_skips_write_if_score_modified_concurrently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#24-M2): 推論中にScore IRが外部から書き換えられた場合、lost-updateで
+
+    上書きしない(beatステージの`source == "manual"`保護と同じ思想の楽観的並行性制御)。
+    """
+    from app.services.score_service import ScoreService
+
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+
+    def _transcribe_and_concurrently_modify(audio_path: Path):
+        # 推論中に別プロセスがScore IRを書き換えたことを模擬する。
+        service = ScoreService(workspace_dir=tmp_path)
+        score = service.read_score_optional(project_id) or dsp_main._initial_score_ir(
+            project_id, tmp_path
+        )
+        service.write_score(project_id, score)
+        return _fake_transcription_result([(0.0, 0.5, 60, 90, False)])(audio_path)
+
+    monkeypatch.setattr(
+        dsp_main, "run_piano_transcription", _transcribe_and_concurrently_modify
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+
+    # transcribeステージ自身の書き込みはスキップされ、"割り込み"の内容(pianoパート無し)
+    # が生き残る。
+    final_score = ScoreService(workspace_dir=tmp_path).read_score(project_id)
+    assert final_score.find_part("piano") is None

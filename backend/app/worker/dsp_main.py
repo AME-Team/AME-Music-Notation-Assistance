@@ -21,10 +21,15 @@ from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+import soundfile as sf
+
 from app.config import resolve_workspace_dir
+from app.domain.score import Clef, Note, Part, Pedal, ScoreIR, SourceInfo
 from app.infra import storage
 from app.pipeline.beat import run_beat_estimation
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
+from app.pipeline.transcribe.piano import run_piano_transcription
+from app.services.score_service import ScoreService
 
 
 def emit(payload: dict) -> None:
@@ -312,6 +317,176 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path) -> None:
     )
 
 
+PIANO_STEM_NAME = "piano"
+
+
+def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
+    """Score IR 未作成時(#23)の初期化。
+
+    source情報は原曲ファイルから直接読む(DSP WorkerはDBを見ずファイルだけで
+    完結する設計、#16/#18の `find_original_audio` と同じ方針)。`tempo_map`/
+    `time_signatures` はまだ空のままにする: これらはStage 4(#25)が
+    `beatmap.json` から取り込む(transcribeステージ自体はbeat推定の結果に
+    依存しないため、依存グラフ上も `beat -> quantize` のみで `beat ->
+    transcribe` は無い)。
+    """
+    audio_path = storage.find_original_audio(workspace_dir, project_id)
+    info = sf.info(str(audio_path))
+    return ScoreIR(
+        project_id=project_id,
+        source=SourceInfo(
+            filename=audio_path.name,
+            duration_sec=float(info.duration),
+            sample_rate=int(info.samplerate),
+        ),
+    )
+
+
+def _piano_part_has_notes(workspace_dir: Path, project_id: str) -> bool:
+    """`should_skip_stage` の `artifacts_exist` 用(#24-M2レビュー指摘の想定):
+
+    Score IR自体、または `piano` パートのノートが(手動削除等で)無くなっていれば
+    スキップを拒否する。M1の分離/ビート推定ステージと同じ保護パターン。
+    """
+    score = ScoreService(workspace_dir=workspace_dir).read_score_optional(project_id)
+    if score is None:
+        return False
+    part = score.find_part(PIANO_STEM_NAME)
+    return part is not None and len(part.notes) > 0
+
+
+def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
+    """#24: Stage 3 ピアノAMT。
+
+    §6: 入力(pianoステム)+使用ライブラリのバージョンが不変ならスキップする
+    (separate/beatステージと対称)。**この段階では一切ノートを捨てない**:
+    `run_piano_transcription` が返す `ghost_candidate` フラグはそのまま
+    `Note.flags` へ引き継ぎ、削除はしない。
+    """
+    emit(
+        {
+            "job_id": job_id,
+            "stage": "transcribe",
+            "progress": 0.0,
+            "message": "transcribing piano",
+        }
+    )
+
+    piano_stem_path = storage.stems_dir(workspace_dir, project_id) / f"{PIANO_STEM_NAME}.wav"
+    if not piano_stem_path.exists():
+        # #16: pianoステムは `standard` プリセット(htdemucs_6s)でのみ生成される。
+        # `fast`/`high_quality`(4ステム)には無い(M2時点の既知の制約)。
+        raise ValueError(
+            "piano stem not found; run the separate stage with the 'standard' preset "
+            "first (only htdemucs_6s produces a dedicated piano stem)"
+        )
+
+    piano_transcription_inference_version = _package_version("piano_transcription_inference")
+    hash_payload = json.dumps(
+        {
+            "audio_fingerprint": audio_fingerprint(piano_stem_path),
+            "package_version": piano_transcription_inference_version,
+        },
+        sort_keys=True,
+    )
+    hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
+
+    if storage.should_skip_stage(
+        workspace_dir,
+        project_id,
+        "transcribe",
+        hash_value,
+        artifacts_exist=lambda _meta: _piano_part_has_notes(workspace_dir, project_id),
+    ):
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "transcribe",
+                "progress": 1.0,
+                "message": "skipped (unchanged input)",
+            }
+        )
+        return
+
+    score_service = ScoreService(workspace_dir=workspace_dir)
+    score_path = storage.score_current_path(workspace_dir, project_id)
+    # 楽観的並行性制御(#20/beatステージと同じ思想、#29の考え方の先取り): 推論には
+    # 数十秒かかるため、その間に他プロセス(将来のM3編集APIや並行ジョブ)がScore IR
+    # を書き換えている可能性がある。**推論を開始する前**に読んだ生JSONと、書き込み
+    # 直前に再読込した生JSONを比較し、食い違っていれば上書きしない。この読み取りは
+    # 必ず `run_piano_transcription` の呼び出しより前に行うこと(#24-M2レビュー
+    # ラウンドで、推論後に読んでしまいレース窓を検出できていなかった実装ミスを修正)。
+    # M2時点ではScore IRを書き換える経路がこのステージ自身以外に無いため実際には
+    # 発火しないが、M3で編集APIが入った際にも安全側に倒れる設計として先に
+    # 用意しておく。
+    raw_before = storage.read_json(score_path) if score_path.exists() else None
+
+    result = run_piano_transcription(piano_stem_path)
+
+    score = score_service.read_score_optional(project_id) or _initial_score_ir(
+        project_id, workspace_dir
+    )
+    part = score.find_part(PIANO_STEM_NAME)
+    if part is None:
+        part = Part(
+            id=PIANO_STEM_NAME,
+            name="Piano",
+            midi_program=0,
+            stem_source=f"stems/{PIANO_STEM_NAME}.wav",
+            staves=2,
+            clefs=[Clef(staff=1, sign="G", line=2), Clef(staff=2, sign="F", line=4)],
+        )
+        score.parts.append(part)
+
+    # #29の考え方を先取り: このステージが書き込むのは provenance="amt" のノートのみ。
+    # 将来M3で手動編集(provenance="user")が入っても、再採譜がそれを消さない。
+    preserved_notes = [n for n in part.notes if n.provenance != "amt"]
+    new_notes = [
+        Note(
+            id=score.allocate_note_id(),
+            onset_sec=event.onset_sec,
+            duration_sec=event.duration_sec,
+            midi=event.midi,
+            velocity=event.velocity,
+            provenance="amt",
+            flags=["ghost_candidate"] if event.ghost_candidate else [],
+        )
+        for event in result.notes
+    ]
+    part.notes = preserved_notes + new_notes
+    part.pedals = [Pedal(start_sec=p.start_sec, stop_sec=p.stop_sec) for p in result.pedals]
+
+    raw_now = storage.read_json(score_path) if score_path.exists() else None
+    if raw_now != raw_before:
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "transcribe",
+                "progress": 1.0,
+                "message": "skipped write: score/current.json was modified concurrently; "
+                "not overwriting",
+            }
+        )
+        return
+
+    score_service.write_score(project_id, score)
+    storage.write_stage_metadata(
+        workspace_dir,
+        project_id,
+        "transcribe",
+        params_hash=hash_value,
+        provider_versions={"piano_transcription_inference": piano_transcription_inference_version},
+    )
+    emit(
+        {
+            "job_id": job_id,
+            "stage": "transcribe",
+            "progress": 1.0,
+            "message": f"{len(new_notes)} notes, {len(part.pedals)} pedal events",
+        }
+    )
+
+
 def main() -> int:
     # #79: Windows コンソールの既定コードページに関わらず UTF-8 で出力する。
     # sys.stdout/stderr は typeshed 上 TextIO 型で reconfigure() を持たないため、
@@ -333,6 +508,8 @@ def main() -> int:
             run_separate_stage(job_id, project_id, workspace_dir, params)
         elif stage == "beat":
             run_beat_stage(job_id, project_id, workspace_dir)
+        elif stage == "transcribe":
+            run_transcribe_stage(job_id, project_id, workspace_dir, params)
         else:
             emit(
                 {
