@@ -72,6 +72,21 @@ def peaks_path(workspace_dir: Path, project_id: str, name: str) -> Path:
     return project_dir(workspace_dir, project_id) / "analysis" / "peaks" / f"{name}.json"
 
 
+def score_current_path(workspace_dir: Path, project_id: str) -> Path:
+    """Score IR(#23, 設計書§10.3)の永続化先。"""
+    return project_dir(workspace_dir, project_id) / "score" / "current.json"
+
+
+def musicxml_export_path(workspace_dir: Path, project_id: str) -> Path:
+    """#27 Stage 6: `POST /export` が書き出すMusicXMLの保存先。"""
+    return project_dir(workspace_dir, project_id) / "export" / "score.musicxml"
+
+
+def midi_export_path(workspace_dir: Path, project_id: str) -> Path:
+    """#27 FR-13: Standard MIDI File のエクスポート先。"""
+    return project_dir(workspace_dir, project_id) / "export" / "score.mid"
+
+
 def invalidate_peaks_cache(workspace_dir: Path, project_id: str, names: list[str]) -> None:
     """再分離でステムが上書きされた際、古い波形ピークキャッシュを消す。
 
