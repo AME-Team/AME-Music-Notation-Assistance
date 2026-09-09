@@ -17,7 +17,7 @@ from pathlib import Path
 
 from app.infra import db, ids, proc
 
-VALID_STAGES = {"dummy", "separate", "beat", "transcribe"}
+VALID_STAGES = {"dummy", "separate", "beat", "transcribe", "quantize"}
 
 # `python -m app.worker.dsp_main` を確実に解決するため、呼び出し元の CWD に関わらず
 # backend/ を明示的に子プロセスの cwd にする(app/services/job_service.py から2階層上)。
