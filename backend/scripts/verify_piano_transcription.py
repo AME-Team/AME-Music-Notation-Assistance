@@ -7,6 +7,9 @@
 1. チェックポイント(~165MB)を取得する。ライブラリ自身は `os.system("wget ...")` で
    取得するが、**Windows に wget が無い**(NFR-08′ 違反)ため、`httpx` で明示的に
    事前ダウンロードし、ライブラリ側の再ダウンロードをスキップさせる
+   (`app.pipeline.transcribe.piano.ensure_checkpoint` — #24-M2レビュー指摘で
+   本番経路の `run_piano_transcription()` にも同じ事前ダウンロードを組み込んだため、
+   ロジックの二重管理を避けてそちらを再利用する)
 2. CPU上でモデルをロードし、合成したピアノらしい音声に対して実際に推論を実行する
 3. ノート(onset/offset/pitch/velocity)とペダルイベントが取得できることを確認する
 4. 所要時間を計測し、NFR-01(5分曲でAMT ≤ 3分)に対する見通しを得る
@@ -24,58 +27,35 @@ from typing import TYPE_CHECKING
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.pipeline.transcribe.piano import (  # noqa: E402
+    DEFAULT_CHECKPOINT_PATH,
+    MIN_CHECKPOINT_SIZE_BYTES,
+)
+from app.pipeline.transcribe.piano import (  # noqa: E402
+    ensure_checkpoint as _ensure_checkpoint,
+)
+
 if TYPE_CHECKING:
     import numpy as np
 
-CHECKPOINT_URL = (
-    "https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1%3D0.9186.pth?download=1"
-)
-# ライブラリの既定パスに合わせる(#22): 明示的に checkpoint_path を渡さない場合、
-# `PianoTranscription.__init__` はこのパスを既定値として使う。ここへ事前配置して
-# おくことで、`os.path.getsize(checkpoint_path) >= 1.6e8` が真になり、ライブラリ
-# 内部の `os.system("wget ...")` 呼び出し自体がスキップされる(Windowsにwgetは無い)。
-DEFAULT_CHECKPOINT_PATH = (
-    Path.home() / "piano_transcription_inference_data" / "note_F1=0.9677_pedal_F1=0.9186.pth"
-)
-# ライブラリの `os.path.getsize(checkpoint_path) < 1.6e8` と同じ閾値(#22)。
-MIN_CHECKPOINT_SIZE_BYTES = int(1.6e8)
-
 
 def ensure_checkpoint(path: Path = DEFAULT_CHECKPOINT_PATH) -> Path:
-    """チェックポイントを `httpx` で取得する(#22: Windowsにwgetが無いため自前で行う)。
+    """`piano.ensure_checkpoint` の呼び出しの前後でこのスクリプト独自の進捗を出す。
 
-    通信が途中で切れて短いファイルのまま `path` に置かれると、次回起動時に
-    ライブラリ自身の `os.path.getsize(checkpoint_path) >= 1.6e8` チェックが偽になり、
-    Windowsに存在しない `wget` 呼び出しへ進んでしまう(#22-M2レビュー指摘)。
-    ダウンロード完了後にサイズを検証してから `path` へ置き換え、不完全な `.part`
-    ファイル(例外発生時や前回の中断分)は毎回明示的に削除する。
+    本番経路(`run_piano_transcription`)はJSON Linesをstdoutへ出すワーカープロセス
+    (`worker/dsp_main.py`)からも呼ばれるため、共通関数側には平文のprint()を
+    入れない(#24-M2レビュー指摘: 進捗表示はこのスクリプト固有の関心事として
+    ここに閉じ込める)。
     """
-    if path.exists() and path.stat().st_size >= MIN_CHECKPOINT_SIZE_BYTES:
-        print(f"[verify] checkpoint already present: {path} ({path.stat().st_size} bytes)")
-        return path
-
-    import httpx
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"[verify] downloading checkpoint (~165MB) to {path} ...")
-    tmp_path = path.with_suffix(path.suffix + ".part")
-    try:
-        with httpx.stream("GET", CHECKPOINT_URL, follow_redirects=True, timeout=300.0) as resp:
-            resp.raise_for_status()
-            with tmp_path.open("wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
-                    f.write(chunk)
-        downloaded_size = tmp_path.stat().st_size
-        if downloaded_size < MIN_CHECKPOINT_SIZE_BYTES:
-            raise RuntimeError(
-                f"downloaded checkpoint is too small ({downloaded_size} bytes, "
-                f"expected >= {MIN_CHECKPOINT_SIZE_BYTES}); download likely truncated"
-            )
-        tmp_path.replace(path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
-    print(f"[verify] downloaded {path.stat().st_size} bytes")
-    return path
+    already_present = path.exists() and path.stat().st_size >= MIN_CHECKPOINT_SIZE_BYTES
+    if not already_present:
+        print(f"[verify] downloading checkpoint (~165MB) to {path} ...")
+    result = _ensure_checkpoint(path)
+    if not already_present:
+        print(f"[verify] downloaded {result.stat().st_size} bytes")
+    else:
+        print(f"[verify] checkpoint already present: {result} ({result.stat().st_size} bytes)")
+    return result
 
 
 def synthesize_piano_like_audio(
