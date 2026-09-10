@@ -57,6 +57,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   } = usePeaks(projectId, "original");
   const { data: beatmap, error: beatmapError } = useBeatmap(projectId);
   const { data: project } = useProject(projectId);
+  const transcribeStage = project?.stages.transcribe;
   const quantizeStage = project?.stages.quantize;
 
   // ジョブが完了したら、その成果物に依存するクエリを再取得する(#16/#18)。
@@ -256,18 +257,26 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
           >
             {isTranscribeRunning ? "採譜を実行中..." : "採譜を実行"}
           </button>
+          {/* #29-M2レビュー指摘: separateを再実行するとtranscribeとquantizeの
+              両方が無効化される。transcribeのstaleを表示せずquantizeボタンを
+              押せてしまうと、無効化済みの古いscore/current.jsonをそのまま
+              量子化してしまい、quantize自身のmetaが書かれてstale=Falseに
+              戻るため、transcribeが古いことがUIから見えなくなる(誤った
+              MusicXMLをエクスポートしうる)。transcribeがstaleの間は
+              量子化ボタン自体を無効化する。 */}
+          {transcribeStage?.stale && (
+            <span className="text-sm text-amber-600">
+              採譜結果が古い可能性があります(再実行してください)
+            </span>
+          )}
           <button
             type="button"
             onClick={() => void handleRunQuantize()}
-            disabled={isQuantizeRunning}
+            disabled={isQuantizeRunning || transcribeStage?.stale}
             className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
           >
             {isQuantizeRunning ? "量子化を実行中..." : "量子化を実行"}
           </button>
-          {/* #29完了条件: 上流(separate/beat)を再実行するとquantizeが無効化される。
-              stale時もExportError等が無ければ古い結果でエクスポート自体は可能
-              (score/current.jsonは残っているため)だが、要再実行であることを
-              利用者に伝える。 */}
           {quantizeStage?.stale && (
             <span className="text-sm text-amber-600">
               量子化結果が古い可能性があります(再実行してください)

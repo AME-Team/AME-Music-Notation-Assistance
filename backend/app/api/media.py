@@ -304,11 +304,15 @@ async def patch_beatmap(
                 "estimation job); please retry with the latest beatmap",
             )
         beatmap["source"] = "manual"
-        storage.write_json(path, beatmap)
         # #29完了条件: ビートを補正すると量子化以降(quantize)が無効化され、
-        # 再実行すると反映される。worker/dsp_main.pyの各ステージと同じ呼び出し契約
-        # (自身の状態を書き終えた後で構わない: このエンドポイント自身はstage
-        # ではなくstage_metadataを持たないため、dsp_main.pyのような書き込み順序
-        # 制約はここには適用されない)。
+        # 再実行すると反映される。beatmap.jsonへ書き込む「前」に呼ぶこと
+        # (#27-M2レビュー指摘、worker/dsp_main.pyの各ステージと同じフェイル
+        # クローズの呼び出し契約): 逆順(書き込み後に呼ぶ)だと、Windowsの
+        # 共有違反等でinvalidate_downstreamがリトライ上限超過で例外送出した際、
+        # beatmap.jsonだけが手動補正済みに書き換わり、quantizeのmeta.jsonは
+        # 無効化されないまま(stale=Falseのまま)残ってしまう。この順序なら
+        # 無効化失敗時はbeatmap.json自体が不変のまま例外が伝播し、安全に
+        # 再試行できる。
         stage_invalidation.invalidate_downstream(settings.workspace_dir, project_id, "beat")
+        storage.write_json(path, beatmap)
     return beatmap
