@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from app.domain.score import Note, Part, ScoreIR, SourceInfo
+from app.domain.score import Note, Part, ScoreIR, Spelling, SourceInfo
 from app.domain.score_ops import (
     NoteAddOp,
     NoteDeleteOp,
@@ -73,6 +73,9 @@ class TestNoteAdd:
         # 120bpmなので480tick=0.5秒、240tick=0.25秒進む。
         assert note.onset_sec == pytest.approx(0.5)
         assert note.duration_sec == pytest.approx(0.25)
+        # #31-M3レビュー指摘: 追加ノートにもspellingを設定する
+        # (未設定のままだとMusicXMLエクスポートが失敗する)。
+        assert note.spelling is not None
 
     def test_rejects_unknown_part(self) -> None:
         score = _make_score()
@@ -143,6 +146,41 @@ class TestNoteUpdate:
         )
         assert (note.midi, note.velocity, note.staff) == (72, 100, 2)
 
+    def test_pitch_change_recomputes_spelling(self) -> None:
+        """#31-M3レビュー指摘: midi変更時にspellingが追随しないとMusicXML
+
+        エクスポートが失敗する(`pipeline/export/score_builder.py`の
+        `_spelling_or_raise`)。
+        """
+        score = _make_score()
+        note = _add_note(score, midi=60, spelling=None)
+        apply_ops(score, [NoteUpdateOp(note_ids=[note.id], midi=64)], _ANCHORS)
+        assert note.spelling is not None
+        assert (note.spelling.step, note.spelling.alter, note.spelling.octave) == (
+            "E",
+            0,
+            4,
+        )
+
+    def test_octave_only_pitch_change_preserves_step_and_alter(self) -> None:
+        """#31-M3レビュー指摘(2巡目): ピッチクラス不変(12の倍数差)のmidi
+
+        変更は`_apply_transpose_octave`と同じくstep/alterを保ちoctaveだけ
+        ずらす(fifths=0で一律再計算すると、調号由来の表記が失われ、同じ
+        「オクターブ移動」でも操作経路によって挙動が食い違ってしまう)。
+        """
+        score = _make_score()
+        note = _add_note(
+            score, midi=66, spelling=Spelling(step="G", alter=-1, octave=4)
+        )
+        apply_ops(score, [NoteUpdateOp(note_ids=[note.id], midi=78)], _ANCHORS)
+        assert note.spelling is not None
+        assert (note.spelling.step, note.spelling.alter, note.spelling.octave) == (
+            "G",
+            -1,
+            5,
+        )
+
     def test_rejects_unknown_note_id(self) -> None:
         score = _make_score()
         with pytest.raises(ScoreOpError, match="note not found"):
@@ -208,6 +246,48 @@ class TestNoteSplit:
             apply_ops(score, [NoteSplitOp(note_id=note.id, at_tick=480)], _ANCHORS)
         with pytest.raises(ScoreOpError, match="sounding range"):
             apply_ops(score, [NoteSplitOp(note_id=note.id, at_tick=0)], _ANCHORS)
+
+    def test_new_note_inherits_original_spelling(self) -> None:
+        """#31-M3レビュー指摘: 分割はmidiを変えないため、新規ノートには元の
+
+        spellingをそのまま引き継ぐ(fifths=0で再計算すると、元が調号由来の
+        表記だった場合に異なる異名同音になりうる)。
+        """
+        score = _make_score()
+        note = _add_note(
+            score,
+            onset_tick=0,
+            duration_tick=480,
+            midi=66,
+            spelling=Spelling(step="G", alter=-1, octave=4),
+        )
+        apply_ops(score, [NoteSplitOp(note_id=note.id, at_tick=240)], _ANCHORS)
+        part = score.find_part("piano")
+        assert part is not None
+        _, new_note = part.notes
+        assert new_note.spelling is not None
+        assert (new_note.spelling.step, new_note.spelling.alter) == ("G", -1)
+
+    def test_new_note_falls_back_to_computed_spelling_when_original_has_none(
+        self,
+    ) -> None:
+        score = _make_score()
+        note = _add_note(score, onset_tick=0, duration_tick=480, midi=66, spelling=None)
+        apply_ops(score, [NoteSplitOp(note_id=note.id, at_tick=240)], _ANCHORS)
+        part = score.find_part("piano")
+        assert part is not None
+        _, new_note = part.notes
+        assert new_note.spelling is not None
+        # fifths=0でのmidi=66は F#4(midi_to_spellingの既定の異名同音選択)。
+        assert (
+            new_note.spelling.step,
+            new_note.spelling.alter,
+            new_note.spelling.octave,
+        ) == (
+            "F",
+            1,
+            4,
+        )
 
     def test_rejects_splitting_a_deleted_note(self) -> None:
         """回帰(#31-M3レビュー指摘): statusを検証しないと削除済みノートが
@@ -330,6 +410,34 @@ class TestPartTransposeOctave:
             score, [PartTransposeOctaveOp(part_id="piano", direction="up")], _ANCHORS
         )
         assert note.midi == 60
+
+    def test_shift_preserves_step_and_alter_only_octave_changes(self) -> None:
+        """#31-M3レビュー指摘: オクターブ移調はピッチクラスを変えないため、既存の
+
+        spellingのstep/alterはそのまま保ち、octaveだけ±1する(fifths=0で丸ごと
+        再計算すると元の調号由来の表記と異なる異名同音になりうる)。
+        """
+        score = _make_score()
+        note = _add_note(
+            score, midi=66, spelling=Spelling(step="G", alter=-1, octave=4)
+        )
+        apply_ops(
+            score, [PartTransposeOctaveOp(part_id="piano", direction="up")], _ANCHORS
+        )
+        assert note.spelling is not None
+        assert (note.spelling.step, note.spelling.alter, note.spelling.octave) == (
+            "G",
+            -1,
+            5,
+        )
+
+    def test_shift_computes_spelling_when_originally_unset(self) -> None:
+        score = _make_score()
+        note = _add_note(score, midi=60, spelling=None)
+        apply_ops(
+            score, [PartTransposeOctaveOp(part_id="piano", direction="up")], _ANCHORS
+        )
+        assert note.spelling is not None
 
     def test_rejects_shift_that_would_go_out_of_midi_range(self) -> None:
         score = _make_score()

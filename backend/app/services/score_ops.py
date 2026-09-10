@@ -12,7 +12,8 @@
 
 from __future__ import annotations
 
-from app.domain.score import Note, Part, ScoreIR
+from app.domain.pitch import midi_to_spelling
+from app.domain.score import Note, Part, ScoreIR, Spelling
 from app.domain.score_ops import (
     NoteAddOp,
     NoteDeleteOp,
@@ -27,6 +28,16 @@ from app.pipeline.quantize import ticks_to_seconds
 # `Note.duration_sec`はPydanticで`gt=0.0`必須(§10.1のモデル制約)。tick→秒変換の
 # 丸め等でちょうど0になるのを避けるための下限(#31)。
 _MIN_DURATION_SEC = 1e-6
+
+# #31-M3レビュー指摘: midiを新規設定/変更するop(add/update)は`spelling`も
+# 必ず設定する(未設定のままだとMusicXMLエクスポートが
+# `pipeline/export/score_builder.py`の`_spelling_or_raise`で失敗する)。
+# 調号(fifths)は`ScoreIR.key_signatures`だが、このフィールドは現状どの
+# パイプラインステージからも設定されない(baseline.py L0のみ`estimate_key_fifths`
+# で都度推定し、ScoreIRへは永続化しない)。既存コード全体の前提に合わせ、
+# ここでもfifths=0(調号なし相当の異名同音表記)を暫定値として使う。より高度な
+# 表記判断はL1 AI整音(M4)に委ねる(`domain/pitch.py`のmidi_to_spellingの
+# docstring参照)。
 
 
 class ScoreOpError(ValueError):
@@ -106,9 +117,26 @@ def _apply_add(score: ScoreIR, op: NoteAddOp, anchors: list[tuple[float, float]]
         voice=op.voice,
         staff=op.staff,
         provenance="user",
+        spelling=midi_to_spelling(op.midi),
     )
     _resync_timing(note, op.onset_tick, op.onset_tick + op.duration_tick, anchors)
     part.notes.append(note)
+
+
+def _spelling_for_new_midi(note: Note, new_midi: int) -> Spelling:
+    """`note`のmidiを`new_midi`へ変更する際のspellingを決める。
+
+    #31-M3レビュー指摘: ピッチクラス(`midi % 12`)が変わらないオクターブ
+    違いの変更(例: `note.update`でmidiを±12した場合)まで一律fifths=0で
+    再計算すると、`_apply_transpose_octave`(既存spellingのoctaveのみ±1する
+    方針)と挙動が食い違い、調号由来の表記が失われる。ピッチクラス不変なら
+    既存spellingのstep/alterを保ちoctaveだけずらし、ピッチクラス自体が
+    変わる場合のみfifths=0で再計算する。
+    """
+    delta = new_midi - note.midi
+    if note.spelling is not None and delta % 12 == 0:
+        return note.spelling.model_copy(update={"octave": note.spelling.octave + delta // 12})
+    return midi_to_spelling(new_midi)
 
 
 def _apply_update(score: ScoreIR, op: NoteUpdateOp, anchors: list[tuple[float, float]]) -> None:
@@ -124,6 +152,7 @@ def _apply_update(score: ScoreIR, op: NoteUpdateOp, anchors: list[tuple[float, f
             new_duration_tick = op.duration_tick if op.duration_tick is not None else duration_tick
             _resync_timing(note, new_onset_tick, new_onset_tick + new_duration_tick, anchors)
         if op.midi is not None:
+            note.spelling = _spelling_for_new_midi(note, op.midi)
             note.midi = op.midi
         if op.velocity is not None:
             note.velocity = op.velocity
@@ -162,6 +191,7 @@ def _apply_split(score: ScoreIR, op: NoteSplitOp, anchors: list[tuple[float, flo
         voice=note.voice,
         staff=note.staff,
         provenance="user",
+        spelling=note.spelling if note.spelling is not None else midi_to_spelling(note.midi),
     )
     _resync_timing(new_note, op.at_tick, end_tick, anchors)
     _resync_timing(note, onset_tick, op.at_tick, anchors)
@@ -219,5 +249,10 @@ def _apply_transpose_octave(score: ScoreIR, op: PartTransposeOctaveOp) -> None:
                 f"({note.midi}) out of range (0-127)"
             )
     for note in active_notes:
-        note.midi += delta
+        new_midi = note.midi + delta
+        # `_spelling_for_new_midi`はピッチクラス不変(常に12の倍数差である
+        # オクターブ移調はこれに該当する)ならstep/alterを保ちoctaveだけ
+        # ずらすため、fifths=0前提の再計算による異名同音のズレを避けられる。
+        note.spelling = _spelling_for_new_midi(note, new_midi)
+        note.midi = new_midi
         note.provenance = "user"

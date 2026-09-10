@@ -10,9 +10,15 @@ import type { NoteOp, ScoreIR, ScoreNote, ScorePart } from "../api/client";
  *
  * `onset_sec`/`duration_sec`(beatmapを使ったtick→秒変換が必要)は再計算しない
  * (PianoRollはtick空間のフィールドのみで描画するため、この楽観プレビューでは
- * 不要)。バリデーション(voice/staff範囲・split/mergeの整合性等)も行わない:
- * 不正なopはサーバが422/409で拒否し、呼び出し元(`useApplyScoreOps`)が
- * ロールバックする。
+ * 不要)。同じ理由で`spelling`(異名同音表記)もmidi変更時に追随させない
+ * (#31-M3レビュー指摘: バックエンドの`services/score_ops.py`は
+ * `_spelling_for_new_midi`でstep/alter/octaveを再計算するが、PianoRollは
+ * MIDI番号のみで描画し表記を参照しないため、サーバ応答到着までの短時間
+ * `midi`と`spelling`が不整合でも見た目に影響しない。将来notation/OSMD
+ * プレビュー(#33)が`spelling`を参照するようになったら、この楽観プレビューも
+ * 同じ規則で追随させる必要がある)。バリデーション(voice/staff範囲・
+ * split/mergeの整合性等)も行わない: 不正なopはサーバが422/409で拒否し、
+ * 呼び出し元(`useApplyScoreOps`)がロールバックする。
  */
 export function applyOpsOptimistically(score: ScoreIR, ops: NoteOp[]): ScoreIR {
   const next = structuredClone(score);
@@ -102,12 +108,15 @@ function applyOne(score: ScoreIR, op: NoteOp, previewId: { next: number }): void
       for (const noteId of op.note_ids) {
         const note = findNote(score, noteId);
         if (!note) continue;
-        if (op.onset_tick !== undefined) note.onset_tick = op.onset_tick;
-        if (op.duration_tick !== undefined) note.duration_tick = op.duration_tick;
-        if (op.midi !== undefined) note.midi = op.midi;
-        if (op.velocity !== undefined) note.velocity = op.velocity;
-        if (op.voice !== undefined) note.voice = op.voice;
-        if (op.staff !== undefined) note.staff = op.staff;
+        // #31-M3レビュー指摘対応: generated型は`number | null`(未指定=変更なし、
+        // という意味でnullとundefinedを区別しない、backendのPydantic Optional
+        // と同じ意味論)。`!= null`でnull/undefinedの両方を弾く。
+        if (op.onset_tick != null) note.onset_tick = op.onset_tick;
+        if (op.duration_tick != null) note.duration_tick = op.duration_tick;
+        if (op.midi != null) note.midi = op.midi;
+        if (op.velocity != null) note.velocity = op.velocity;
+        if (op.voice != null) note.voice = op.voice;
+        if (op.staff != null) note.staff = op.staff;
         note.provenance = "user";
       }
       return;

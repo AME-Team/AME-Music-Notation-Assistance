@@ -77,32 +77,27 @@ export interface ScoreIR {
   next_note_id: number;
 }
 
-/** #31: `domain/score_ops.py`のdiscriminated unionと1対1対応させる。 */
+/**
+ * #31-M3レビュー指摘: `ScoreOpsRequest`(リクエストボディ)は`ScoreIR`と異なり
+ * コンポーネント名の衝突が無いため`generated.ts`に型が生成される。手書きで
+ * 複製するとバックエンドのスキーマ変更(例: フィールド追加/null許容の変更)に
+ * 黙って乖離しうるため、generated型から合成する。
+ *
+ * ただし`NoteAddOp`の`velocity`/`voice`/`staff`はPydantic側に`default`があり
+ * リクエストでは省略可能だが、openapi-typescriptはdefault付きフィールドも
+ * `required`として生成する(コード生成ツールの既知の制約)。実際の省略可能性に
+ * 合わせ`Partial`で上書きする。
+ */
+type NoteAddOp = Omit<components["schemas"]["NoteAddOp"], "velocity" | "voice" | "staff"> &
+  Partial<Pick<components["schemas"]["NoteAddOp"], "velocity" | "voice" | "staff">>;
+
 export type NoteOp =
-  | {
-      type: "note.add";
-      part_id: string;
-      onset_tick: number;
-      duration_tick: number;
-      midi: number;
-      velocity?: number;
-      voice?: number;
-      staff?: number;
-    }
-  | {
-      type: "note.update";
-      note_ids: number[];
-      onset_tick?: number;
-      duration_tick?: number;
-      midi?: number;
-      velocity?: number;
-      voice?: number;
-      staff?: number;
-    }
-  | { type: "note.delete"; note_ids: number[] }
-  | { type: "note.split"; note_id: number; at_tick: number }
-  | { type: "note.merge"; note_ids: number[] }
-  | { type: "part.transpose_octave"; part_id: string; direction: "up" | "down" };
+  | NoteAddOp
+  | components["schemas"]["NoteUpdateOp"]
+  | components["schemas"]["NoteDeleteOp"]
+  | components["schemas"]["NoteSplitOp"]
+  | components["schemas"]["NoteMergeOp"]
+  | components["schemas"]["PartTransposeOctaveOp"];
 
 /**
  * `allowNotFound: true` の場合、404 を例外ではなく `null` として扱う
