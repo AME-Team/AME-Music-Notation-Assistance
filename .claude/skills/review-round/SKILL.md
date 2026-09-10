@@ -26,7 +26,7 @@ description:
 3. **コミット可否判定**
    - `CRITICAL` / `HIGH` / `MIDDLE` → ブロック
    - `LOW` / `INFO` のみ → streak カウンタ増加
-   - **streak が 2 に達したらエスケープハッチ（PASS）** — 無限ループ回避
+   - **streak が `precommit_max_reviews`（既定 3）に達したらエスケープハッチ（PASS）** — 無限ループ回避
 4. **コミット成功時**
    - `post-commit` フックが streak を 0 にリセット
 
@@ -35,7 +35,7 @@ description:
 1. コードを修正 → `git add` → `git commit`
 2. 静的解析エラー → 修正して再コミット
 3. AI レビュー指摘あり → コード修正して再コミット
-4. LOW のみ 2 回連続 → 自動 PASS
+4. LOW のみ連続 → `precommit_max_reviews` 回（既定 3）で自動 PASS
 
 ---
 
@@ -77,9 +77,18 @@ PR 上で実行する品質ゲートです。以下のループを未解決ス�
 ### LOW ストリークのエスケープハッチ（PR 時）
 
 CRITICAL/HIGH/MIDDLE がなく、LOW のみの指摘が **2 回連続** した場合（streak ≥ 2）は以下の対応です。
+このしきい値（2）は下記「レビュー回数上限（`pr_max_reviews`、既定 3）」とは独立した別カウンタで、
+設定不可の固定値である（重大度に関わらない総ラウンド数の上限が `pr_max_reviews`、LOW/INFO のみが
+連続した場合の早期終了条件がこの streak ≥ 2）。
 
 - その LOW 指摘を対応したら完了
 - `/request-review` は不要
+
+### レビュー回数上限（Issue #129）
+
+`/request-review` による PR レビューは **`pr_max_reviews` 回（既定 3 回）が上限**。上限到達時は
+PR に一度だけ通知コメントが投稿され、以降のレビューはスキップされる（Gate 2 終了）。
+対応しきれない指摘が残っている場合は `config.json` の `pr_max_reviews` を調整する。
 
 ---
 

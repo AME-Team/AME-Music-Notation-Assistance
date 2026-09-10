@@ -10,7 +10,11 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from app.domain.pitch import is_spelling_consistent_with_midi, spelling_to_midi
+from app.domain.pitch import (
+    is_spelling_consistent_with_midi,
+    midi_to_spelling,
+    spelling_to_midi,
+)
 from app.domain.score import PitchStep, Spelling
 
 _STEP_VALUES = ("C", "D", "E", "F", "G", "A", "B")
@@ -63,3 +67,48 @@ class TestSpellingConsistency:
         spelling = Spelling(step=step, alter=alter, octave=octave)
         midi = spelling_to_midi(spelling)
         assert not is_spelling_consistent_with_midi(spelling, midi + offset)
+
+
+class TestMidiToSpelling:
+    """#26 L0: 調号に沿った異名同音決定のテスト。"""
+
+    @given(
+        midi=st.integers(min_value=0, max_value=127),
+        fifths=st.integers(min_value=-7, max_value=7),
+        prev_midi=st.one_of(st.none(), st.integers(min_value=0, max_value=127)),
+    )
+    def test_result_is_always_consistent_with_the_input_midi(
+        self, midi: int, fifths: int, prev_midi: int | None
+    ) -> None:
+        """回帰(#26): どんな調号・直前ノートでも、生成される表記は必ず入力のMIDIへ
+
+        往復一致する(V-4/V-5)。表記の"良さ"に関わらず不変であるべき基本条件。
+        """
+        spelling = midi_to_spelling(midi, fifths=fifths, prev_midi=prev_midi)
+        assert is_spelling_consistent_with_midi(spelling, midi)
+
+    def test_c_major_uses_all_naturals(self) -> None:
+        assert midi_to_spelling(60, fifths=0) == Spelling(step="C", alter=0, octave=4)
+        assert midi_to_spelling(62, fifths=0) == Spelling(step="D", alter=0, octave=4)
+
+    def test_c_major_chromatic_defaults_to_sharp(self) -> None:
+        """既定(直前ノート無し、fifths>=0)ではシャープ側を選ぶ。"""
+        spelling = midi_to_spelling(61, fifths=0)  # C#4/Db4
+        assert (spelling.step, spelling.alter) == ("C", 1)
+
+    def test_flat_key_chromatic_defaults_to_flat(self) -> None:
+        assert midi_to_spelling(61, fifths=-3).step == "D"  # Db4 (fifths<0 -> flat)
+
+    def test_g_major_sharps_the_key_signature_note(self) -> None:
+        """ト長調(fifths=1)ではFがF#になる(全音階音は調号がそのまま決める)。"""
+        assert midi_to_spelling(66, fifths=1) == Spelling(step="F", alter=1, octave=4)
+
+    def test_ascending_semitone_prefers_sharp(self) -> None:
+        # C4(60) -> C#4(61): 上行半音進行なのでシャープを選ぶ。
+        spelling = midi_to_spelling(61, fifths=0, prev_midi=60)
+        assert (spelling.step, spelling.alter) == ("C", 1)
+
+    def test_descending_semitone_prefers_flat(self) -> None:
+        # D4(62) -> C#4/Db4(61): 下行半音進行なのでフラットを選ぶ。
+        spelling = midi_to_spelling(61, fifths=0, prev_midi=62)
+        assert (spelling.step, spelling.alter) == ("D", -1)

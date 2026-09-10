@@ -21,10 +21,18 @@ from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+import soundfile as sf
+
 from app.config import resolve_workspace_dir
+from app.domain.migrations import migrate_to_current
+from app.domain.score import Clef, Note, Part, Pedal, ScoreIR, SnapCandidate, SourceInfo, Spelling
 from app.infra import storage
 from app.pipeline.beat import run_beat_estimation
+from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets
+from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
+from app.pipeline.transcribe.piano import run_piano_transcription
+from app.services.score_service import ScoreService
 
 
 def emit(payload: dict) -> None:
@@ -312,6 +320,362 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path) -> None:
     )
 
 
+PIANO_STEM_NAME = "piano"
+
+
+def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
+    """Score IR 未作成時(#23)の初期化。
+
+    source情報は原曲ファイルから直接読む(DSP WorkerはDBを見ずファイルだけで
+    完結する設計、#16/#18の `find_original_audio` と同じ方針)。`tempo_map`/
+    `time_signatures` はまだ空のままにする: これらはStage 4(#25)が
+    `beatmap.json` から取り込む(transcribeステージ自体はbeat推定の結果に
+    依存しないため、依存グラフ上も `beat -> quantize` のみで `beat ->
+    transcribe` は無い)。
+    """
+    audio_path = storage.find_original_audio(workspace_dir, project_id)
+    info = sf.info(str(audio_path))
+    return ScoreIR(
+        project_id=project_id,
+        source=SourceInfo(
+            filename=audio_path.name,
+            duration_sec=float(info.duration),
+            sample_rate=int(info.samplerate),
+        ),
+    )
+
+
+def _piano_part_has_notes(workspace_dir: Path, project_id: str) -> bool:
+    """`should_skip_stage` の `artifacts_exist` 用(#24-M2レビュー指摘の想定):
+
+    Score IR自体、または `piano` パートのノートが(手動削除等で)無くなっていれば
+    スキップを拒否する。M1の分離/ビート推定ステージと同じ保護パターン。
+    """
+    score = ScoreService(workspace_dir=workspace_dir).read_score_optional(project_id)
+    if score is None:
+        return False
+    part = score.find_part(PIANO_STEM_NAME)
+    return part is not None and len(part.notes) > 0
+
+
+def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
+    """#24: Stage 3 ピアノAMT。
+
+    §6: 入力(pianoステム)+使用ライブラリのバージョンが不変ならスキップする
+    (separate/beatステージと対称)。**この段階では一切ノートを捨てない**:
+    `run_piano_transcription` が返す `ghost_candidate` フラグはそのまま
+    `Note.flags` へ引き継ぎ、削除はしない。
+    """
+    emit(
+        {
+            "job_id": job_id,
+            "stage": "transcribe",
+            "progress": 0.0,
+            "message": "transcribing piano",
+        }
+    )
+
+    piano_stem_path = storage.stems_dir(workspace_dir, project_id) / f"{PIANO_STEM_NAME}.wav"
+    if not piano_stem_path.exists():
+        # #16: pianoステムは `standard` プリセット(htdemucs_6s)でのみ生成される。
+        # `fast`/`high_quality`(4ステム)には無い(M2時点の既知の制約)。
+        raise ValueError(
+            "piano stem not found; run the separate stage with the 'standard' preset "
+            "first (only htdemucs_6s produces a dedicated piano stem)"
+        )
+
+    piano_transcription_inference_version = _package_version("piano_transcription_inference")
+    hash_payload = json.dumps(
+        {
+            "audio_fingerprint": audio_fingerprint(piano_stem_path),
+            "package_version": piano_transcription_inference_version,
+        },
+        sort_keys=True,
+    )
+    hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
+
+    if storage.should_skip_stage(
+        workspace_dir,
+        project_id,
+        "transcribe",
+        hash_value,
+        artifacts_exist=lambda _meta: _piano_part_has_notes(workspace_dir, project_id),
+    ):
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "transcribe",
+                "progress": 1.0,
+                "message": "skipped (unchanged input)",
+            }
+        )
+        return
+
+    score_service = ScoreService(workspace_dir=workspace_dir)
+    score_path = storage.score_current_path(workspace_dir, project_id)
+    # 楽観的並行性制御(#20/beatステージと同じ思想、#29の考え方の先取り): 推論には
+    # 数十秒かかるため、その間に他プロセス(将来のM3編集APIや並行ジョブ)がScore IR
+    # を書き換えている可能性がある。**推論を開始する前**に読んだ生JSONと、書き込み
+    # 直前に再読込した生JSONを比較し、食い違っていれば上書きしない。この読み取りは
+    # 必ず `run_piano_transcription` の呼び出しより前に行うこと(#24-M2レビュー
+    # ラウンドで、推論後に読んでしまいレース窓を検出できていなかった実装ミスを修正)。
+    # M2時点ではScore IRを書き換える経路がこのステージ自身以外に無いため実際には
+    # 発火しないが、M3で編集APIが入った際にも安全側に倒れる設計として先に
+    # 用意しておく。
+    raw_before = storage.read_json(score_path) if score_path.exists() else None
+
+    result = run_piano_transcription(piano_stem_path)
+
+    score = score_service.read_score_optional(project_id) or _initial_score_ir(
+        project_id, workspace_dir
+    )
+    part = score.find_part(PIANO_STEM_NAME)
+    if part is None:
+        part = Part(
+            id=PIANO_STEM_NAME,
+            name="Piano",
+            midi_program=0,
+            stem_source=f"stems/{PIANO_STEM_NAME}.wav",
+            staves=2,
+            clefs=[Clef(staff=1, sign="G", line=2), Clef(staff=2, sign="F", line=4)],
+        )
+        score.parts.append(part)
+
+    # #29の考え方を先取り: このステージが書き込むのは provenance="amt" のノートのみ。
+    # 将来M3で手動編集(provenance="user")が入っても、再採譜がそれを消さない。
+    preserved_notes = [n for n in part.notes if n.provenance != "amt"]
+    new_notes = [
+        Note(
+            id=score.allocate_note_id(),
+            onset_sec=event.onset_sec,
+            duration_sec=event.duration_sec,
+            midi=event.midi,
+            velocity=event.velocity,
+            provenance="amt",
+            flags=["ghost_candidate"] if event.ghost_candidate else [],
+        )
+        for event in result.notes
+    ]
+    part.notes = preserved_notes + new_notes
+    part.pedals = [Pedal(start_sec=p.start_sec, stop_sec=p.stop_sec) for p in result.pedals]
+
+    raw_now = storage.read_json(score_path) if score_path.exists() else None
+    if raw_now != raw_before:
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "transcribe",
+                "progress": 1.0,
+                "message": "skipped write: score/current.json was modified concurrently; "
+                "not overwriting",
+            }
+        )
+        return
+
+    score_service.write_score(project_id, score)
+    storage.write_stage_metadata(
+        workspace_dir,
+        project_id,
+        "transcribe",
+        params_hash=hash_value,
+        provider_versions={"piano_transcription_inference": piano_transcription_inference_version},
+    )
+    emit(
+        {
+            "job_id": job_id,
+            "stage": "transcribe",
+            "progress": 1.0,
+            "message": f"{len(new_notes)} notes, {len(part.pedals)} pedal events",
+        }
+    )
+
+
+def _piano_notes_are_quantized(workspace_dir: Path, project_id: str) -> bool:
+    """`should_skip_stage` の `artifacts_exist` 用(#25/#26、`_piano_part_has_notes`
+
+    と同じ保護パターン): Score IR自体、`piano`パート、またはノートが無くなって
+    いればスキップを拒否する。加えて、量子化またはL0が未完了(`onset_tick`が
+    未設定、または非userノートで`spelling`が未設定のまま残っている)状態も
+    再実行させる(手動でのscore/current.json編集や、以前の実行が途中で
+    中断した場合の保護。#25-M2レビュー指摘: `onset_tick`だけを見ると、L0が
+    未適用のまま(spelling等が欠けたまま)でもスキップしてしまい、本ステージの
+    docstringが謳う「常にエクスポート可能な状態」を守れない)。
+    """
+    score = ScoreService(workspace_dir=workspace_dir).read_score_optional(project_id)
+    if score is None:
+        return False
+    part = score.find_part(PIANO_STEM_NAME)
+    if part is None:
+        return False
+    active_notes = [n for n in part.notes if n.status != "deleted"]
+    if not active_notes:
+        return False
+    return all(
+        n.onset_tick is not None and (n.provenance == "user" or n.spelling is not None)
+        for n in active_notes
+    )
+
+
+def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
+    """#25/#26: Stage 4 決定論的クオンタイズ + L0決定論的整音(ステージ末尾で実行)。
+
+    L0を独立ステージにせず本ステージの末尾で実行するのは、量子化直後に必ず
+    整音済み(=常にエクスポート可能)な状態を保つため(計画時の技術決定)。
+
+    §6: 入力(beatmap.json + pianoパートの生ノート情報)+music21のバージョンが
+    不変ならスキップする(separate/beat/transcribeステージと対称)。`onset_sec`/
+    `duration_sec`(生データ)はここでは一切変更しない(§10.1)。
+
+    既知の制約(M2時点でuserノート編集APIが未実装のため未検証の簡略化):
+    `onset_tick`/`duration_tick`/`snap_candidates`/`selected_snap` は
+    `provenance == "user"` かどうかに関わらず全ノートで再計算する(テンポマップ
+    修正後の再量子化を可能にするため)。L0(spelling/voice/staff/flags)のみ
+    userノートを変更しない。「ユーザーが手動で選んだ`selected_snap`を再量子化で
+    上書きしない」という、より細かい保護はM3の編集APIと合わせて実装する。
+    """
+    emit({"job_id": job_id, "stage": "quantize", "progress": 0.0, "message": "quantizing"})
+
+    beatmap_file = storage.beatmap_path(workspace_dir, project_id)
+    if not beatmap_file.exists():
+        raise ValueError("beatmap.json not found; run the beat stage first")
+    beatmap = storage.read_json(beatmap_file)
+
+    score_service = ScoreService(workspace_dir=workspace_dir)
+    score_path = storage.score_current_path(workspace_dir, project_id)
+    if not score_path.exists():
+        raise ValueError("score/current.json not found; run the transcribe stage first")
+    # 楽観的並行性制御(#20/#24と同じ思想)の起点となるスナップショットを、
+    # ここで一度だけ読む(#25-M2レビュー指摘: これより後で改めてScore IRを
+    # 読み直すと、その間に他プロセスが書き込んだ変更を`raw_before`が正しい
+    # 基準点として捉えられず、比較をすり抜けてlost-updateになる)。以降、
+    # `score`はこの`raw_before`から構築したモデルのみを使い、書き込み直前まで
+    # 再読込しない。
+    raw_before = storage.read_json(score_path)
+    score = ScoreIR.model_validate(migrate_to_current(raw_before))
+    part = score.find_part(PIANO_STEM_NAME)
+    if part is None or not part.notes:
+        raise ValueError("piano part has no notes; run the transcribe stage first")
+
+    music21_version = _package_version("music21")
+    active_notes = [n for n in part.notes if n.status != "deleted"]
+    # ハッシュの対象は「このステージへの入力」となる生フィールドのみ(#25-M2
+    # レビューと同種の注意点): onset_tick/duration_tick/spelling等はこのステージ
+    # 自身が書き込む出力なので含めない。含めると自分の前回出力のせいで毎回
+    # ハッシュが変わり続け、スキップが永久に効かなくなってしまう。
+    notes_snapshot = [
+        {
+            "id": n.id,
+            "onset_sec": n.onset_sec,
+            "duration_sec": n.duration_sec,
+            "midi": n.midi,
+            "velocity": n.velocity,
+            "confidence": n.confidence,
+            "provenance": n.provenance,
+        }
+        for n in active_notes
+    ]
+    hash_payload = json.dumps(
+        {
+            "beats": beatmap.get("beats", []),
+            "time_signatures": beatmap.get("time_signatures", []),
+            "notes": notes_snapshot,
+            "divisions": score.divisions,
+            "music21_version": music21_version,
+        },
+        sort_keys=True,
+    )
+    hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
+
+    if storage.should_skip_stage(
+        workspace_dir,
+        project_id,
+        "quantize",
+        hash_value,
+        artifacts_exist=lambda _meta: _piano_notes_are_quantized(workspace_dir, project_id),
+    ):
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "quantize",
+                "progress": 1.0,
+                "message": "skipped (unchanged input)",
+            }
+        )
+        return
+
+    onset_inputs = [(n.id, n.onset_sec, n.duration_sec) for n in active_notes]
+    quantized = quantize_note_onsets(
+        onset_inputs,
+        beatmap.get("beats", []),
+        beatmap.get("time_signatures", []),
+        divisions=score.divisions,
+        top_n=DEFAULT_TOP_N,
+    )
+    refine_inputs = [
+        RefineNoteInput(
+            id=n.id,
+            midi=n.midi,
+            onset_tick=quantized[n.id].onset_tick,
+            duration_sec=n.duration_sec,
+            velocity=n.velocity,
+            confidence=n.confidence,
+            flags=tuple(n.flags),
+            is_user=(n.provenance == "user"),
+        )
+        for n in active_notes
+    ]
+    refined = refine_baseline(refine_inputs)
+
+    for note in active_notes:
+        q = quantized[note.id]
+        note.onset_tick = q.onset_tick
+        note.duration_tick = q.duration_tick
+        note.snap_candidates = [
+            SnapCandidate(id=c.id, resolution=c.resolution, tick=c.tick, score=c.score)
+            for c in q.snap_candidates
+        ]
+        note.selected_snap = q.selected_snap
+
+        r = refined.get(note.id)
+        if r is None:
+            continue  # provenance="user"のノート(#29): L0は変更しない
+        step, alter, octave = r.spelling
+        note.spelling = Spelling(step=step, alter=alter, octave=octave)
+        note.voice = r.voice
+        note.staff = r.staff
+        note.flags = list(r.flags)
+
+    raw_now = storage.read_json(score_path) if score_path.exists() else None
+    if raw_now != raw_before:
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "quantize",
+                "progress": 1.0,
+                "message": "skipped write: score/current.json was modified concurrently; "
+                "not overwriting",
+            }
+        )
+        return
+
+    score_service.write_score(project_id, score)
+    storage.write_stage_metadata(
+        workspace_dir,
+        project_id,
+        "quantize",
+        params_hash=hash_value,
+        provider_versions={"music21": music21_version},
+    )
+    emit(
+        {
+            "job_id": job_id,
+            "stage": "quantize",
+            "progress": 1.0,
+            "message": f"quantized {len(active_notes)} notes",
+        }
+    )
+
+
 def main() -> int:
     # #79: Windows コンソールの既定コードページに関わらず UTF-8 で出力する。
     # sys.stdout/stderr は typeshed 上 TextIO 型で reconfigure() を持たないため、
@@ -333,6 +697,10 @@ def main() -> int:
             run_separate_stage(job_id, project_id, workspace_dir, params)
         elif stage == "beat":
             run_beat_stage(job_id, project_id, workspace_dir)
+        elif stage == "transcribe":
+            run_transcribe_stage(job_id, project_id, workspace_dir, params)
+        elif stage == "quantize":
+            run_quantize_stage(job_id, project_id, workspace_dir, params)
         else:
             emit(
                 {
