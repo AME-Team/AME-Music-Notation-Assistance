@@ -692,6 +692,81 @@
         }
       }
     },
+    "/api/projects/{project_id}/score/ops": {
+      "post": {
+        "tags": [
+          "score"
+        ],
+        "summary": "Apply Score Ops",
+        "description": "#31: ノート編集オペレーションを配列で一括適用する(FR-09)。\n\n`async def` ではなく通常の `def` にする(`get_score`/`export_score`と同じ\n理由): ファイルI/Oが中心の同期処理。\n\n楽観的並行性制御(`worker/dsp_main.py`の各ステージ、`patch_beatmap`と同じ\nパターン): リクエスト開始時に読んだ生JSON(`raw_before`)を保持し、\n`apply_ops`はその場でパースした`ScoreIR`(まだ書き込んでいない)に対して\n行う。書き込み直前に再読込して`raw_before`と一致するか確認し、不一致なら\n409。`read_score_or_404`(単に読んでパースするだけ)ではなく生JSONを直接\n読むのは、`run_quantize_stage`の2巡目レビュー指摘と同じ理由: `raw_before`用\nの読み取りと、モデル構築に使う読み取りを分離すると、その間の並行書き込みを\n検出できずlost-updateになる。",
+        "operationId": "apply_score_ops_api_projects__project_id__score_ops_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoreOpsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Apply Score Ops Api Projects  Project Id  Score Ops Post"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "score not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "score modified concurrently",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{project_id}/export": {
       "post": {
         "tags": [
@@ -886,6 +961,19 @@
         ],
         "title": "Body_create_project_api_projects_post"
       },
+      "ErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse"
+      },
       "ExportRequest": {
         "properties": {
           "format": {
@@ -982,6 +1070,267 @@
           "updated_at"
         ],
         "title": "Job"
+      },
+      "NoteAddOp": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "note.add",
+            "title": "Type",
+            "default": "note.add"
+          },
+          "part_id": {
+            "type": "string",
+            "title": "Part Id"
+          },
+          "onset_tick": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Onset Tick"
+          },
+          "duration_tick": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Duration Tick"
+          },
+          "midi": {
+            "type": "integer",
+            "maximum": 127.0,
+            "minimum": 0.0,
+            "title": "Midi"
+          },
+          "velocity": {
+            "type": "integer",
+            "maximum": 127.0,
+            "minimum": 0.0,
+            "title": "Velocity",
+            "default": 90
+          },
+          "voice": {
+            "type": "integer",
+            "maximum": 4.0,
+            "minimum": 1.0,
+            "title": "Voice",
+            "default": 1
+          },
+          "staff": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Staff",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "part_id",
+          "onset_tick",
+          "duration_tick",
+          "midi"
+        ],
+        "title": "NoteAddOp",
+        "description": "新規ノートを追加する(FR-09)。\n\n`onset_tick`/`duration_tick`を指定する(ピアノロールはtick空間で操作する\nため)。`onset_sec`/`duration_sec`は`services/score_ops.py`が現在のbeatmap\nから逆算する。"
+      },
+      "NoteDeleteOp": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "note.delete",
+            "title": "Type",
+            "default": "note.delete"
+          },
+          "note_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Note Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note_ids"
+        ],
+        "title": "NoteDeleteOp",
+        "description": "論理削除(`status=\"deleted\"`)。物理削除しない(§10.1)。"
+      },
+      "NoteMergeOp": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "note.merge",
+            "title": "Type",
+            "default": "note.merge"
+          },
+          "note_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "Note Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note_ids"
+        ],
+        "title": "NoteMergeOp",
+        "description": "複数ノート(同一pitch/voice/staff)を1つに結合する。\n\n最も早い`onset_tick`から最も遅い終了tickまでを覆う1ノートに統合し、\n残りは論理削除する。"
+      },
+      "NoteSplitOp": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "note.split",
+            "title": "Type",
+            "default": "note.split"
+          },
+          "note_id": {
+            "type": "integer",
+            "title": "Note Id"
+          },
+          "at_tick": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "At Tick"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note_id",
+          "at_tick"
+        ],
+        "title": "NoteSplitOp",
+        "description": "1つのノートを`at_tick`で2つに分割する。"
+      },
+      "NoteUpdateOp": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "note.update",
+            "title": "Type",
+            "default": "note.update"
+          },
+          "note_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Note Ids"
+          },
+          "onset_tick": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Onset Tick"
+          },
+          "duration_tick": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Tick"
+          },
+          "midi": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 127.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Midi"
+          },
+          "velocity": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 127.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Velocity"
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
+          },
+          "staff": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Staff"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note_ids"
+        ],
+        "title": "NoteUpdateOp",
+        "description": "既存ノートのプロパティ変更(複数ノートへの一括適用可)。\n\n移動は`onset_tick`、リサイズは`duration_tick`の変更として表現する\n(設計書§10.4のop例が`note.update`を汎用的に使っているのと同じ設計)。\n未指定(`None`)のフィールドは変更しない。"
+      },
+      "PartTransposeOctaveOp": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "part.transpose_octave",
+            "title": "Type",
+            "default": "part.transpose_octave"
+          },
+          "part_id": {
+            "type": "string",
+            "title": "Part Id"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ],
+            "title": "Direction"
+          }
+        },
+        "type": "object",
+        "required": [
+          "part_id",
+          "direction"
+        ],
+        "title": "PartTransposeOctaveOp",
+        "description": "パート内の全activeノートを±1オクターブ移調する(R-6軽減策)。"
       },
       "PeaksResponse": {
         "properties": {
@@ -1098,6 +1447,54 @@
           "job_id"
         ],
         "title": "RunStageResponse"
+      },
+      "ScoreOpsRequest": {
+        "properties": {
+          "ops": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/NoteAddOp"
+                },
+                {
+                  "$ref": "#/components/schemas/NoteUpdateOp"
+                },
+                {
+                  "$ref": "#/components/schemas/NoteDeleteOp"
+                },
+                {
+                  "$ref": "#/components/schemas/NoteSplitOp"
+                },
+                {
+                  "$ref": "#/components/schemas/NoteMergeOp"
+                },
+                {
+                  "$ref": "#/components/schemas/PartTransposeOctaveOp"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "type",
+                "mapping": {
+                  "note.add": "#/components/schemas/NoteAddOp",
+                  "note.delete": "#/components/schemas/NoteDeleteOp",
+                  "note.merge": "#/components/schemas/NoteMergeOp",
+                  "note.split": "#/components/schemas/NoteSplitOp",
+                  "note.update": "#/components/schemas/NoteUpdateOp",
+                  "part.transpose_octave": "#/components/schemas/PartTransposeOctaveOp"
+                }
+              }
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Ops"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ops"
+        ],
+        "title": "ScoreOpsRequest",
+        "description": "#31: `POST /score/ops`。配列で一括適用する(`domain/score_ops.py`参照)。"
       },
       "StageStatus": {
         "properties": {

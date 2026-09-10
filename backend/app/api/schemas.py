@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.domain.score_ops import NoteOp
+
 
 class StageStatus(BaseModel):
     status: str
@@ -99,3 +101,9 @@ class BeatmapEditRequest(BaseModel):
     bpm_override: float | None = Field(default=None, allow_inf_nan=False)
     rotate_downbeat: bool = False
     time_signature_override: TimeSignatureEntry | None = None
+
+
+class ScoreOpsRequest(BaseModel):
+    """#31: `POST /score/ops`。配列で一括適用する(`domain/score_ops.py`参照)。"""
+
+    ops: list[NoteOp] = Field(min_length=1)

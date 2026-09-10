@@ -15,6 +15,7 @@ import { useJobStore } from "../stores/jobStore";
 import { AudioPlayer } from "./AudioPlayer";
 import { BeatGridEditor } from "./BeatGridEditor";
 import { BeatGridOverlay } from "./BeatGridOverlay";
+import { PianoRollEditor } from "./PianoRollEditor";
 import { TrackList } from "./TrackList";
 import { Waveform } from "./Waveform";
 
@@ -317,6 +318,8 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
       </section>
 
       {beatmap && <BeatGridEditor projectId={projectId} beatmap={beatmap} />}
+
+      <PianoRollEditor key={projectId} projectId={projectId} />
 
       <section className="space-y-2 rounded-lg border border-gray-200 p-4">
         <h3 className="text-lg font-semibold text-gray-700">トラック</h3>

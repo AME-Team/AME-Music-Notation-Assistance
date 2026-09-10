@@ -75,7 +75,7 @@ def _denominator_at_bar(time_signatures: list[dict], bar: int) -> int:
     return time_signature_at_bar(time_signatures, bar)[1]
 
 
-def _beat_tick_anchors(
+def beat_tick_anchors(
     beats: list[dict], time_signatures: list[dict], divisions: int
 ) -> list[tuple[float, float]]:
     """`(time_sec, tick)` のペア列を、小節構造に属するビート(bar>0)に対して作る。
@@ -129,6 +129,45 @@ def _seconds_to_raw_tick(onset_sec: float, anchors: list[tuple[float, float]]) -
         return k0
     fraction = (onset_sec - t0) / (t1 - t0)
     return k0 + fraction * (k1 - k0)
+
+
+def ticks_to_seconds(tick: float, anchors: list[tuple[float, float]]) -> float:
+    """`_seconds_to_raw_tick`の逆変換(#31)。ビートアンカー列からの線形補間
+
+    (区間外は端の区間の傾きで外挿)で、tickを秒に変換する。
+
+    ユーザーがピアノロール上でノートを追加/移動/リサイズ/分割する操作は
+    tick空間(小節・拍グリッド)で行われるが、`run_quantize_stage`は
+    provenanceを問わず全ノートの`onset_sec`から`onset_tick`を再計算する
+    (§10.1「生データを保持し、テンポマップ修正後の再量子化を可能にする」)。
+    そのためtickだけ変更して`onset_sec`を古いまま放置すると、将来quantizeが
+    再実行された際に位置が(現在のbeatmapに基づく)tickへ巻き戻ってしまう。
+    `services/score_ops.py`はノート編集のたびに本関数で`onset_sec`を
+    その時点のbeatmapと整合させる。
+
+    `anchors`は`beat_tick_anchors`の出力(`(time_sec, tick)`のペア列、
+    time順=tick順で単調増加)であることが前提。`_seconds_to_raw_tick`と
+    同じ区間探索・外挿ロジックを、探索対象をtick列に置き換えて使う。
+    """
+    if not anchors:
+        return 0.0
+    if len(anchors) == 1:
+        return anchors[0][0]
+
+    ticks = [a[1] for a in anchors]
+    if tick <= ticks[0]:
+        (time0, tick0), (time1, tick1) = anchors[0], anchors[1]
+    elif tick >= ticks[-1]:
+        (time0, tick0), (time1, tick1) = anchors[-2], anchors[-1]
+    else:
+        idx = bisect.bisect_right(ticks, tick) - 1
+        idx = max(0, min(idx, len(anchors) - 2))
+        (time0, tick0), (time1, tick1) = anchors[idx], anchors[idx + 1]
+
+    if tick1 == tick0:
+        return time0
+    fraction = (tick - tick0) / (tick1 - tick0)
+    return time0 + fraction * (time1 - time0)
 
 
 def _metrical_weight(tick: float, divisions: int) -> float:
@@ -276,7 +315,7 @@ def quantize_note_onsets(
     実測ノート長を丸めるだけなので、隣接ノートとの重なりを完全には排除しない
     (完全な音価表記への変換はMusicXMLエクスポート側/L0の責務)。
     """
-    anchors = _beat_tick_anchors(beats, time_signatures, divisions)
+    anchors = beat_tick_anchors(beats, time_signatures, divisions)
     raw_ticks = {
         note_id: _seconds_to_raw_tick(onset_sec, anchors) for note_id, onset_sec, _ in notes
     }
@@ -321,7 +360,7 @@ def quantize_pedal_ticks(
 
     ノートのスナップ候補生成(`quantize_note_onsets`)とは異なり、ペダルは
     離散的な音価を持つ記譜対象ではなく継続的な操作(MusicXMLの`<pedal>`)
-    なので、拍グリッドへのスナップは行わない。`_beat_tick_anchors`による
+    なので、拍グリッドへのスナップは行わない。`beat_tick_anchors`による
     線形補間で得られる生tick位置を丸めるだけで十分(#27のMusicXML書き出しが
     tick位置を必要とするための変換)。
 
@@ -336,7 +375,7 @@ def quantize_pedal_ticks(
     `0.0`を返す(例外は発生しない)ため、後続のクランプ処理はそのまま
     安全に機能する(#27-M2レビュー3巡目で指摘された懸念の確認結果)。
     """
-    anchors = _beat_tick_anchors(beats, time_signatures, divisions)
+    anchors = beat_tick_anchors(beats, time_signatures, divisions)
     max_tick = round(anchors[-1][1]) if anchors else 0
     result: list[tuple[int, int]] = []
     for start_sec, stop_sec in pedals:

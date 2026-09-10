@@ -7,14 +7,14 @@ Swing検出のそれぞれを、決定論的なロジックとして厚くテス
 
 from __future__ import annotations
 
+import pytest
 from app.pipeline.quantize import (
     DEFAULT_TOP_N,
+    beat_tick_anchors,
     detect_swing_ratio,
     quantize_note_onsets,
     quantize_pedal_ticks,
-)
-from app.pipeline.quantize import (
-    _beat_tick_anchors as beat_tick_anchors,
+    ticks_to_seconds,
 )
 from app.pipeline.quantize import (
     _denominator_at_bar as denominator_at_bar,
@@ -126,6 +126,51 @@ class TestSecondsToRawTick:
 
     def test_empty_anchors_returns_zero(self) -> None:
         assert seconds_to_raw_tick(1.0, []) == 0.0
+
+
+class TestTicksToSeconds:
+    """#31: `_seconds_to_raw_tick`の逆変換。ピアノロールでのノート編集(tick空間)から
+
+    `onset_sec`(生データ)を再計算するために使う。
+    """
+
+    def test_exact_anchor_tick_returns_exact_seconds(self) -> None:
+        anchors = beat_tick_anchors(
+            _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, divisions=480
+        )
+        assert ticks_to_seconds(480.0, anchors) == 0.5
+
+    def test_midpoint_interpolates_linearly(self) -> None:
+        anchors = beat_tick_anchors(
+            _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, divisions=480
+        )
+        assert ticks_to_seconds(240.0, anchors) == 0.25
+
+    def test_before_first_anchor_extrapolates(self) -> None:
+        anchors = beat_tick_anchors(
+            _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, divisions=480
+        )
+        assert ticks_to_seconds(-240.0, anchors) == -0.25
+
+    def test_after_last_anchor_extrapolates(self) -> None:
+        anchors = beat_tick_anchors(
+            _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, divisions=480
+        )
+        last_time = anchors[-1][0]
+        last_tick = anchors[-1][1]
+        assert ticks_to_seconds(last_tick + 480.0, anchors) == last_time + 0.5
+
+    def test_empty_anchors_returns_zero(self) -> None:
+        assert ticks_to_seconds(100.0, []) == 0.0
+
+    def test_is_the_inverse_of_seconds_to_raw_tick(self) -> None:
+        """任意の秒→tick→秒の往復が(浮動小数の誤差範囲内で)元に戻る。"""
+        anchors = beat_tick_anchors(
+            _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, divisions=480
+        )
+        for onset_sec in (0.0, 0.1, 0.5, 1.234, 3.9, 7.5):
+            tick = seconds_to_raw_tick(onset_sec, anchors)
+            assert ticks_to_seconds(tick, anchors) == pytest.approx(onset_sec)
 
 
 class TestMetricalWeight:
