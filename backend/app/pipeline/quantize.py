@@ -307,3 +307,35 @@ def quantize_note_onsets(
             selected_snap=best.id,
         )
     return result
+
+
+def quantize_pedal_ticks(
+    pedals: list[tuple[float, float]],
+    beats: list[dict],
+    time_signatures: list[dict],
+    *,
+    divisions: int = DEFAULT_DIVISIONS,
+) -> list[tuple[int, int]]:
+    """ペダルイベント`(start_sec, stop_sec)`をtickへ変換する(#25/#27)。
+
+    ノートのスナップ候補生成(`quantize_note_onsets`)とは異なり、ペダルは
+    離散的な音価を持つ記譜対象ではなく継続的な操作(MusicXMLの`<pedal>`)
+    なので、拍グリッドへのスナップは行わない。`_beat_tick_anchors`による
+    線形補間で得られる生tick位置を丸めるだけで十分(#27のMusicXML書き出しが
+    tick位置を必要とするための変換)。
+
+    `[0, 最終アンカーのtick]` の範囲へクランプする(#27-M2レビュー指摘):
+    先頭ビートより前に始まる、または最終ビートより後まで続くペダルは
+    `_seconds_to_raw_tick` の外挿により範囲外(負値やスコア末尾超過)の
+    tickになりうる。MusicXMLへ不正なtick位置を書き出さないよう、ここで
+    有効範囲に収める。
+    """
+    anchors = _beat_tick_anchors(beats, time_signatures, divisions)
+    max_tick = round(anchors[-1][1]) if anchors else 0
+    result: list[tuple[int, int]] = []
+    for start_sec, stop_sec in pedals:
+        start_tick = max(0, min(round(_seconds_to_raw_tick(start_sec, anchors)), max_tick))
+        stop_tick = max(0, min(round(_seconds_to_raw_tick(stop_sec, anchors)), max_tick))
+        stop_tick = max(stop_tick, min(start_tick + 1, max_tick))
+        result.append((start_tick, stop_tick))
+    return result
