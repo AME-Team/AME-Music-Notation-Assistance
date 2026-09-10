@@ -2,6 +2,7 @@
   "precommit_review_enabled": true,
   "precommit_require_static_checks": true,
   "pr_review_require_static_checks": true,
+  "pr_review_require_external_ci": false,
   "ai_review_enforce_no_skip": true,
   "review_include_package_dir": false,
   "precommit_engine": "opencode",
