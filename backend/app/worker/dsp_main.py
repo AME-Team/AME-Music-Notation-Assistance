@@ -40,6 +40,28 @@ def emit(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
+def _invalidate_downstream_or_reset(workspace_dir: Path, project_id: str, stage: str) -> None:
+    """`stage_invalidation.invalidate_downstream`を呼び、失敗時は自ステージの
+
+    meta.jsonを削除してから例外を再送出する(#29-M2レビュー指摘)。
+
+    通常(force無し)は入力/パラメータが変われば`should_skip_stage`がFalseに
+    なるため、無効化に失敗しても次回実行時に自然にリトライされる。しかし
+    `force=True`で入力が不変のまま再実行した場合、無効化がリトライ上限超過
+    等で失敗しても自ステージのmeta.jsonが(不変入力と一致する)古いハッシュ
+    のまま残っていると、次回の非force実行は`should_skip_stage`でスキップ
+    されてしまい、下流の無効化が二度と再試行されない(成果物は実際に
+    再生成されたのに下流がstaleにならないまま恒久的に残る)。自ステージの
+    meta.jsonをここで削除しておけば、force指定の有無に関わらず次回実行時に
+    必ず再実行され、無効化も再試行される。
+    """
+    try:
+        stage_invalidation.invalidate_downstream(workspace_dir, project_id, stage)
+    except BaseException:
+        storage.stage_metadata_path(workspace_dir, project_id, stage).unlink(missing_ok=True)
+        raise
+
+
 def _package_version(name: str) -> str:
     """NFR-11: 成果物メタデータに記録するプロバイダのバージョン。"""
     try:
@@ -190,7 +212,7 @@ def run_separate_stage(job_id: str, project_id: str, workspace_dir: Path, params
     storage.invalidate_peaks_cache(workspace_dir, project_id, list(set(written) | stale_stem_names))
     # #29: 自ステージのstage_metadataを書く前に下流(transcribe/quantize)を無効化する
     # (呼び出し契約は`services/stage_invalidation.py`のモジュールdocstring参照)。
-    stage_invalidation.invalidate_downstream(workspace_dir, project_id, "separate")
+    _invalidate_downstream_or_reset(workspace_dir, project_id, "separate")
     storage.write_stage_metadata(
         workspace_dir,
         project_id,
@@ -312,7 +334,7 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path, params: di
     # 無効化する(直前の「manual編集を優先しwrite skip」分岐はbeatmap.jsonの内容が
     # 変わっていないため対象外)。自ステージのstage_metadataを書く前に呼ぶこと
     # (呼び出し契約は`services/stage_invalidation.py`のモジュールdocstring参照)。
-    stage_invalidation.invalidate_downstream(workspace_dir, project_id, "beat")
+    _invalidate_downstream_or_reset(workspace_dir, project_id, "beat")
     storage.write_stage_metadata(
         workspace_dir,
         project_id,
@@ -488,7 +510,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     # #29: score/current.jsonへ実際に新しい採譜結果を書いた場合のみ下流(quantize)を
     # 無効化する(直前の「並行変更検知でwrite skip」分岐はScore IRの内容が変わって
     # いないため対象外)。自ステージのstage_metadataを書く前に呼ぶこと。
-    stage_invalidation.invalidate_downstream(workspace_dir, project_id, "transcribe")
+    _invalidate_downstream_or_reset(workspace_dir, project_id, "transcribe")
     storage.write_stage_metadata(
         workspace_dir,
         project_id,

@@ -285,7 +285,11 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
           <button
             type="button"
             onClick={() => void handleExport()}
-            disabled={isExporting}
+            // #29-M2レビュー指摘: 量子化ボタンをtranscribe staleで無効化した
+            // 意図(古いScore IRからの誤ったMusicXML出力を防ぐ)と揃え、
+            // エクスポート側でも同じガードを掛ける(quantize/transcribeの
+            // どちらかがstaleなら、古いonset_tick等のままの出力になりうる)。
+            disabled={isExporting || quantizeStage?.stale || transcribeStage?.stale}
             className="rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50"
           >
             {isExporting ? "エクスポート中..." : "MusicXMLをエクスポート"}

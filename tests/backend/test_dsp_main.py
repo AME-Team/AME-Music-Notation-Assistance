@@ -1408,3 +1408,62 @@ def test_quantize_stage_force_bypasses_skip(
     assert call_count == 1
     dsp_main.run_quantize_stage("job_q2", project_id, tmp_path, {"force": True})
     assert call_count == 2  # forceによりハッシュ一致でも再実行された
+
+
+def test_force_rerun_with_failed_invalidation_resets_own_metadata_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#29-M2レビュー指摘の回帰: `force=True`かつ入力/パラメータ不変のまま再実行した際、
+
+    `invalidate_downstream`がリトライ上限超過等で失敗しても、自ステージの
+    meta.jsonを削除しておくことで、次回(非force)実行時に必ず再実行され
+    無効化が再試行される(自ステージのmetaが古いハッシュのまま残ると、
+    次回`should_skip_stage`でスキップされ無効化が二度と呼ばれなくなる
+    問題を防ぐ、`_invalidate_downstream_or_reset`)。
+    """
+    project_id = "proj_test"
+    _run_full_pipeline_once(tmp_path, monkeypatch, project_id)
+    assert storage.stage_metadata_path(tmp_path, project_id, "separate").exists()
+    assert storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()
+
+    monkeypatch.setattr(dsp_main, "run_separation", _fake_run_separation(["piano"]))
+
+    def _failing_invalidate(*args, **kwargs):
+        raise PermissionError("simulated retry-exhausted failure")
+
+    monkeypatch.setattr(
+        dsp_main.stage_invalidation, "invalidate_downstream", _failing_invalidate
+    )
+    with pytest.raises(PermissionError):
+        dsp_main.run_separate_stage(
+            "job_sep_force",
+            project_id,
+            tmp_path,
+            {"preset": "standard", "execution_provider": "cpu", "force": True},
+        )
+    # 無効化失敗により自ステージのmetaは削除され、下流(transcribe)のmetaは
+    # (無効化されないまま)古い状態で残っている。
+    assert not storage.stage_metadata_path(tmp_path, project_id, "separate").exists()
+    assert storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()
+
+    # 無効化を復旧させ、forceを付けずに再実行する: 自ステージのmetaが
+    # 削除されているため(ハッシュ一致でも)スキップされず、無効化も
+    # 再試行されてtranscribeのmetaが無効化されるべき。
+    monkeypatch.undo()
+    call_count = 0
+    real_run = _fake_run_separation(["piano"])
+
+    def _counting_run(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(dsp_main, "run_separation", _counting_run)
+    dsp_main.run_separate_stage(
+        "job_sep_retry",
+        project_id,
+        tmp_path,
+        {"preset": "standard", "execution_provider": "cpu"},
+    )
+    assert call_count == 1  # metaが削除されていたためスキップされず再実行された
+    assert not storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()
