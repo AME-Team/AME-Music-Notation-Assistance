@@ -286,6 +286,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/score/ops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply Score Ops
+         * @description #31: ノート編集オペレーションを配列で一括適用する(FR-09)。
+         *
+         *     `async def` ではなく通常の `def` にする(`get_score`/`export_score`と同じ
+         *     理由): ファイルI/Oが中心の同期処理。
+         *
+         *     楽観的並行性制御(`worker/dsp_main.py`の各ステージ、`patch_beatmap`と同じ
+         *     パターン): リクエスト開始時に読んだ生JSON(`raw_before`)を保持し、
+         *     `apply_ops`はその場でパースした`ScoreIR`(まだ書き込んでいない)に対して
+         *     行う。書き込み直前に再読込して`raw_before`と一致するか確認し、不一致なら
+         *     409。`read_score_or_404`(単に読んでパースするだけ)ではなく生JSONを直接
+         *     読むのは、`run_quantize_stage`の2巡目レビュー指摘と同じ理由: `raw_before`用
+         *     の読み取りと、モデル構築に使う読み取りを分離すると、その間の並行書き込みを
+         *     検出できずlost-updateになる。
+         */
+        post: operations["apply_score_ops_api_projects__project_id__score_ops_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{project_id}/export": {
         parameters: {
             query?: never;
@@ -363,6 +395,11 @@ export interface components {
             /** File */
             file: string;
         };
+        /** ErrorResponse */
+        ErrorResponse: {
+            /** Detail */
+            detail: string;
+        };
         /**
          * ExportRequest
          * @description 設計書§11.6の`parts`/`options`による部分エクスポートはM3スコープ。
@@ -406,6 +443,135 @@ export interface components {
             created_at: string;
             /** Updated At */
             updated_at: string;
+        };
+        /**
+         * NoteAddOp
+         * @description 新規ノートを追加する(FR-09)。
+         *
+         *     `onset_tick`/`duration_tick`を指定する(ピアノロールはtick空間で操作する
+         *     ため)。`onset_sec`/`duration_sec`は`services/score_ops.py`が現在のbeatmap
+         *     から逆算する。
+         */
+        NoteAddOp: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "note.add";
+            /** Part Id */
+            part_id: string;
+            /** Onset Tick */
+            onset_tick: number;
+            /** Duration Tick */
+            duration_tick: number;
+            /** Midi */
+            midi: number;
+            /**
+             * Velocity
+             * @default 90
+             */
+            velocity: number;
+            /**
+             * Voice
+             * @default 1
+             */
+            voice: number;
+            /**
+             * Staff
+             * @default 1
+             */
+            staff: number;
+        };
+        /**
+         * NoteDeleteOp
+         * @description 論理削除(`status="deleted"`)。物理削除しない(§10.1)。
+         */
+        NoteDeleteOp: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "note.delete";
+            /** Note Ids */
+            note_ids: number[];
+        };
+        /**
+         * NoteMergeOp
+         * @description 複数ノート(同一pitch/voice/staff)を1つに結合する。
+         *
+         *     最も早い`onset_tick`から最も遅い終了tickまでを覆う1ノートに統合し、
+         *     残りは論理削除する。
+         */
+        NoteMergeOp: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "note.merge";
+            /** Note Ids */
+            note_ids: number[];
+        };
+        /**
+         * NoteSplitOp
+         * @description 1つのノートを`at_tick`で2つに分割する。
+         */
+        NoteSplitOp: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "note.split";
+            /** Note Id */
+            note_id: number;
+            /** At Tick */
+            at_tick: number;
+        };
+        /**
+         * NoteUpdateOp
+         * @description 既存ノートのプロパティ変更(複数ノートへの一括適用可)。
+         *
+         *     移動は`onset_tick`、リサイズは`duration_tick`の変更として表現する
+         *     (設計書§10.4のop例が`note.update`を汎用的に使っているのと同じ設計)。
+         *     未指定(`None`)のフィールドは変更しない。
+         */
+        NoteUpdateOp: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "note.update";
+            /** Note Ids */
+            note_ids: number[];
+            /** Onset Tick */
+            onset_tick?: number | null;
+            /** Duration Tick */
+            duration_tick?: number | null;
+            /** Midi */
+            midi?: number | null;
+            /** Velocity */
+            velocity?: number | null;
+            /** Voice */
+            voice?: number | null;
+            /** Staff */
+            staff?: number | null;
+        };
+        /**
+         * PartTransposeOctaveOp
+         * @description パート内の全activeノートを±1オクターブ移調する(R-6軽減策)。
+         */
+        PartTransposeOctaveOp: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "part.transpose_octave";
+            /** Part Id */
+            part_id: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "up" | "down";
         };
         /** PeaksResponse */
         PeaksResponse: {
@@ -457,6 +623,14 @@ export interface components {
         RunStageResponse: {
             /** Job Id */
             job_id: string;
+        };
+        /**
+         * ScoreOpsRequest
+         * @description #31: `POST /score/ops`。配列で一括適用する(`domain/score_ops.py`参照)。
+         */
+        ScoreOpsRequest: {
+            /** Ops */
+            ops: (components["schemas"]["NoteAddOp"] | components["schemas"]["NoteUpdateOp"] | components["schemas"]["NoteDeleteOp"] | components["schemas"]["NoteSplitOp"] | components["schemas"]["NoteMergeOp"] | components["schemas"]["PartTransposeOctaveOp"])[];
         };
         /** StageStatus */
         StageStatus: {
@@ -1010,6 +1184,61 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_score_ops_api_projects__project_id__score_ops_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScoreOpsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description score not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description score modified concurrently */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Validation Error */
