@@ -71,8 +71,7 @@ repos:
         entry: python -m ame_ai_review_system.skip_guard
         language: python
         additional_dependencies:
-          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.11/ame_ai_review_system-0.2.11-py3-none-any.whl#sha256=5ee0e4ad2ffec9253c591c7a694f713de456ed7903f574180e402cbf140800ae
-          - claude-agent-sdk
+          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.13/ame_ai_review_system-0.2.13-py3-none-any.whl#sha256=cd4dfb1d66439182528afa3faf3984d4ab43ab4b62173f1c2a3b151516519fae
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
@@ -82,8 +81,7 @@ repos:
         entry: python -m ame_ai_review_system.precommit_review
         language: python
         additional_dependencies:
-          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.11/ame_ai_review_system-0.2.11-py3-none-any.whl#sha256=5ee0e4ad2ffec9253c591c7a694f713de456ed7903f574180e402cbf140800ae
-          - claude-agent-sdk
+          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.13/ame_ai_review_system-0.2.13-py3-none-any.whl#sha256=cd4dfb1d66439182528afa3faf3984d4ab43ab4b62173f1c2a3b151516519fae
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
@@ -93,8 +91,7 @@ repos:
         entry: python -m ame_ai_review_system.post_commit_reset
         language: python
         additional_dependencies:
-          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.11/ame_ai_review_system-0.2.11-py3-none-any.whl#sha256=5ee0e4ad2ffec9253c591c7a694f713de456ed7903f574180e402cbf140800ae
-          - claude-agent-sdk
+          - ame_ai_review_system @ https://github.com/AME-Team/AME-AI-Review-System/releases/download/v0.2.13/ame_ai_review_system-0.2.13-py3-none-any.whl#sha256=cd4dfb1d66439182528afa3faf3984d4ab43ab4b62173f1c2a3b151516519fae
         pass_filenames: false
         always_run: true
         stages: [post-commit]
