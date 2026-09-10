@@ -876,6 +876,36 @@ def test_quantize_stage_sets_tick_spelling_voice_staff(
         assert 1 <= note.voice <= 4
 
 
+def test_quantize_stage_sets_pedal_ticks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#27): ペダルの start_tick/stop_tick も量子化ステージで設定される
+
+    (Stage 6のMusicXML書き出しが`<pedal>`にtick位置を必要とするため)。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)], pedals=[(0.5, 1.0)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+
+    part = (
+        ScoreService(workspace_dir=tmp_path).read_score(project_id).find_part("piano")
+    )
+    assert part is not None
+    assert len(part.pedals) == 1
+    # 120bpm・4/4: 0.5s=1拍=480tick、1.0s=2拍=960tick。
+    assert part.pedals[0].start_tick == 480
+    assert part.pedals[0].stop_tick == 960
+
+
 def test_quantize_stage_skips_when_input_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -904,6 +934,54 @@ def test_quantize_stage_skips_when_input_unchanged(
     dsp_main.run_quantize_stage("job3", project_id, tmp_path, {})
 
     assert call_count == 1  # 2回目はハッシュ一致でスキップされる
+
+
+def test_quantize_stage_reruns_if_pedals_change_even_if_notes_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#27-M2レビュー): params_hashにpedalsを含めた狙いの検証。
+
+    ノートが同じでもペダルだけが変われば再実行され、ペダルのtickも
+    最新の値へ更新されるべき。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)], pedals=[(0.0, 0.5)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    from app.pipeline.quantize import quantize_note_onsets as _original_quantize
+
+    call_count = 0
+
+    def _counting_quantize(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return _original_quantize(*args, **kwargs)
+
+    monkeypatch.setattr(dsp_main, "quantize_note_onsets", _counting_quantize)
+    dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+    assert call_count == 1
+
+    # ノートはそのまま、ペダルの終了時刻だけを書き換える。
+    service = ScoreService(workspace_dir=tmp_path)
+    score = service.read_score(project_id)
+    part = score.find_part("piano")
+    assert part is not None
+    part.pedals[0].stop_sec = 1.0
+    service.write_score(project_id, score)
+
+    dsp_main.run_quantize_stage("job3", project_id, tmp_path, {})
+    assert call_count == 2  # pedals変更によりスキップされず再実行される
+
+    final_part = service.read_score(project_id).find_part("piano")
+    assert final_part is not None
+    assert final_part.pedals[0].stop_tick == 960  # 1.0s -> 960tick(120bpm)へ更新済み
 
 
 def test_quantize_stage_reruns_if_notes_not_quantized(

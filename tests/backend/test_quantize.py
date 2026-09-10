@@ -11,6 +11,7 @@ from app.pipeline.quantize import (
     DEFAULT_TOP_N,
     detect_swing_ratio,
     quantize_note_onsets,
+    quantize_pedal_ticks,
 )
 from app.pipeline.quantize import (
     _beat_tick_anchors as beat_tick_anchors,
@@ -346,3 +347,61 @@ class TestSwingDetection:
         assert result[1].onset_tick != result[2].onset_tick
         assert result[1].onset_tick == 0
         assert result[2].onset_tick == 240
+
+
+class TestQuantizePedalTicks:
+    def test_converts_seconds_to_ticks_via_beat_anchors(self) -> None:
+        # 0.5s=1拍=480tick、1.0s=2拍=960tick(120bpm、4/4)。
+        result = quantize_pedal_ticks(
+            [(0.5, 1.0)], _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4
+        )
+        assert result == [(480, 960)]
+
+    def test_preserves_order_and_count_for_multiple_pedals(self) -> None:
+        result = quantize_pedal_ticks(
+            [(0.0, 0.5), (1.0, 1.5)], _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4
+        )
+        assert result == [(0, 480), (960, 1440)]
+
+    def test_stop_tick_is_at_least_start_tick_plus_one(self) -> None:
+        """回帰: 開始と終了が丸めで同一tickになっても、区間が消えない。"""
+        result = quantize_pedal_ticks(
+            [(0.0, 0.0001)], _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4
+        )
+        assert result[0][1] > result[0][0]
+
+    def test_start_before_first_beat_is_clamped_to_zero(self) -> None:
+        """回帰(#27-M2レビュー): 先頭ビートより前に始まるペダルは、外挿により
+
+        負のtickになりうるため0へクランプする。
+        """
+        result = quantize_pedal_ticks(
+            [(-1.0, 0.5)], _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4
+        )
+        assert result[0][0] == 0
+
+    def test_stop_after_last_beat_is_clamped_to_score_end(self) -> None:
+        """回帰(#27-M2レビュー): 最終ビートより後まで続くペダルは、外挿により
+
+        スコア末尾を超えるtickになりうるため最終アンカーのtickへクランプする。
+        """
+        last_beat_tick = 480 * (len(_BEATS_120BPM_4_4) - 1)
+        result = quantize_pedal_ticks(
+            [(0.0, 100.0)], _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4
+        )
+        assert result[0][1] == last_beat_tick
+
+    def test_degenerate_pedal_entirely_past_the_end_still_has_positive_duration(
+        self,
+    ) -> None:
+        """回帰(#27-M2レビュー2巡目): start/stopが両方ともスコア末尾を超える場合でも、
+
+        クランプ後に長さ0(start_tick == stop_tick)へ潰れない。開始側を
+        1tick手前へ寄せてでも非ゼロ長を確保する(MusicXMLの<pedal>で
+        startとendが同一tickに並ぶのを避けるため)。
+        """
+        result = quantize_pedal_ticks(
+            [(100.0, 200.0)], _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4
+        )
+        start_tick, stop_tick = result[0]
+        assert stop_tick > start_tick

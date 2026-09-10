@@ -16,6 +16,8 @@ import bisect
 import statistics
 from dataclasses import dataclass
 
+from app.pipeline.time_signature import time_signature_at_bar
+
 # MusicXMLの `<divisions>`(四分音符あたりのtick数)の既定値(#27)。
 DEFAULT_DIVISIONS = 480
 
@@ -64,14 +66,13 @@ class QuantizedNote:
 
 
 def _denominator_at_bar(time_signatures: list[dict], bar: int) -> int:
-    """`bar`時点で有効な拍子の分母(順方向に補完)。指定が無ければ4/4相当。"""
-    denominator = 4
-    for ts in sorted(time_signatures, key=lambda t: t["bar"]):
-        if ts["bar"] <= bar:
-            denominator = ts["denominator"]
-        else:
-            break
-    return denominator
+    """`bar`時点で有効な拍子の分母(順方向に補完)。指定が無ければ4/4相当。
+
+    `pipeline/time_signature.py`の`time_signature_at_bar`の薄いラッパ
+    (#27-M2レビュー指摘: `pipeline/export/score_builder.py`と同じ補完
+    ロジックが重複していたため、共有ヘルパーへ集約した)。
+    """
+    return time_signature_at_bar(time_signatures, bar)[1]
 
 
 def _beat_tick_anchors(
@@ -306,4 +307,47 @@ def quantize_note_onsets(
             snap_candidates=candidates,
             selected_snap=best.id,
         )
+    return result
+
+
+def quantize_pedal_ticks(
+    pedals: list[tuple[float, float]],
+    beats: list[dict],
+    time_signatures: list[dict],
+    *,
+    divisions: int = DEFAULT_DIVISIONS,
+) -> list[tuple[int, int]]:
+    """ペダルイベント`(start_sec, stop_sec)`をtickへ変換する(#25/#27)。
+
+    ノートのスナップ候補生成(`quantize_note_onsets`)とは異なり、ペダルは
+    離散的な音価を持つ記譜対象ではなく継続的な操作(MusicXMLの`<pedal>`)
+    なので、拍グリッドへのスナップは行わない。`_beat_tick_anchors`による
+    線形補間で得られる生tick位置を丸めるだけで十分(#27のMusicXML書き出しが
+    tick位置を必要とするための変換)。
+
+    `[0, 最終アンカーのtick]` の範囲へクランプする(#27-M2レビュー指摘):
+    先頭ビートより前に始まる、または最終ビートより後まで続くペダルは
+    `_seconds_to_raw_tick` の外挿により範囲外(負値やスコア末尾超過)の
+    tickになりうる。MusicXMLへ不正なtick位置を書き出さないよう、ここで
+    有効範囲に収める。
+
+    `beats`が空(`anchors`も空)の場合、`max_tick`は0にフォールバックする。
+    このとき`_seconds_to_raw_tick`自身も空`anchors`を明示的に処理して
+    `0.0`を返す(例外は発生しない)ため、後続のクランプ処理はそのまま
+    安全に機能する(#27-M2レビュー3巡目で指摘された懸念の確認結果)。
+    """
+    anchors = _beat_tick_anchors(beats, time_signatures, divisions)
+    max_tick = round(anchors[-1][1]) if anchors else 0
+    result: list[tuple[int, int]] = []
+    for start_sec, stop_sec in pedals:
+        start_tick = max(0, min(round(_seconds_to_raw_tick(start_sec, anchors)), max_tick))
+        stop_tick = max(0, min(round(_seconds_to_raw_tick(stop_sec, anchors)), max_tick))
+        if start_tick >= max_tick:
+            # スコア末尾ちょうどにクランプされた場合、+1する余地が無い
+            # (#27-M2レビュー2巡目の指摘: この場合に限り開始側を1tick
+            # 手前へ寄せ、非ゼロ長を確保する。全体が0tickの退化楽曲の
+            # 場合のみ、これでもなお長さ0のまま)。
+            start_tick = max(0, max_tick - 1)
+        stop_tick = max(stop_tick, min(start_tick + 1, max_tick))
+        result.append((start_tick, stop_tick))
     return result

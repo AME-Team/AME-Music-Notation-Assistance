@@ -28,7 +28,7 @@ from app.domain.migrations import migrate_to_current
 from app.domain.score import Clef, Note, Part, Pedal, ScoreIR, SnapCandidate, SourceInfo, Spelling
 from app.infra import storage
 from app.pipeline.beat import run_beat_estimation
-from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets
+from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_pedal_ticks
 from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
 from app.pipeline.transcribe.piano import run_piano_transcription
@@ -574,11 +574,13 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         }
         for n in active_notes
     ]
+    pedals_snapshot = [{"start_sec": p.start_sec, "stop_sec": p.stop_sec} for p in part.pedals]
     hash_payload = json.dumps(
         {
             "beats": beatmap.get("beats", []),
             "time_signatures": beatmap.get("time_signatures", []),
             "notes": notes_snapshot,
+            "pedals": pedals_snapshot,
             "divisions": score.divisions,
             "music21_version": music21_version,
         },
@@ -644,6 +646,19 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         note.voice = r.voice
         note.staff = r.staff
         note.flags = list(r.flags)
+
+    if part.pedals:
+        # #27のMusicXML書き出しがtick位置を必要とするため、ここで併せて
+        # 変換しておく(pedalはノートと違いスナップ格子への丸めは行わない)。
+        pedal_ticks = quantize_pedal_ticks(
+            [(p.start_sec, p.stop_sec) for p in part.pedals],
+            beatmap.get("beats", []),
+            beatmap.get("time_signatures", []),
+            divisions=score.divisions,
+        )
+        for pedal, (start_tick, stop_tick) in zip(part.pedals, pedal_ticks, strict=True):
+            pedal.start_tick = start_tick
+            pedal.stop_tick = stop_tick
 
     raw_now = storage.read_json(score_path) if score_path.exists() else None
     if raw_now != raw_before:
