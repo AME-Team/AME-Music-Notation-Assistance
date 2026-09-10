@@ -40,7 +40,10 @@ function createWindow(): BrowserWindow {
         "Content-Security-Policy": [
           "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
             "img-src 'self' data: blob:; media-src 'self' blob: http://127.0.0.1:*; " +
-            "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*",
+            // #27: `<a download href="blob:...">.click()`(エクスポートのファイル
+            // 保存)はChromiumではconnect-srcの対象になる(img-src/media-srcの
+            // blob:許可だけでは足りない、実機検証で判明)。
+            "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* blob:",
         ],
       },
     });
