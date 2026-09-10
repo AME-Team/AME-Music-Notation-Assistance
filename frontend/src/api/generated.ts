@@ -372,6 +372,11 @@ export interface components {
             params: {
                 [key: string]: unknown;
             };
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** RunStageResponse */
         RunStageResponse: {
@@ -384,6 +389,11 @@ export interface components {
             status: string;
             /** Progress */
             progress: number;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
         };
         /**
          * StemListResponse

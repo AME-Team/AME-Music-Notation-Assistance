@@ -952,6 +952,11 @@
             "type": "object",
             "title": "Params",
             "default": {}
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
           }
         },
         "type": "object",
@@ -979,6 +984,11 @@
           "progress": {
             "type": "number",
             "title": "Progress"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "default": false
           }
         },
         "type": "object",

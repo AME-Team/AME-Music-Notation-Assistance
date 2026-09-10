@@ -28,7 +28,9 @@ async def run_stage(
     manager: JobManager = Depends(get_job_manager),
 ) -> dict:
     try:
-        job_id = await manager.create_job(project_id=project_id, stage=stage, params=body.params)
+        job_id = await manager.create_job(
+            project_id=project_id, stage=stage, params={**body.params, "force": body.force}
+        )
     except UnknownStageError as exc:
         raise HTTPException(status_code=422, detail=f"unknown stage: {exc}") from exc
     return {"job_id": job_id}

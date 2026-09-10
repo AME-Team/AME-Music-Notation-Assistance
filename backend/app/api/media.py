@@ -14,6 +14,7 @@ from app.config import Settings
 from app.infra import storage
 from app.pipeline import beatmap_edit
 from app.pipeline.peaks import compute_peaks
+from app.services import stage_invalidation
 from app.services.project_service import ProjectNotFoundError, ProjectService
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["media"])
@@ -318,4 +319,10 @@ async def patch_beatmap(
             )
         beatmap["source"] = "manual"
         storage.write_json(path, beatmap)
+        # #29完了条件: ビートを補正すると量子化以降(quantize)が無効化され、
+        # 再実行すると反映される。worker/dsp_main.pyの各ステージと同じ呼び出し契約
+        # (自身の状態を書き終えた後で構わない: このエンドポイント自身はstage
+        # ではなくstage_metadataを持たないため、dsp_main.pyのような書き込み順序
+        # 制約はここには適用されない)。
+        stage_invalidation.invalidate_downstream(settings.workspace_dir, project_id, "beat")
     return beatmap
