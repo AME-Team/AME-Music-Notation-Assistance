@@ -265,6 +265,11 @@ export interface paths {
          * Get Score
          * @description Stage 3(採譜)未実行なら404を返す。
          *
+         *     `async def` ではなく通常の `def` にする(`api/export.py`の`export_score`と
+         *     同じ理由、#27-M2レビュー指摘): `ScoreService.read_score`はファイルI/Oを
+         *     伴う同期処理であり、`async def`のままだとイベントループを直接ブロックし、
+         *     SSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。
+         *
          *     `response_model`に`domain.score.ScoreIR`を直接指定しない: そのネストする
          *     `TempoMapEntry`/`TimeSignatureEntry`が`api/schemas.py`(beatmap用)の同名
          *     クラスとOpenAPIコンポーネント名で衝突し、生成TSの型名が
