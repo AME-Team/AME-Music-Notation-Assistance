@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import jobs, media, projects
+from app.api import export, jobs, media, projects, score
 from app.config import Settings, load_settings
 from app.services.job_service import JobManager
 from app.services.project_service import ProjectService
@@ -78,6 +78,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects.router)
     app.include_router(jobs.router)
     app.include_router(media.router)
+    app.include_router(score.router)
+    app.include_router(export.router)
 
     return app
 

@@ -8,30 +8,16 @@ import soundfile as sf
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from app.api.deps import get_project_service, get_settings
+from app.api.deps import ensure_project_exists, get_project_service, get_settings
 from app.api.schemas import Beatmap, BeatmapEditRequest, PeaksResponse, StemListResponse
 from app.config import Settings
 from app.infra import storage
 from app.pipeline import beatmap_edit
 from app.pipeline.peaks import compute_peaks
 from app.services import stage_invalidation
-from app.services.project_service import ProjectNotFoundError, ProjectService
+from app.services.project_service import ProjectService
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["media"])
-
-
-def _ensure_project_exists(project_id: str, service: ProjectService) -> dict:
-    """プロジェクトの存在を確認し、取得したレコードを返す。
-
-    戻り値は大半の呼び出し元では無視されるが、`get_peaks` は原曲パス解決に
-    必要な `audio_format` をここから再利用することで、`service.audio_path()`
-    が内部で行う `get_project` の再呼び出し(DBラウンドトリップの重複)を
-    避けられる(#21-M1レビュー指摘の追加ラウンド)。
-    """
-    try:
-        return service.get_project(project_id)
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="project not found") from exc
 
 
 _AUDIO_BINARY_SCHEMA = {"type": "string", "format": "binary"}
@@ -77,7 +63,7 @@ async def get_original_audio(
     下の `get_stem_audio` は `storage` 経由で直接パスを組み立てる。同一ファイル内で
     解決方式が2通りあるのは、この拡張子が可変か固定かの違いに起因する意図的な差分。
     """
-    project = _ensure_project_exists(project_id, service)
+    project = ensure_project_exists(project_id, service)
     # `service.audio_path(project_id)` ではなく、既に取得済みの `project` を
     # `audio_path_for_project` に渡す(#21-M1レビュー指摘の追加ラウンド):
     # 前者は内部で `get_project` を再実行してしまい、`get_peaks` 用に導入した
@@ -110,7 +96,7 @@ async def get_stem_audio(
     ステムは常に `.wav` 固定(#16)なのでDB参照は不要。`get_original_audio` との
     パス解決方式の違いについては同関数のdocstringを参照。
     """
-    _ensure_project_exists(project_id, service)
+    ensure_project_exists(project_id, service)
     path = storage.stems_dir(settings.workspace_dir, project_id) / f"{name}.wav"
     if not path.exists():
         raise HTTPException(status_code=404, detail="stem not found")
@@ -135,7 +121,7 @@ async def list_stems(
     ハードコードできない)。空リストは404ではなく200で返す: 分離未実行は正常な
     初期状態であり、エラーではないため。
     """
-    _ensure_project_exists(project_id, service)
+    ensure_project_exists(project_id, service)
     names = storage.list_stem_names(settings.workspace_dir, project_id)
     return {"names": sorted(names)}
 
@@ -156,11 +142,11 @@ def get_peaks(
     プロセスへ分離する」方針とも矛盾する)。FastAPIは同期`def`のエンドポイントを
     自動的にスレッドプールで実行するため、これだけでイベントループを塞がなくなる。
     """
-    project = _ensure_project_exists(project_id, service)
+    project = ensure_project_exists(project_id, service)
 
     if name == "original":
         # `service.audio_path()` は内部で `get_project` を再度呼ぶため、既に
-        # `_ensure_project_exists` で取得済みのレコードを渡せる
+        # `ensure_project_exists` で取得済みのレコードを渡せる
         # `audio_path_for_project` を使う(#21-M1レビュー指摘の追加ラウンド):
         # 本エンドポイントはキャッシュヒット時もステイル判定のため毎回 audio_path
         # を解決するようになり、DBラウンドトリップの重複を避けたい。パス解決
@@ -232,7 +218,7 @@ async def get_beatmap(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """#18: `beatmap.json` をそのまま返す。"""
-    _ensure_project_exists(project_id, service)
+    ensure_project_exists(project_id, service)
     path = storage.beatmap_path(settings.workspace_dir, project_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="beatmap not found")
@@ -247,7 +233,7 @@ async def patch_beatmap(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """#20 BeatGridEditor: 手動補正を beatmap.json に反映する(FR-04)。"""
-    _ensure_project_exists(project_id, service)
+    ensure_project_exists(project_id, service)
     path = storage.beatmap_path(settings.workspace_dir, project_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="beatmap not found")
