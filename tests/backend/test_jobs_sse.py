@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 
 import httpx
+from app.config import Settings
+from app.infra import db
 
 
 async def _create_project(client: httpx.AsyncClient, tiny_wav_bytes: bytes) -> str:
@@ -102,3 +104,27 @@ async def test_worker_crash_marks_job_failed_and_server_survives(
     # API サーバ本体が生きていることを確認(NFR-04)。
     resp = await async_client.get("/health")
     assert resp.status_code == 200
+
+
+async def test_run_stage_merges_force_flag_into_job_params(
+    async_client: httpx.AsyncClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """#29: `RunStageRequest.force`は`JobManager.create_job`の`params`へ
+
+    `"force"`キーとして混ぜ込まれ、worker/dsp_main.pyの各ステージへ届く。
+    """
+    project_id = await _create_project(async_client, tiny_wav_bytes)
+    resp = await async_client.post(
+        f"/api/projects/{project_id}/stages/dummy/run",
+        json={"params": {"crash_at": 0.4}, "force": True},
+    )
+    assert resp.status_code == 202, resp.text
+    job_id = resp.json()["job_id"]
+
+    row = (
+        db.get_connection(settings.workspace_dir / "db.sqlite3")
+        .execute("SELECT params_json FROM jobs WHERE id = ?", (job_id,))
+        .fetchone()
+    )
+    params = json.loads(row["params_json"])
+    assert params == {"crash_at": 0.4, "force": True}

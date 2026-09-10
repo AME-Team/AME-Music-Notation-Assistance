@@ -21,6 +21,12 @@ export function usePatchBeatmap(projectId: string) {
     mutationFn: (body: Partial<BeatmapEditRequest>) => patchBeatmap(projectId, body),
     onSuccess: (beatmap) => {
       queryClient.setQueryData(beatmapKey(projectId), beatmap);
+      // #29-M2レビュー指摘: 実際に補正が適用されるとサーバ側(api/media.pyの
+      // patch_beatmap)がquantizeのmeta.jsonを無効化しstale化する。このキーを
+      // invalidateしないと、ProjectWorkspaceの「量子化結果が古い」バッジが
+      // 補正直後には反映されず、利用者が気づかないまま古い結果をエクスポート
+      // しうる。
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
     },
   });
 }

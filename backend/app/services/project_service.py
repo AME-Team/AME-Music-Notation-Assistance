@@ -94,7 +94,17 @@ class ProjectService:
         return {
             **row,
             "stages": {
-                j["stage"]: {"status": j["status"], "progress": j["progress"]} for j in jobs
+                j["stage"]: {
+                    "status": j["status"],
+                    "progress": j["progress"],
+                    # #29: 直近ジョブが成功しているのにmeta.jsonが無ければ、上流の
+                    # 再実行/手動編集で無効化された(要再実行)状態。
+                    "stale": j["status"] == "succeeded"
+                    and not storage.stage_metadata_path(
+                        self.workspace_dir, row["id"], j["stage"]
+                    ).exists(),
+                }
+                for j in jobs
             },
         }
 

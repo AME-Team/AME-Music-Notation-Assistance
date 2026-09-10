@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class StageStatus(BaseModel):
     status: str
     progress: float
+    stale: bool = False
 
 
 class Project(BaseModel):
@@ -25,6 +26,7 @@ class ProjectList(BaseModel):
 
 class RunStageRequest(BaseModel):
     params: dict = {}
+    force: bool = False
 
 
 class RunStageResponse(BaseModel):

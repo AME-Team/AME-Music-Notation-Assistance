@@ -4,7 +4,7 @@ MP3 → MIDI/MusicXML の自動採譜・AI整音アシスタント。**Windows 1
 Electron(TypeScript) + Python(FastAPI) 構成。設計の全文は GitHub Issue に転記されている
 (#72〜#76 が v0.4、#82 が Windows専用化+Electron採用のv0.5追補で最優先)。
 
-このドキュメントは M1(#2)着手時点の状態を記す。
+このドキュメントは M2(#3、MP3→MusicXMLの縦貫通)時点の状態を記す。
 
 ## ディレクトリ構成
 
@@ -75,19 +75,26 @@ CI(`typegen-check` job)がこの2ファイルの最新性を `git diff --exit-co
 - **ローカル認証**: Electron main が起動時にトークンを生成し環境変数でバックエンドへ渡す。全API(`/health`除く)で `X-AME-Token` を検証する(NFR-10′)
 - **ブラウザ標準の `EventSource` は認証ヘッダを送れない**ため、フロントの SSE 購読は `fetch` + `ReadableStream` を自前実装している(`frontend/src/lib/sse.ts`)
 
-## DSP パイプライン(M1)
+## DSP パイプライン(M1/M2)
 
-`backend/app/pipeline/` にステージ実装、`backend/app/api/media.py` に配信APIがある。
+`backend/app/pipeline/` にステージ実装、`backend/app/api/media.py`/`api/score.py`/`api/export.py`
+に配信・取得・書き出しAPIがある。
 
 | ステージ / API | 実装 | 説明 |
 | :--- | :--- | :--- |
-| Stage 1 分離 | `pipeline/separate.py` | `demucs-onnx`。プリセット `fast`/`standard`/`high_quality` → `htdemucs`/`htdemucs_6s`/`htdemucs_ft`。出力は32bit float WAV(`workspace/{id}/stems/{name}.wav`) |
+| Stage 1 分離 | `pipeline/separate.py` | `demucs-onnx`。プリセット `fast`/`standard`/`high_quality` → `htdemucs`/`htdemucs_6s`/`htdemucs_ft`。出力は32bit float WAV(`workspace/{id}/stems/{name}.wav`)。ピアノステムは`standard`(htdemucs_6s)でのみ生成される |
 | Stage 2 ビート推定 | `pipeline/beat.py` | `beat-this`。`pipeline/time_signature.py` で拍子を自前導出(beat-this は拍子を出力しない)。出力は `workspace/{id}/analysis/beatmap.json` |
 | BeatGridEditor 補正 | `pipeline/beatmap_edit.py` | オフセット/固定BPM上書き/ダウンビート回転/小節ごとの拍子上書きを純粋関数として実装 |
 | 波形ピーク | `pipeline/peaks.py` | 初回リクエスト時に計算し `analysis/peaks/{name}.json` にキャッシュ |
+| Stage 3 ピアノAMT(採譜) | `pipeline/transcribe/piano.py` | `piano_transcription_inference`。ノートは一切削除せず、ゴースト候補は`Note.flags`へ引き継ぐ。出力は`workspace/{id}/score/current.json`(Score IR、`app/domain/score.py`) |
+| Stage 4 量子化+L0整音 | `pipeline/quantize.py` + `pipeline/refine/baseline.py` | 決定論的クオンタイズ(拍子・テンポマップに沿ってスナップ)の直後に、AI(L1/L2)を使わない決定論的な整音(異名同音・声部・段割り当て)をステージ末尾で実行する |
+| Stage 6 書き出し | `pipeline/export/{score_builder,musicxml,midi}.py` | partitura経由でScore IR→MusicXML/Standard MIDI Fileへ変換。量子化+L0実行済み(`onset_tick`/`spelling`設定済み)が前提で、未実行は`ExportError`(API層で422)。Doricoへのインポート手順・推奨設定・検証チェックリストは [`docs/dorico-import.md`](docs/dorico-import.md) 参照(#28) |
+| ステージ独立再実行/無効化(#29) | `domain/stages.py` + `services/stage_invalidation.py` | `separate→transcribe→quantize`/`beat→quantize`の依存グラフ。上流が実際に再実行(または手動編集)されると下流の`analysis/{stage}.meta.json`を削除し、`stale`として要再実行を示す |
 
 ジョブとして実行するステージは `POST /api/projects/{id}/stages/{stage}/run` の `stage` に
-`"separate"` または `"beat"` を指定する(`params: {preset, execution_provider}` は separate のみ)。
+`"separate"`/`"beat"`/`"transcribe"`/`"quantize"` を指定する(`params: {preset,
+execution_provider}` は separate のみ)。`force: true` を指定すると入力/パラメータ不変でも
+再実行できる(#29、上流無効化と組み合わせて使う)。
 
 メディア・解析API(`api/media.py`):
 
@@ -97,7 +104,14 @@ CI(`typegen-check` job)がこの2ファイルの最新性を `git diff --exit-co
 | GET | `/api/projects/{id}/audio/stems/{name}` | ステム配信(Range対応) |
 | GET | `/api/projects/{id}/analysis/peaks/{name}` | 波形ピーク(`name="original"` またはステム名) |
 | GET | `/api/projects/{id}/analysis/beatmap` | `beatmap.json` |
-| PATCH | `/api/projects/{id}/analysis/beatmap` | BeatGridEditor の手動補正を反映(`source: "manual"` になる) |
+| PATCH | `/api/projects/{id}/analysis/beatmap` | BeatGridEditor の手動補正を反映(`source: "manual"` になる、実際に補正が適用されると量子化(#29)を無効化する) |
+
+Score IR・エクスポートAPI(`api/score.py`/`api/export.py`):
+
+| Method | Path | 説明 |
+| :--- | :--- | :--- |
+| GET | `/api/projects/{id}/score` | Score IR全体(採譜=transcribe未実行なら404)。`analysis/quantize.meta.json`が無効化されて`stale`(#29)な状態でも、`score/current.json`自体は削除されないため200で(古い可能性のある)Score IRを返す。呼び出し元は`GET /api/projects/{id}`が返す`stages.quantize.stale`で要再実行かどうかを判別すること。部分小節プレビュー(`/score/preview.musicxml`)はM2スコープ外、将来PRで対応予定 |
+| POST | `/api/projects/{id}/export` | `{format: "musicxml"\|"midi"}`。同期処理(モデル推論を伴わないためジョブ化しない)。生成物は`workspace/{id}/export/score.{musicxml,mid}`にも保存する |
 
 DirectML Execution Provider の実測ベンチマーク(Q-13, #17)は別途対応予定(詳細は次節)。
 
@@ -121,6 +135,15 @@ DirectML Execution Provider の実測ベンチマーク(Q-13, #17)は別途対�
   未導入のため、CI(windows-latest)または実機での実行を前提とする
 
 `ffmpeg` の同梱方式(`beat-this` が非WAV入力に要求する)は未解決のまま(#79 参照、M6のQ-17と関連)。
+
+**MIDI書き出しの複数パート時のチャンネル衝突(#27)**: `partitura.save_score_midi`は単一声部の
+パートを既定でMIDIチャンネル0に割り当てる。M2はピアノ1パートのみのため顕在化しないが、
+将来複数パート(ギター/ボーカル等)に対応する際は、`pipeline/export/midi.py`の
+`_apply_midi_programs`と合わせてチャンネル割り当ての見直しが必要。
+
+**Score IR取得APIのpreviewは未実装(#23)**: `GET /score/preview.musicxml?bars=1-16`
+(部分小節プレビュー、設計書§11.5)はM2完了条件に含まれないため見送った(ユーザー確認済み)。
+`GET /score`(全体取得)のみ実装済み。
 
 **Stage 1分離が途中で失敗した場合のファイル一貫性**: `run_separate_stage` はステムを1つずつ
 アトミックに書き込むが、途中で例外が発生すると新旧のステムファイルが混在した状態で残る

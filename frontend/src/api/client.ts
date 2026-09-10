@@ -115,6 +115,44 @@ export async function runBeatStage(projectId: string): Promise<{ job_id: string 
   return runStage(projectId, "beat", {});
 }
 
+/** #24: Stage 3 ピアノAMT(採譜)を実行する。 */
+export async function runTranscribeStage(projectId: string): Promise<{ job_id: string }> {
+  return runStage(projectId, "transcribe", {});
+}
+
+/** #25/#26: Stage 4 決定論的クオンタイズ + L0整音を実行する。 */
+export async function runQuantizeStage(projectId: string): Promise<{ job_id: string }> {
+  return runStage(projectId, "quantize", {});
+}
+
+/**
+ * #27: Stage 6 MusicXML書き出し。生成物をブラウザのダウンロードとして保存させる
+ * (`<a download>`方式。認証ヘッダ付きfetchが必要なため`<a href>`直リンクは使えない)。
+ * バックエンドはMIDIも生成できるが(`format: "midi"`)、M2のフロントエンド最小
+ * スコープ(ユーザー決定済み)ではMusicXMLのみを露出する。到達しないコード
+ * (未使用のformatパラメータ)を残さないため、あえて汎用化しない。
+ */
+export async function exportMusicXml(projectId: string): Promise<void> {
+  const resp = await apiFetch(`/api/projects/${projectId}/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ format: "musicxml" }),
+  });
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "score.musicxml";
+  // ダウンロード開始前にURLが無効化されるのを避けるため、`document.body`への
+  // 追加とclick()の完了を1マクロタスク挟んでから`revokeObjectURL`する
+  // (#27-M2レビュー指摘: `a.click()`直後の同期的なrevokeは、一部環境で
+  // ダウンロード自体の失敗を招きうる)。
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 /** #21 TrackList: 分離済みステム名の一覧(分離未実行なら空配列)。 */
 export async function listStems(projectId: string): Promise<string[]> {
   const resp = await apiFetch(`/api/projects/${projectId}/stems`);

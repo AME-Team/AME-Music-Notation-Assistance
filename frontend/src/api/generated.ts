@@ -254,6 +254,63 @@ export interface paths {
         patch: operations["patch_beatmap_api_projects__project_id__analysis_beatmap_patch"];
         trace?: never;
     };
+    "/api/projects/{project_id}/score": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Score
+         * @description Stage 3(採譜)未実行なら404を返す。
+         *
+         *     `async def` ではなく通常の `def` にする(`api/export.py`の`export_score`と
+         *     同じ理由、#27-M2レビュー指摘): `ScoreService.read_score`はファイルI/Oを
+         *     伴う同期処理であり、`async def`のままだとイベントループを直接ブロックし、
+         *     SSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。
+         *
+         *     `response_model`に`domain.score.ScoreIR`を直接指定しない: そのネストする
+         *     `TempoMapEntry`/`TimeSignatureEntry`が`api/schemas.py`(beatmap用)の同名
+         *     クラスとOpenAPIコンポーネント名で衝突し、生成TSの型名が
+         *     `app__api__schemas__TempoMapEntry`等へ改名されてしまう(#23-M2レビュー
+         *     指摘)。M2のフロントエンドはこのエンドポイントの型付けを必要としない
+         *     (設計書§11.5の完了条件外)ため、素の`dict`で返し衝突を避ける。
+         */
+        get: operations["get_score_api_projects__project_id__score_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export Score
+         * @description 量子化(#25)+L0(#26)実行済みが前提。未実行なら404、不正なScore IRなら422を返す。
+         *
+         *     `async def` ではなく通常の `def` にする(`api/media.py`の`get_peaks`と同じ
+         *     理由、#27-M2レビュー指摘): `render_musicxml`/`render_midi`はCPUバウンドの
+         *     同期処理(partitura呼び出し)であり、`async def`のままだとイベントループを
+         *     直接ブロックし、SSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。
+         */
+        post: operations["export_score_api_projects__project_id__export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -305,6 +362,24 @@ export interface components {
         Body_create_project_api_projects_post: {
             /** File */
             file: string;
+        };
+        /**
+         * ExportRequest
+         * @description 設計書§11.6の`parts`/`options`による部分エクスポートはM3スコープ。
+         *
+         *     M2の完了条件(実曲からMusicXMLが出力されスキーマ的に妥当であること)には
+         *     不要であり、`pipeline/export`側も現時点ではパート選択に対応していないため
+         *     受け付けない。`extra="forbid"`(#27-M2レビュー指摘)により`parts`/`options`
+         *     等の未知フィールドを黙って無視せず422で拒否する(Pydantic v2の既定
+         *     `extra="ignore"`のままだと、送っても効果が無いのに送れてしまい、部分
+         *     エクスポートが指定できたと誤認させる)。
+         */
+        ExportRequest: {
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "musicxml" | "midi";
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -372,6 +447,11 @@ export interface components {
             params: {
                 [key: string]: unknown;
             };
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
         };
         /** RunStageResponse */
         RunStageResponse: {
@@ -384,6 +464,11 @@ export interface components {
             status: string;
             /** Progress */
             progress: number;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
         };
         /**
          * StemListResponse
@@ -892,6 +977,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Beatmap"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_score_api_projects__project_id__score_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_score_api_projects__project_id__export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.recordare.musicxml+xml": string;
+                    "audio/midi": string;
                 };
             };
             /** @description Validation Error */

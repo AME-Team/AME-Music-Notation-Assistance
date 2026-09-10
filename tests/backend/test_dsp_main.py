@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from app.infra import storage
 from app.services.score_service import ScoreService
 from app.worker import dsp_main
@@ -336,7 +335,7 @@ def test_beat_stage_skips_when_audio_unchanged_preserving_manual_edits(
         return _FakeResult()
 
     monkeypatch.setattr(dsp_main, "run_beat_estimation", _fake_run_beat_estimation)
-    dsp_main.run_beat_stage("job1", project_id, tmp_path)
+    dsp_main.run_beat_stage("job1", project_id, tmp_path, {})
 
     # ユーザーがBeatGridEditorで手動補正したと仮定する。
     beatmap_path = storage.beatmap_path(tmp_path, project_id)
@@ -346,7 +345,7 @@ def test_beat_stage_skips_when_audio_unchanged_preserving_manual_edits(
     storage.write_json(beatmap_path, beatmap)
 
     # 音源を変えずに再実行 → スキップされ、手動補正が生き残る。
-    dsp_main.run_beat_stage("job2", project_id, tmp_path)
+    dsp_main.run_beat_stage("job2", project_id, tmp_path, {})
 
     assert call_count == 1
     assert storage.read_json(beatmap_path)["source"] == "manual"
@@ -388,12 +387,12 @@ def test_beat_stage_reruns_if_beatmap_deleted_despite_matching_hash(
         return _FakeResult()
 
     monkeypatch.setattr(dsp_main, "run_beat_estimation", _fake_run_beat_estimation)
-    dsp_main.run_beat_stage("job1", project_id, tmp_path)
+    dsp_main.run_beat_stage("job1", project_id, tmp_path, {})
     assert call_count == 1
 
     storage.beatmap_path(tmp_path, project_id).unlink()
 
-    dsp_main.run_beat_stage("job2", project_id, tmp_path)
+    dsp_main.run_beat_stage("job2", project_id, tmp_path, {})
     assert call_count == 2  # ハッシュ一致でもスキップされず再実行された
     assert storage.beatmap_path(tmp_path, project_id).exists()
 
@@ -525,7 +524,7 @@ def test_beat_stage_skips_write_if_beatmap_modified_during_estimation(
     monkeypatch.setattr(
         dsp_main, "run_beat_estimation", lambda _audio_path: _FakeResult()
     )
-    dsp_main.run_beat_stage("job1", project_id, tmp_path)
+    dsp_main.run_beat_stage("job1", project_id, tmp_path, {})
 
     # 音源を変えて(=フィンガープリントを変えて)2回目を「実行」させつつ、
     # 推論中に別プロセス(=BeatGridEditorのPATCH)がbeatmap.jsonを書き換えたと
@@ -548,7 +547,7 @@ def test_beat_stage_skips_write_if_beatmap_modified_during_estimation(
         return _FakeResult()
 
     monkeypatch.setattr(dsp_main, "run_beat_estimation", _run_and_concurrently_patch)
-    dsp_main.run_beat_stage("job2", project_id, tmp_path)
+    dsp_main.run_beat_stage("job2", project_id, tmp_path, {})
 
     # beatステージ自身の書き込みはスキップされ、"PATCH" の内容が生き残る。
     final = storage.read_json(beatmap_path)
@@ -566,7 +565,7 @@ def test_beat_stage_skips_write_if_beatmap_modified_during_estimation(
         return _FakeResult()
 
     monkeypatch.setattr(dsp_main, "run_beat_estimation", _counting_run)
-    dsp_main.run_beat_stage("job3", project_id, tmp_path)
+    dsp_main.run_beat_stage("job3", project_id, tmp_path, {})
     assert call_count == 0  # 音源不変なのでスキップされ、推論は再実行されない
     assert storage.read_json(beatmap_path)["source"] == "manual"  # 手動補正は保持
 
@@ -1158,3 +1157,313 @@ def test_quantize_stage_detects_concurrent_write_before_should_skip_stage(
     assert all(
         n.onset_tick is None for n in part.notes
     )  # quantizeの書き込みはスキップされた
+
+
+# --- #29: force フラグと下流無効化の配線 -----------------------------------------
+
+
+def _run_full_pipeline_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project_id: str
+) -> None:
+    """separate→transcribe→quantizeを一通り実行し、3ステージ全てのmeta.jsonを作る。"""
+    _setup_project_with_valid_source(tmp_path, project_id)
+    monkeypatch.setattr(dsp_main, "run_separation", _fake_run_separation(["piano"]))
+    dsp_main.run_separate_stage(
+        "job_sep",
+        project_id,
+        tmp_path,
+        {"preset": "standard", "execution_provider": "cpu"},
+    )
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job_tr", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+    dsp_main.run_quantize_stage("job_q", project_id, tmp_path, {})
+
+
+def test_separate_stage_force_reruns_and_invalidates_downstream_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#29: `force=True`はハッシュ一致でも再実行し、実際に書いた場合は下流
+
+    (transcribe/quantize)のmeta.jsonを無効化する。
+    """
+    project_id = "proj_test"
+    _run_full_pipeline_once(tmp_path, monkeypatch, project_id)
+    assert storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()
+    assert storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+    call_count = 0
+    real_run = _fake_run_separation(["piano"])
+
+    def _counting_run(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(dsp_main, "run_separation", _counting_run)
+    dsp_main.run_separate_stage(
+        "job_sep2",
+        project_id,
+        tmp_path,
+        {"preset": "standard", "execution_provider": "cpu", "force": True},
+    )
+    assert call_count == 1  # forceによりハッシュ一致でも再実行された
+    assert not storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()
+    assert not storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+
+def test_beat_stage_write_invalidates_quantize_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#29: beatmap.jsonへ実際に新しい推論結果を書いた場合、quantizeのmeta.jsonを無効化する。"""
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job_tr", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+    dsp_main.run_quantize_stage("job_q", project_id, tmp_path, {})
+    assert storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+    class _FakeResult:
+        def __init__(self) -> None:
+            self.beats: list = []
+            self.downbeats_sec: list = []
+
+        def to_dict(self) -> dict:
+            return {
+                "beats": [],
+                "downbeats_sec": [],
+                "time_signatures": [],
+                "tempo_map": [],
+                "confidence": 0.0,
+            }
+
+    monkeypatch.setattr(
+        dsp_main, "run_beat_estimation", lambda _audio_path: _FakeResult()
+    )
+    dsp_main.run_beat_stage("job_beat", project_id, tmp_path, {})
+
+    assert not storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+
+def test_beat_stage_skipped_write_due_to_manual_edit_does_not_invalidate_quantize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#29回帰: 推論中の手動編集でbeatmap.json自体の書き込みがskipされた場合、
+
+    beatmap.jsonの内容は変わっていないためquantizeを無効化してはいけない。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job_tr", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+    dsp_main.run_quantize_stage("job_q", project_id, tmp_path, {})
+    assert storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+    beatmap_path = storage.beatmap_path(tmp_path, project_id)
+    (tmp_path / project_id / "source.wav").write_bytes(
+        b"RIFF....WAVEfmt X"
+    )  # audio変更
+
+    class _FakeResult:
+        def __init__(self) -> None:
+            self.beats: list = []
+            self.downbeats_sec: list = []
+
+        def to_dict(self) -> dict:
+            return {
+                "beats": [],
+                "downbeats_sec": [],
+                "time_signatures": [],
+                "tempo_map": [],
+                "confidence": 0.0,
+            }
+
+    def _run_and_concurrently_patch(_audio_path: str) -> _FakeResult:
+        manual_beatmap = {
+            "beats": [],
+            "downbeats_sec": [9.99],
+            "time_signatures": [],
+            "tempo_map": [],
+            "confidence": 0.0,
+            "source": "manual",
+        }
+        storage.write_json(beatmap_path, manual_beatmap)
+        return _FakeResult()
+
+    monkeypatch.setattr(dsp_main, "run_beat_estimation", _run_and_concurrently_patch)
+    dsp_main.run_beat_stage("job_beat", project_id, tmp_path, {})
+
+    assert storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+
+def test_transcribe_stage_write_invalidates_quantize_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#29: score/current.jsonへ実際に新しい採譜結果を書いた場合、quantizeのmeta.jsonを無効化する。"""
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job_tr1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+    dsp_main.run_quantize_stage("job_q", project_id, tmp_path, {})
+    assert storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+    # 音源(piano stem)を変えて再採譜させる(スキップさせない)。
+    (tmp_path / project_id / "stems" / "piano.wav").write_bytes(b"RIFF....WAVEfmt X")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 62, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job_tr2", project_id, tmp_path, {})
+
+    assert not storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+
+def test_transcribe_stage_skipped_write_concurrent_modification_does_not_invalidate_quantize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#29回帰: 推論中の並行変更でscore/current.jsonの書き込みがskipされた場合、
+
+    採譜結果の内容は反映されていないためquantizeを無効化してはいけない。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job_tr1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+    dsp_main.run_quantize_stage("job_q", project_id, tmp_path, {})
+    assert storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+    # 音源を変えて再採譜対象にしつつ、推論中に別プロセスがScore IRを書き換えたと模擬する。
+    (tmp_path / project_id / "stems" / "piano.wav").write_bytes(b"RIFF....WAVEfmt X")
+
+    def _transcribe_and_concurrently_modify(audio_path: Path):
+        service = ScoreService(workspace_dir=tmp_path)
+        score = service.read_score(project_id)
+        score.meta.stages["_concurrent_marker"] = {"touched": True}
+        service.write_score(project_id, score)
+        return _fake_transcription_result([(0.0, 0.5, 62, 90, False)])(audio_path)
+
+    monkeypatch.setattr(
+        dsp_main, "run_piano_transcription", _transcribe_and_concurrently_modify
+    )
+    dsp_main.run_transcribe_stage("job_tr2", project_id, tmp_path, {})
+
+    assert storage.stage_metadata_path(tmp_path, project_id, "quantize").exists()
+
+
+def test_quantize_stage_force_bypasses_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#29: `force=True`はquantizeでもハッシュ一致にかかわらず再実行させる。"""
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job_tr", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    from app.pipeline.quantize import quantize_note_onsets as _original_quantize
+
+    call_count = 0
+
+    def _counting_quantize(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return _original_quantize(*args, **kwargs)
+
+    monkeypatch.setattr(dsp_main, "quantize_note_onsets", _counting_quantize)
+    dsp_main.run_quantize_stage("job_q1", project_id, tmp_path, {})
+    assert call_count == 1
+    dsp_main.run_quantize_stage("job_q2", project_id, tmp_path, {"force": True})
+    assert call_count == 2  # forceによりハッシュ一致でも再実行された
+
+
+def test_force_rerun_with_failed_invalidation_resets_own_metadata_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#29-M2レビュー指摘の回帰: `force=True`かつ入力/パラメータ不変のまま再実行した際、
+
+    `invalidate_downstream`がリトライ上限超過等で失敗しても、自ステージの
+    meta.jsonを削除しておくことで、次回(非force)実行時に必ず再実行され
+    無効化が再試行される(自ステージのmetaが古いハッシュのまま残ると、
+    次回`should_skip_stage`でスキップされ無効化が二度と呼ばれなくなる
+    問題を防ぐ、`_invalidate_downstream_or_reset`)。
+    """
+    project_id = "proj_test"
+    _run_full_pipeline_once(tmp_path, monkeypatch, project_id)
+    assert storage.stage_metadata_path(tmp_path, project_id, "separate").exists()
+    assert storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()
+
+    monkeypatch.setattr(dsp_main, "run_separation", _fake_run_separation(["piano"]))
+
+    def _failing_invalidate(*args, **kwargs):
+        raise PermissionError("simulated retry-exhausted failure")
+
+    monkeypatch.setattr(
+        dsp_main.stage_invalidation, "invalidate_downstream", _failing_invalidate
+    )
+    with pytest.raises(PermissionError):
+        dsp_main.run_separate_stage(
+            "job_sep_force",
+            project_id,
+            tmp_path,
+            {"preset": "standard", "execution_provider": "cpu", "force": True},
+        )
+    # 無効化失敗により自ステージのmetaは削除され、下流(transcribe)のmetaは
+    # (無効化されないまま)古い状態で残っている。
+    assert not storage.stage_metadata_path(tmp_path, project_id, "separate").exists()
+    assert storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()
+
+    # 無効化を復旧させ、forceを付けずに再実行する: 自ステージのmetaが
+    # 削除されているため(ハッシュ一致でも)スキップされず、無効化も
+    # 再試行されてtranscribeのmetaが無効化されるべき。
+    monkeypatch.undo()
+    call_count = 0
+    real_run = _fake_run_separation(["piano"])
+
+    def _counting_run(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(dsp_main, "run_separation", _counting_run)
+    dsp_main.run_separate_stage(
+        "job_sep_retry",
+        project_id,
+        tmp_path,
+        {"preset": "standard", "execution_provider": "cpu"},
+    )
+    assert call_count == 1  # metaが削除されていたためスキップされず再実行された
+    assert not storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()

@@ -646,6 +646,111 @@
           }
         }
       }
+    },
+    "/api/projects/{project_id}/score": {
+      "get": {
+        "tags": [
+          "score"
+        ],
+        "summary": "Get Score",
+        "description": "Stage 3(採譜)未実行なら404を返す。\n\n`async def` ではなく通常の `def` にする(`api/export.py`の`export_score`と\n同じ理由、#27-M2レビュー指摘): `ScoreService.read_score`はファイルI/Oを\n伴う同期処理であり、`async def`のままだとイベントループを直接ブロックし、\nSSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。\n\n`response_model`に`domain.score.ScoreIR`を直接指定しない: そのネストする\n`TempoMapEntry`/`TimeSignatureEntry`が`api/schemas.py`(beatmap用)の同名\nクラスとOpenAPIコンポーネント名で衝突し、生成TSの型名が\n`app__api__schemas__TempoMapEntry`等へ改名されてしまう(#23-M2レビュー\n指摘)。M2のフロントエンドはこのエンドポイントの型付けを必要としない\n(設計書§11.5の完了条件外)ため、素の`dict`で返し衝突を避ける。",
+        "operationId": "get_score_api_projects__project_id__score_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Score Api Projects  Project Id  Score Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/export": {
+      "post": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export Score",
+        "description": "量子化(#25)+L0(#26)実行済みが前提。未実行なら404、不正なScore IRなら422を返す。\n\n`async def` ではなく通常の `def` にする(`api/media.py`の`get_peaks`と同じ\n理由、#27-M2レビュー指摘): `render_musicxml`/`render_midi`はCPUバウンドの\n同期処理(partitura呼び出し)であり、`async def`のままだとイベントループを\n直接ブロックし、SSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。",
+        "operationId": "export_score_api_projects__project_id__export_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/vnd.recordare.musicxml+xml": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "audio/midi": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -780,6 +885,25 @@
           "file"
         ],
         "title": "Body_create_project_api_projects_post"
+      },
+      "ExportRequest": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "musicxml",
+              "midi"
+            ],
+            "title": "Format"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "format"
+        ],
+        "title": "ExportRequest",
+        "description": "設計書§11.6の`parts`/`options`による部分エクスポートはM3スコープ。\n\nM2の完了条件(実曲からMusicXMLが出力されスキーマ的に妥当であること)には\n不要であり、`pipeline/export`側も現時点ではパート選択に対応していないため\n受け付けない。`extra=\"forbid\"`(#27-M2レビュー指摘)により`parts`/`options`\n等の未知フィールドを黙って無視せず422で拒否する(Pydantic v2の既定\n`extra=\"ignore\"`のままだと、送っても効果が無いのに送れてしまい、部分\nエクスポートが指定できたと誤認させる)。"
       },
       "HTTPValidationError": {
         "properties": {
@@ -952,6 +1076,11 @@
             "type": "object",
             "title": "Params",
             "default": {}
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
           }
         },
         "type": "object",
@@ -979,6 +1108,11 @@
           "progress": {
             "type": "number",
             "title": "Progress"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "default": false
           }
         },
         "type": "object",

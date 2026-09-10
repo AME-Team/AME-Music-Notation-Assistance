@@ -6,10 +6,9 @@ import json
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
-
 from app.config import Settings
 from app.infra import storage
+from fastapi.testclient import TestClient
 
 
 def _create_project(client: TestClient, tiny_wav_bytes: bytes) -> str:
@@ -269,6 +268,30 @@ def test_patch_beatmap_applies_offset_and_marks_manual(
     assert resp.json()["downbeats_sec"] == [0.25]
 
 
+def test_patch_beatmap_applying_a_correction_invalidates_quantize_metadata(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """#29完了条件: ビートを補正すると量子化以降が無効化され、再実行すると反映される。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_beatmap(settings, project_id)
+    storage.write_stage_metadata(
+        settings.workspace_dir,
+        project_id,
+        "quantize",
+        params_hash="abc",
+        provider_versions={},
+    )
+
+    resp = client.patch(
+        f"/api/projects/{project_id}/analysis/beatmap", json={"offset_sec": 0.25}
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert not storage.stage_metadata_path(
+        settings.workspace_dir, project_id, "quantize"
+    ).exists()
+
+
 def test_patch_beatmap_with_no_fields_does_not_mark_manual(
     client: TestClient, settings: Settings, tiny_wav_bytes: bytes
 ) -> None:
@@ -282,6 +305,31 @@ def test_patch_beatmap_with_no_fields_does_not_mark_manual(
 
     resp = client.get(f"/api/projects/{project_id}/analysis/beatmap")
     assert resp.json()["source"] == "auto"
+
+
+def test_patch_beatmap_with_no_fields_does_not_invalidate_quantize_metadata(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#29): 何も補正しないPATCHはbeatmap.jsonを書き換えないため、quantizeを
+
+    無効化してはいけない(applied_any=Falseの分岐)。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_beatmap(settings, project_id)
+    storage.write_stage_metadata(
+        settings.workspace_dir,
+        project_id,
+        "quantize",
+        params_hash="abc",
+        provider_versions={},
+    )
+
+    resp = client.patch(f"/api/projects/{project_id}/analysis/beatmap", json={})
+    assert resp.status_code == 200, resp.text
+
+    assert storage.stage_metadata_path(
+        settings.workspace_dir, project_id, "quantize"
+    ).exists()
 
 
 def test_patch_beatmap_no_op_bpm_override_does_not_mark_manual(

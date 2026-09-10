@@ -1,9 +1,16 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { ExecutionProvider, SeparationPreset } from "../api/client";
-import { runBeatStage, runSeparateStage } from "../api/client";
+import {
+  exportMusicXml,
+  runBeatStage,
+  runQuantizeStage,
+  runSeparateStage,
+  runTranscribeStage,
+} from "../api/client";
 import { useBeatmap } from "../hooks/useBeatmap";
 import { usePeaks } from "../hooks/usePeaks";
+import { useProject } from "../hooks/useProjects";
 import { useJobStore } from "../stores/jobStore";
 import { AudioPlayer } from "./AudioPlayer";
 import { BeatGridEditor } from "./BeatGridEditor";
@@ -37,7 +44,11 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("auto");
   const [separateJobId, setSeparateJobId] = useState<string | null>(null);
   const [beatJobId, setBeatJobId] = useState<string | null>(null);
+  const [transcribeJobId, setTranscribeJobId] = useState<string | null>(null);
+  const [quantizeJobId, setQuantizeJobId] = useState<string | null>(null);
   const [stageError, setStageError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   const {
     data: peaks,
@@ -45,6 +56,9 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     error: peaksError,
   } = usePeaks(projectId, "original");
   const { data: beatmap, error: beatmapError } = useBeatmap(projectId);
+  const { data: project } = useProject(projectId);
+  const transcribeStage = project?.stages.transcribe;
+  const quantizeStage = project?.stages.quantize;
 
   // ジョブが完了したら、その成果物に依存するクエリを再取得する(#16/#18)。
   // #13のJobMonitor/jobStoreはSSEで進捗を追うだけでキャッシュ無効化までは
@@ -56,6 +70,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     const job = jobs[separateJobId];
     if (job?.status === "succeeded") {
       void queryClient.invalidateQueries({ queryKey: ["stems", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       setSeparateJobId(null);
     } else if (job?.status === "failed") {
       setStageError(job.message ?? "音源分離に失敗しました。");
@@ -69,12 +84,41 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     if (job?.status === "succeeded") {
       void queryClient.invalidateQueries({ queryKey: ["beatmap", projectId] });
       void queryClient.invalidateQueries({ queryKey: ["peaks", projectId, "original"] });
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       setBeatJobId(null);
     } else if (job?.status === "failed") {
       setStageError(job.message ?? "ビート推定に失敗しました。");
       setBeatJobId(null);
     }
   }, [beatJobId, jobs, queryClient, projectId]);
+
+  // #29: transcribe/quantizeもseparate/beatと同じ「実行→完了検知→関連クエリの
+  // 無効化」パターンに揃える。両ステージともScore IR自体を直接表示するUIは
+  // M2スコープ外(ユーザー決定済み)のため、`project`(stages.status/stale)のみ
+  // 無効化すれば十分。
+  useEffect(() => {
+    if (!transcribeJobId) return;
+    const job = jobs[transcribeJobId];
+    if (job?.status === "succeeded") {
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      setTranscribeJobId(null);
+    } else if (job?.status === "failed") {
+      setStageError(job.message ?? "採譜に失敗しました。");
+      setTranscribeJobId(null);
+    }
+  }, [transcribeJobId, jobs, queryClient, projectId]);
+
+  useEffect(() => {
+    if (!quantizeJobId) return;
+    const job = jobs[quantizeJobId];
+    if (job?.status === "succeeded") {
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      setQuantizeJobId(null);
+    } else if (job?.status === "failed") {
+      setStageError(job.message ?? "量子化に失敗しました。");
+      setQuantizeJobId(null);
+    }
+  }, [quantizeJobId, jobs, queryClient, projectId]);
 
   // 実行中は再押下できないようボタンを無効化する(#21-M1レビュー指摘): この
   // コンポーネントは実行中ジョブのIDを1つしか保持しないため、完了前に再度
@@ -85,6 +129,8 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   // 「実行中」と同義になる。
   const isSeparateRunning = separateJobId !== null;
   const isBeatRunning = beatJobId !== null;
+  const isTranscribeRunning = transcribeJobId !== null;
+  const isQuantizeRunning = quantizeJobId !== null;
 
   async function handleRunSeparate() {
     setStageError(null);
@@ -108,6 +154,40 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
       setBeatJobId(job_id);
     } catch (err) {
       setStageError((err as Error).message);
+    }
+  }
+
+  async function handleRunTranscribe() {
+    setStageError(null);
+    try {
+      const { job_id } = await runTranscribeStage(projectId);
+      track(job_id);
+      setTranscribeJobId(job_id);
+    } catch (err) {
+      setStageError((err as Error).message);
+    }
+  }
+
+  async function handleRunQuantize() {
+    setStageError(null);
+    try {
+      const { job_id } = await runQuantizeStage(projectId);
+      track(job_id);
+      setQuantizeJobId(job_id);
+    } catch (err) {
+      setStageError((err as Error).message);
+    }
+  }
+
+  async function handleExport() {
+    setExportError(null);
+    setIsExporting(true);
+    try {
+      await exportMusicXml(projectId);
+    } catch (err) {
+      setExportError((err as Error).message);
+    } finally {
+      setIsExporting(false);
     }
   }
 
@@ -164,6 +244,58 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
           </button>
         </div>
         {stageError && <p className="text-sm text-red-600">{stageError}</p>}
+      </section>
+
+      <section className="space-y-3 rounded-lg border border-gray-200 p-4">
+        <h3 className="text-lg font-semibold text-gray-700">採譜・量子化・エクスポート</h3>
+        <div className="flex flex-wrap items-center gap-4">
+          <button
+            type="button"
+            onClick={() => void handleRunTranscribe()}
+            disabled={isTranscribeRunning}
+            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
+          >
+            {isTranscribeRunning ? "採譜を実行中..." : "採譜を実行"}
+          </button>
+          {/* #29-M2レビュー指摘: separateを再実行するとtranscribeとquantizeの
+              両方が無効化される。transcribeのstaleを表示せずquantizeボタンを
+              押せてしまうと、無効化済みの古いscore/current.jsonをそのまま
+              量子化してしまい、quantize自身のmetaが書かれてstale=Falseに
+              戻るため、transcribeが古いことがUIから見えなくなる(誤った
+              MusicXMLをエクスポートしうる)。transcribeがstaleの間は
+              量子化ボタン自体を無効化する。 */}
+          {transcribeStage?.stale && (
+            <span className="text-sm text-amber-600">
+              採譜結果が古い可能性があります(再実行してください)
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleRunQuantize()}
+            disabled={isQuantizeRunning || transcribeStage?.stale}
+            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
+          >
+            {isQuantizeRunning ? "量子化を実行中..." : "量子化を実行"}
+          </button>
+          {quantizeStage?.stale && (
+            <span className="text-sm text-amber-600">
+              量子化結果が古い可能性があります(再実行してください)
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleExport()}
+            // #29-M2レビュー指摘: 量子化ボタンをtranscribe staleで無効化した
+            // 意図(古いScore IRからの誤ったMusicXML出力を防ぐ)と揃え、
+            // エクスポート側でも同じガードを掛ける(quantize/transcribeの
+            // どちらかがstaleなら、古いonset_tick等のままの出力になりうる)。
+            disabled={isExporting || quantizeStage?.stale || transcribeStage?.stale}
+            className="rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50"
+          >
+            {isExporting ? "エクスポート中..." : "MusicXMLをエクスポート"}
+          </button>
+        </div>
+        {exportError && <p className="text-sm text-red-600">{exportError}</p>}
       </section>
 
       <section className="space-y-2 rounded-lg border border-gray-200 p-4">

@@ -32,11 +32,34 @@ from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_
 from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
 from app.pipeline.transcribe.piano import run_piano_transcription
+from app.services import stage_invalidation
 from app.services.score_service import ScoreService
 
 
 def emit(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def _invalidate_downstream_or_reset(workspace_dir: Path, project_id: str, stage: str) -> None:
+    """`stage_invalidation.invalidate_downstream`を呼び、失敗時は自ステージの
+
+    meta.jsonを削除してから例外を再送出する(#29-M2レビュー指摘)。
+
+    通常(force無し)は入力/パラメータが変われば`should_skip_stage`がFalseに
+    なるため、無効化に失敗しても次回実行時に自然にリトライされる。しかし
+    `force=True`で入力が不変のまま再実行した場合、無効化がリトライ上限超過
+    等で失敗しても自ステージのmeta.jsonが(不変入力と一致する)古いハッシュ
+    のまま残っていると、次回の非force実行は`should_skip_stage`でスキップ
+    されてしまい、下流の無効化が二度と再試行されない(成果物は実際に
+    再生成されたのに下流がstaleにならないまま恒久的に残る)。自ステージの
+    meta.jsonをここで削除しておけば、force指定の有無に関わらず次回実行時に
+    必ず再実行され、無効化も再試行される。
+    """
+    try:
+        stage_invalidation.invalidate_downstream(workspace_dir, project_id, stage)
+    except BaseException:
+        storage.stage_metadata_path(workspace_dir, project_id, stage).unlink(missing_ok=True)
+        raise
 
 
 def _package_version(name: str) -> str:
@@ -112,6 +135,7 @@ def run_separate_stage(job_id: str, project_id: str, workspace_dir: Path, params
     """#16: Stage 1 音源分離。§6: パラメータ不変・入力不変ならスキップする。"""
     preset = params.get("preset", "standard")
     execution_provider = params.get("execution_provider", "auto")
+    force = params.get("force", False)
 
     emit({"job_id": job_id, "stage": "separate", "progress": 0.0, "message": f"preset={preset}"})
 
@@ -129,7 +153,7 @@ def run_separate_stage(job_id: str, project_id: str, workspace_dir: Path, params
         audio_fingerprint_value=audio_fingerprint(audio_path),
         package_version=demucs_onnx_version,
     )
-    if storage.should_skip_stage(
+    if not force and storage.should_skip_stage(
         workspace_dir,
         project_id,
         "separate",
@@ -186,6 +210,9 @@ def run_separate_stage(job_id: str, project_id: str, workspace_dir: Path, params
     # レビュー指摘の追加ラウンド)。原曲差し替え経路(現状未実装)が将来入る際は
     # そちらの実装側で"original"キャッシュの無効化を担う必要がある。
     storage.invalidate_peaks_cache(workspace_dir, project_id, list(set(written) | stale_stem_names))
+    # #29: 自ステージのstage_metadataを書く前に下流(transcribe/quantize)を無効化する
+    # (呼び出し契約は`services/stage_invalidation.py`のモジュールdocstring参照)。
+    _invalidate_downstream_or_reset(workspace_dir, project_id, "separate")
     storage.write_stage_metadata(
         workspace_dir,
         project_id,
@@ -221,16 +248,17 @@ def run_separate_stage(job_id: str, project_id: str, workspace_dir: Path, params
     )
 
 
-def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path) -> None:
-    """#18/#19: Stage 2 ビート・ダウンビート・拍子推定。
+def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
+    """#18/#19/#29: Stage 2 ビート・ダウンビート・拍子推定。
 
     §6: 入力(原曲)+使用チェックポイントのバージョンが不変ならスキップする
     (separateステージがmodel/execution_providerをハッシュに含めるのと対称)。
     ハッシュに beat-this のバージョンも含めないと、パッケージを更新しても古い
     beatmap.json がスキップにより残り続け、NFR-11のトレーサビリティと矛盾する。
     これにより、BeatGridEditor(#20)での手動補正後に誤って再実行して上書きしてしまう
-    事故も防げる。強制再実行(force)のAPIは未実装(separateステージも同様の制約)。
+    事故も防げる。`params["force"]` でこのスキップ判定を明示的にバイパスできる(#29)。
     """
+    force = params.get("force", False)
     emit({"job_id": job_id, "stage": "beat", "progress": 0.0, "message": "estimating beats"})
 
     audio_path = storage.find_original_audio(workspace_dir, project_id)
@@ -246,7 +274,7 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path) -> None:
         sort_keys=True,
     )
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
-    if storage.should_skip_stage(
+    if not force and storage.should_skip_stage(
         workspace_dir,
         project_id,
         "beat",
@@ -302,6 +330,11 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path) -> None:
         return
 
     storage.write_json(beatmap_file, {**result.to_dict(), "source": "auto"})
+    # #29: beatmap.jsonへ実際に新しい推論結果を書いた場合のみ下流(quantize)を
+    # 無効化する(直前の「manual編集を優先しwrite skip」分岐はbeatmap.jsonの内容が
+    # 変わっていないため対象外)。自ステージのstage_metadataを書く前に呼ぶこと
+    # (呼び出し契約は`services/stage_invalidation.py`のモジュールdocstring参照)。
+    _invalidate_downstream_or_reset(workspace_dir, project_id, "beat")
     storage.write_stage_metadata(
         workspace_dir,
         project_id,
@@ -375,6 +408,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         }
     )
 
+    force = params.get("force", False)
     piano_stem_path = storage.stems_dir(workspace_dir, project_id) / f"{PIANO_STEM_NAME}.wav"
     if not piano_stem_path.exists():
         # #16: pianoステムは `standard` プリセット(htdemucs_6s)でのみ生成される。
@@ -394,7 +428,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     )
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
 
-    if storage.should_skip_stage(
+    if not force and storage.should_skip_stage(
         workspace_dir,
         project_id,
         "transcribe",
@@ -473,6 +507,10 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         return
 
     score_service.write_score(project_id, score)
+    # #29: score/current.jsonへ実際に新しい採譜結果を書いた場合のみ下流(quantize)を
+    # 無効化する(直前の「並行変更検知でwrite skip」分岐はScore IRの内容が変わって
+    # いないため対象外)。自ステージのstage_metadataを書く前に呼ぶこと。
+    _invalidate_downstream_or_reset(workspace_dir, project_id, "transcribe")
     storage.write_stage_metadata(
         workspace_dir,
         project_id,
@@ -533,6 +571,7 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     userノートを変更しない。「ユーザーが手動で選んだ`selected_snap`を再量子化で
     上書きしない」という、より細かい保護はM3の編集APIと合わせて実装する。
     """
+    force = params.get("force", False)
     emit({"job_id": job_id, "stage": "quantize", "progress": 0.0, "message": "quantizing"})
 
     beatmap_file = storage.beatmap_path(workspace_dir, project_id)
@@ -588,7 +627,7 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     )
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
 
-    if storage.should_skip_stage(
+    if not force and storage.should_skip_stage(
         workspace_dir,
         project_id,
         "quantize",
@@ -711,7 +750,7 @@ def main() -> int:
         elif stage == "separate":
             run_separate_stage(job_id, project_id, workspace_dir, params)
         elif stage == "beat":
-            run_beat_stage(job_id, project_id, workspace_dir)
+            run_beat_stage(job_id, project_id, workspace_dir, params)
         elif stage == "transcribe":
             run_transcribe_stage(job_id, project_id, workspace_dir, params)
         elif stage == "quantize":
