@@ -106,3 +106,24 @@ def derive_time_signatures(
             )
             previous = current
     return signatures
+
+
+def time_signature_at_bar(time_signatures: list[dict], bar: int) -> tuple[int, int]:
+    """`bar`時点で有効な拍子`(numerator, denominator)`。指定が無ければ4/4相当。
+
+    `time_signatures`は`beatmap.json`/Score IRの同名フィールドの生の辞書形状
+    (`{"bar", "numerator", "denominator"}`)。変化点は`bar`昇順に並んでいる
+    前提で、直近の変化点を順方向に補完する。
+
+    `pipeline/quantize.py`(tick変換)と`pipeline/export/score_builder.py`
+    (MusicXML書き出し)の両方が同じロジックを必要とするため、ここに集約する
+    (#27-M2レビュー指摘: 重複していると片方だけ修正された際に拍子解釈が
+    乖離し、tick変換とエクスポートで小節境界の解釈が食い違いうる)。
+    """
+    numerator, denominator = DEFAULT_SIGNATURE
+    for ts in sorted(time_signatures, key=lambda t: t["bar"]):
+        if ts["bar"] <= bar:
+            numerator, denominator = ts["numerator"], ts["denominator"]
+        else:
+            break
+    return numerator, denominator

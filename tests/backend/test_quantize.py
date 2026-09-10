@@ -394,12 +394,14 @@ class TestQuantizePedalTicks:
     def test_degenerate_pedal_entirely_past_the_end_still_has_positive_duration(
         self,
     ) -> None:
-        """回帰(#27-M2レビュー): start/stopが両方ともスコア末尾を超える場合でも、
+        """回帰(#27-M2レビュー2巡目): start/stopが両方ともスコア末尾を超える場合でも、
 
-        クランプ後にstart_tick > stop_tickの矛盾した区間にならない。
+        クランプ後に長さ0(start_tick == stop_tick)へ潰れない。開始側を
+        1tick手前へ寄せてでも非ゼロ長を確保する(MusicXMLの<pedal>で
+        startとendが同一tickに並ぶのを避けるため)。
         """
         result = quantize_pedal_ticks(
             [(100.0, 200.0)], _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4
         )
         start_tick, stop_tick = result[0]
-        assert stop_tick >= start_tick
+        assert stop_tick > start_tick
