@@ -10,6 +10,101 @@ export type SeparationPreset = "fast" | "standard" | "high_quality";
 export type ExecutionProvider = "auto" | "cpu" | "directml";
 
 /**
+ * Score IR(#23, 設計書§10.2)。`GET /score`/`POST /score/ops`はバックエンド側で
+ * `response_model`を素の`dict`にしている(`api/score.py`のdocstring参照:
+ * `domain.score.ScoreIR`をそのまま使うとOpenAPIコンポーネント名が衝突するため)。
+ * そのため`generated.ts`に対応する型が無く、ここで`domain/score.py`のJSON形状を
+ * 手書きする(このエンドポイント2つに限った、意図的な例外)。
+ */
+export interface ScoreSpelling {
+  step: string;
+  alter: number | null;
+  octave: number;
+}
+
+export type NoteProvenance = "amt" | "baseline" | "llm" | "agent" | "user";
+export type NoteStatus = "active" | "deleted" | "muted";
+
+export interface ScoreNote {
+  id: number;
+  onset_sec: number;
+  duration_sec: number;
+  onset_tick: number | null;
+  duration_tick: number | null;
+  midi: number;
+  velocity: number;
+  spelling: ScoreSpelling | null;
+  voice: number;
+  staff: number;
+  tie: { start: boolean; stop: boolean };
+  confidence: number;
+  provenance: NoteProvenance;
+  provenance_run_id: string | null;
+  flags: string[];
+  status: NoteStatus;
+  snap_candidates: { id: string; resolution: string; tick: number; score: number }[];
+  selected_snap: string | null;
+  ai_reason: string | null;
+}
+
+export interface ScorePart {
+  id: string;
+  name: string;
+  midi_program: number;
+  stem_source: string | null;
+  staves: number;
+  clefs: { staff: number; sign: string; line: number }[];
+  notes: ScoreNote[];
+  pedals: {
+    start_sec: number;
+    stop_sec: number;
+    start_tick: number | null;
+    stop_tick: number | null;
+  }[];
+}
+
+export interface ScoreIR {
+  schema_version: number;
+  project_id: string;
+  source: { filename: string; duration_sec: number; sample_rate: number };
+  divisions: number;
+  tempo_map: { bar: number; beat: number; bpm: number }[];
+  time_signatures: { bar: number; numerator: number; denominator: number }[];
+  key_signatures: { bar: number; fifths: number; mode: string }[];
+  chords: { bar: number; beat: number; symbol: string; confidence: number }[];
+  parts: ScorePart[];
+  meta: { stages: Record<string, unknown> };
+  next_note_id: number;
+}
+
+/** #31: `domain/score_ops.py`のdiscriminated unionと1対1対応させる。 */
+export type NoteOp =
+  | {
+      type: "note.add";
+      part_id: string;
+      onset_tick: number;
+      duration_tick: number;
+      midi: number;
+      velocity?: number;
+      voice?: number;
+      staff?: number;
+    }
+  | {
+      type: "note.update";
+      note_ids: number[];
+      onset_tick?: number;
+      duration_tick?: number;
+      midi?: number;
+      velocity?: number;
+      voice?: number;
+      staff?: number;
+    }
+  | { type: "note.delete"; note_ids: number[] }
+  | { type: "note.split"; note_id: number; at_tick: number }
+  | { type: "note.merge"; note_ids: number[] }
+  | { type: "part.transpose_octave"; part_id: string; direction: "up" | "down" };
+
+/**
  * `allowNotFound: true` の場合、404 を例外ではなく `null` として扱う
  * (まだ実行されていないステージの結果取得用)。呼び出しごとに
  * `getBackendInfo`/認証ヘッダ付与/エラーメッセージ整形を重複実装しないよう、
@@ -151,6 +246,27 @@ export async function exportMusicXml(projectId: string): Promise<void> {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** #23: Score IR全体。採譜(transcribe)未実行なら`null`(404を例外にしない、getBeatmapと同じ方針)。 */
+export async function getScore(projectId: string): Promise<ScoreIR | null> {
+  const resp = await apiFetch(`/api/projects/${projectId}/score`, { allowNotFound: true });
+  if (!resp) return null;
+  return (await resp.json()) as ScoreIR;
+}
+
+/**
+ * #31: ノート編集オペレーションを配列で一括適用する。成功時は更新後のScore IR
+ * (サーバの権威ある状態)を返す。404(score/beatmap未実行)・409(並行更新)・
+ * 422(不正なop)は`apiFetch`が例外として送出する。
+ */
+export async function applyScoreOps(projectId: string, ops: NoteOp[]): Promise<ScoreIR> {
+  const resp = await apiFetch(`/api/projects/${projectId}/score/ops`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ops }),
+  });
+  return (await resp.json()) as ScoreIR;
 }
 
 /** #21 TrackList: 分離済みステム名の一覧(分離未実行なら空配列)。 */
