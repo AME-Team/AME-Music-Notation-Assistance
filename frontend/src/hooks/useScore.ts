@@ -22,8 +22,11 @@ export function useScore(projectId: string) {
  * 1. `onMutate`: 進行中の同キー取得をキャンセルし、現在のキャッシュをスナップ
  *    ショットしてから`applyOpsOptimistically`(サーバの応答を待たない簡易
  *    プレビュー、`lib/scoreOps.ts`参照)を即座に反映する
- * 2. `onError`: スナップショットへロールバックする(422/409等でサーバが
- *    拒否した場合、プレビューを巻き戻す)
+ * 2. `onError`: スナップショットへロールバックした上で、キャッシュを
+ *    invalidateして再取得する(#31-M3レビュー指摘: 409は「クライアントの
+ *    直前スナップショット自体がサーバの最新状態とズレている」ことを意味する
+ *    ため、ロールバックだけでは同じ409を繰り返しうる。再取得でサーバの
+ *    権威ある状態へ再同期する)
  * 3. `onSuccess`: サーバの権威ある応答(実際に採番されたノートID・再計算された
  *    onset_sec等を含む)でキャッシュを置き換える
  */
@@ -44,6 +47,7 @@ export function useApplyScoreOps(projectId: string) {
       if (context && context.previousScore !== undefined) {
         queryClient.setQueryData(key, context.previousScore);
       }
+      queryClient.invalidateQueries({ queryKey: key });
     },
     onSuccess: (score) => {
       queryClient.setQueryData(key, score);

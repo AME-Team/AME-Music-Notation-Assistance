@@ -255,32 +255,37 @@ export function PianoRoll({
   // 効かず、キャンバスのパン/ズームとページ側のスクロールが同時に発生
   // してしまう。ネイティブのaddEventListenerに{passive:false}を明示して
   // 登録することで初めてpreventDefault()が機能する。
-  const handleWheelRef = useRef<((e: WheelEvent) => void) | null>(null);
-  handleWheelRef.current = (e: WheelEvent) => {
-    e.preventDefault();
-    const view = viewRef.current;
-    if (e.ctrlKey || e.metaKey) {
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      view.pxPerTick = Math.min(
-        MAX_PX_PER_TICK,
-        Math.max(MIN_PX_PER_TICK, view.pxPerTick * factor),
-      );
-    } else if (e.shiftKey) {
-      view.scrollTick = Math.max(0, view.scrollTick + e.deltaY / view.pxPerTick);
-    } else {
-      view.topMidi += e.deltaY > 0 ? -1 : 1;
-      view.scrollTick = Math.max(0, view.scrollTick + e.deltaX / view.pxPerTick);
-    }
-    markDirty();
-  };
+  // #30-M3レビュー指摘: この関数はref(viewRef)と安定した`markDirty`しか
+  // 参照しないため、render毎にref代入し直す必要はない。useCallback(空配列)
+  // で一度だけ生成し、下のeffectで一度だけ登録する(他のref同期と異なり
+  // render中の代入自体が不要になる)。
+  const handleWheel = useCallback(
+    (e: WheelEvent) => {
+      e.preventDefault();
+      const view = viewRef.current;
+      if (e.ctrlKey || e.metaKey) {
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        view.pxPerTick = Math.min(
+          MAX_PX_PER_TICK,
+          Math.max(MIN_PX_PER_TICK, view.pxPerTick * factor),
+        );
+      } else if (e.shiftKey) {
+        view.scrollTick = Math.max(0, view.scrollTick + e.deltaY / view.pxPerTick);
+      } else {
+        view.topMidi += e.deltaY > 0 ? -1 : 1;
+        view.scrollTick = Math.max(0, view.scrollTick + e.deltaX / view.pxPerTick);
+      }
+      markDirty();
+    },
+    [markDirty],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const listener = (e: WheelEvent) => handleWheelRef.current?.(e);
-    canvas.addEventListener("wheel", listener, { passive: false });
-    return () => canvas.removeEventListener("wheel", listener);
-  }, []);
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
 
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     (e.target as Element).setPointerCapture(e.pointerId);
@@ -397,6 +402,16 @@ export function PianoRoll({
     markDirty();
   }
 
+  // #30-M3レビュー指摘: pointercancel(他アプリへのフォーカス移動、
+  // タッチのキャンセル等)やlostpointercapture発生時にdragRef/
+  // pointerDownRefがクリアされないと、以降のpointermoveがドラッグ継続として
+  // 扱われ、コミットされないプレビューがゴーストとして残り続ける。
+  function handlePointerCancel() {
+    dragRef.current = null;
+    pointerDownRef.current = null;
+    markDirty();
+  }
+
   function handleDoubleClick(e: React.MouseEvent<HTMLCanvasElement>) {
     const { tick, midi } = eventToTickMidi(e as unknown as React.PointerEvent<HTMLCanvasElement>);
     const hit = hitTestNote(sortedNotesRef.current, tick, midi, viewRef.current.pxPerTick);
@@ -424,6 +439,8 @@ export function PianoRoll({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onLostPointerCapture={handlePointerCancel}
         onDoubleClick={handleDoubleClick}
       />
     </div>
