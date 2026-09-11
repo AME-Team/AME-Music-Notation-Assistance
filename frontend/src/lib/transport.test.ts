@@ -1,56 +1,74 @@
 import { describe, expect, it } from "vitest";
-import { bpmAtBar, formatTime, secondsToTick } from "./transport";
+import { bpmAtBar, buildTickMappingPoints, formatTime, secondsToTick } from "./transport";
 
-describe("secondsToTick", () => {
-  it("returns 0 for an empty note list", () => {
-    expect(secondsToTick([], 1.5)).toBe(0);
-  });
-
-  it("returns the single point's tick regardless of the requested seconds", () => {
-    const notes = [{ onset_sec: 1, onset_tick: 480 }];
-    expect(secondsToTick(notes, 0)).toBe(480);
-    expect(secondsToTick(notes, 100)).toBe(480);
-  });
-
-  it("interpolates linearly between two points", () => {
-    const notes = [
-      { onset_sec: 0, onset_tick: 0 },
-      { onset_sec: 2, onset_tick: 1920 },
-    ];
-    expect(secondsToTick(notes, 1)).toBeCloseTo(960);
-  });
-
-  it("clamps below the first point using the first segment's slope", () => {
-    const notes = [
-      { onset_sec: 1, onset_tick: 480 },
-      { onset_sec: 2, onset_tick: 960 },
-    ];
-    expect(secondsToTick(notes, 0)).toBeCloseTo(0);
-  });
-
-  it("clamps beyond the last point using the last segment's slope", () => {
-    const notes = [
-      { onset_sec: 0, onset_tick: 0 },
-      { onset_sec: 1, onset_tick: 480 },
-    ];
-    expect(secondsToTick(notes, 2)).toBeCloseTo(960);
-  });
-
+describe("buildTickMappingPoints", () => {
   it("excludes notes with a null onset_tick (unquantized)", () => {
     const notes = [
       { onset_sec: 0, onset_tick: 0 },
       { onset_sec: 1, onset_tick: null },
       { onset_sec: 2, onset_tick: 1920 },
     ];
-    expect(secondsToTick(notes, 1)).toBeCloseTo(960);
+    expect(buildTickMappingPoints(notes)).toEqual([
+      { sec: 0, tick: 0 },
+      { sec: 2, tick: 1920 },
+    ]);
+  });
+
+  it("sorts by onset_sec ascending regardless of input order", () => {
+    const notes = [
+      { onset_sec: 2, onset_tick: 1920 },
+      { onset_sec: 0, onset_tick: 0 },
+      { onset_sec: 1, onset_tick: 960 },
+    ];
+    expect(buildTickMappingPoints(notes)).toEqual([
+      { sec: 0, tick: 0 },
+      { sec: 1, tick: 960 },
+      { sec: 2, tick: 1920 },
+    ]);
+  });
+});
+
+describe("secondsToTick", () => {
+  it("returns 0 for an empty point list", () => {
+    expect(secondsToTick([], 1.5)).toBe(0);
+  });
+
+  it("returns the single point's tick regardless of the requested seconds", () => {
+    const points = [{ sec: 1, tick: 480 }];
+    expect(secondsToTick(points, 0)).toBe(480);
+    expect(secondsToTick(points, 100)).toBe(480);
+  });
+
+  it("interpolates linearly between two points", () => {
+    const points = [
+      { sec: 0, tick: 0 },
+      { sec: 2, tick: 1920 },
+    ];
+    expect(secondsToTick(points, 1)).toBeCloseTo(960);
+  });
+
+  it("clamps below the first point using the first segment's slope", () => {
+    const points = [
+      { sec: 1, tick: 480 },
+      { sec: 2, tick: 960 },
+    ];
+    expect(secondsToTick(points, 0)).toBeCloseTo(0);
+  });
+
+  it("clamps beyond the last point using the last segment's slope", () => {
+    const points = [
+      { sec: 0, tick: 0 },
+      { sec: 1, tick: 480 },
+    ];
+    expect(secondsToTick(points, 2)).toBeCloseTo(960);
   });
 
   it("binary-searches the correct segment among many points", () => {
-    const notes = Array.from({ length: 10 }, (_, i) => ({
-      onset_sec: i,
-      onset_tick: i * 480,
+    const points = Array.from({ length: 10 }, (_, i) => ({
+      sec: i,
+      tick: i * 480,
     }));
-    expect(secondsToTick(notes, 5.5)).toBeCloseTo(2640);
+    expect(secondsToTick(points, 5.5)).toBeCloseTo(2640);
   });
 });
 

@@ -4,7 +4,7 @@ import { getStemAudioUrl } from "../api/client";
 import { useScore } from "../hooks/useScore";
 import { useStems } from "../hooks/useStems";
 import { barBoundariesTicks, barNumberForTick } from "../lib/pianoRoll";
-import { bpmAtBar, formatTime, secondsToTick } from "../lib/transport";
+import { bpmAtBar, buildTickMappingPoints, formatTime, secondsToTick } from "../lib/transport";
 import { useMixStore } from "../stores/mixStore";
 import { type PlaybackMode, usePlaybackStore } from "../stores/playbackStore";
 
@@ -61,7 +61,7 @@ export function TransportBar({ projectId }: TransportBarProps) {
   const playersRef = useRef<{ name: string; player: Tone.Player }[]>([]);
   const rafRef = useRef<number | null>(null);
   const boundariesRef = useRef<number[]>([0]);
-  const tickMappingNotesRef = useRef<{ onset_sec: number; onset_tick: number | null }[]>([]);
+  const tickMappingPointsRef = useRef<{ sec: number; tick: number }[]>([]);
 
   const notes = score?.parts[0]?.notes ?? [];
   const tempoMap = score?.tempo_map ?? [];
@@ -95,7 +95,7 @@ export function TransportBar({ projectId }: TransportBarProps) {
   // 再生成されないようにする(下の境界計算effectの依存配列に安全に含めるため)。
   const syncPosition = useCallback(() => {
     const positionSec = Tone.getTransport().seconds;
-    const positionTick = secondsToTick(tickMappingNotesRef.current, positionSec);
+    const positionTick = secondsToTick(tickMappingPointsRef.current, positionSec);
     const currentBar = barNumberForTick(boundariesRef.current, positionTick);
     const bpm = bpmAtBar(tempoMap, currentBar);
     usePlaybackStore.setState({ positionSec, positionTick, currentBar, bpm });
@@ -117,9 +117,7 @@ export function TransportBar({ projectId }: TransportBarProps) {
   // score読み込み直後の時点でBar 1のBPMが表示されるようにする(呼ばないと
   // playbackStoreの初期値である既定120のままになってしまう)。
   useEffect(() => {
-    tickMappingNotesRef.current = notes
-      .filter((n) => n.onset_tick != null)
-      .map((n) => ({ onset_sec: n.onset_sec, onset_tick: n.onset_tick }));
+    tickMappingPointsRef.current = buildTickMappingPoints(notes);
     const lastTick = notes.reduce(
       (max, n) => Math.max(max, (n.onset_tick ?? 0) + (n.duration_tick ?? 0)),
       1,

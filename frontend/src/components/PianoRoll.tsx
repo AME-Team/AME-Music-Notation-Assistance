@@ -222,10 +222,19 @@ export function PianoRoll({
   // このエフェクトはマウント時に1度だけ登録される。
   useEffect(() => {
     let raf = 0;
+    let lastDrawnPlaybackTick = -1;
     const loop = () => {
       // #34: 再生中はプレイヘッドが毎フレーム動くため、他に変更が無くても
       // 強制的にdirtyにする(通常は選択/ドラッグ/データ変更時のみdirtyになる)。
-      if (usePlaybackStore.getState().isPlaying) dirtyRef.current = true;
+      // #34-M3レビュー指摘: `isPlaying`のみを見ると、停止/先頭戻しで
+      // `positionTick`が0に戻った直後(この時点で既に`isPlaying`はfalse)は
+      // dirtyが立たず、最後に描いたプレイヘッド線が残り続ける。`isPlaying`に
+      // 関わらず前回描画時からtickが変化していれば強制的にdirtyにする。
+      const playbackTick = usePlaybackStore.getState().positionTick;
+      if (usePlaybackStore.getState().isPlaying || playbackTick !== lastDrawnPlaybackTick) {
+        dirtyRef.current = true;
+        lastDrawnPlaybackTick = playbackTick;
+      }
       if (dirtyRef.current) {
         dirtyRef.current = false;
         draw();

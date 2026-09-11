@@ -8,6 +8,11 @@ export interface PlaybackNote {
   onset_tick: number | null;
 }
 
+export interface TickMappingPoint {
+  sec: number;
+  tick: number;
+}
+
 export interface TempoMapEntry {
   bar: number;
   beat: number;
@@ -17,21 +22,33 @@ export interface TempoMapEntry {
 const DEFAULT_BPM = 120;
 
 /**
- * 再生位置(秒)を、現在のscore内のノート点列`(onset_sec, onset_tick)`からの
- * 線形補間でtickへ変換する。`tempo_map`からのテンポ積分(`pipeline/quantize.py`の
- * `beat_tick_anchors`/`ticks_to_seconds`)をTS側に複製するより単純であり、この
- * 機能はUI表示(小節番号・プレイヘッド位置)専用でMIDI再生自体の音声的な正確さには
- * 影響しないため、この近似で十分と判断する(#34設計判断)。
+ * `secondsToTick`用の点列`(sec, tick)`を、`onset_tick`が`null`(未量子化)の
+ * ノートを除外した上で`onset_sec`昇順にソートして作る。
  *
- * `onset_tick`が`null`(未量子化)のノートは点列から除外する。点列が空/1点のみ
- * なら安全にフォールバックする(空なら0、1点のみならその点のtickを返す)。
+ * #34-M3レビュー指摘: `TransportBar`はrAFで毎フレーム`secondsToTick`を呼ぶため、
+ * フィルタ/ソートを`secondsToTick`内部で毎回行うと不要なO(n log n)が
+ * 再生中ずっと走り続ける。呼び出し側(`notes`が変わった時だけ)で本関数を
+ * 一度呼んで点列を作り置きし、`secondsToTick`にはソート済み前提で渡すこと。
  */
-export function secondsToTick(notes: readonly PlaybackNote[], seconds: number): number {
-  const points = notes
+export function buildTickMappingPoints(notes: readonly PlaybackNote[]): TickMappingPoint[] {
+  return notes
     .filter((n): n is PlaybackNote & { onset_tick: number } => n.onset_tick != null)
     .map((n) => ({ sec: n.onset_sec, tick: n.onset_tick }))
     .sort((a, b) => a.sec - b.sec);
+}
 
+/**
+ * 再生位置(秒)を、`points`(`buildTickMappingPoints`の出力、onset_sec昇順に
+ * ソート済みであることが前提)からの線形補間でtickへ変換する。
+ * `tempo_map`からのテンポ積分(`pipeline/quantize.py`の`beat_tick_anchors`/
+ * `ticks_to_seconds`)をTS側に複製するより単純であり、この機能はUI表示
+ * (小節番号・プレイヘッド位置)専用でMIDI再生自体の音声的な正確さには
+ * 影響しないため、この近似で十分と判断する(#34設計判断)。
+ *
+ * 点列が空/1点のみなら安全にフォールバックする(空なら0、1点のみならその
+ * 点のtickを返す)。
+ */
+export function secondsToTick(points: readonly TickMappingPoint[], seconds: number): number {
   if (points.length === 0) return 0;
   if (points.length === 1) return points[0].tick;
 
