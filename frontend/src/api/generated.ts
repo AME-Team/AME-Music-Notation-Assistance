@@ -1458,7 +1458,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/vnd.recordare.musicxml+xml": string;
                 };
             };
             /** @description score not found */

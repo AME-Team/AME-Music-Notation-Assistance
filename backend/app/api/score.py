@@ -319,9 +319,18 @@ def redo_score_ops(
     return _undo_or_redo(project_id, service, settings, direction="redo")
 
 
+_PREVIEW_MUSICXML_MEDIA_TYPE = "application/vnd.recordare.musicxml+xml"
+
+
 @router.get(
     "/score/preview.musicxml",
+    response_class=Response,
     responses={
+        200: {
+            "content": {
+                _PREVIEW_MUSICXML_MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}}
+            }
+        },
         404: {"model": ErrorResponse, "description": "score not found"},
         422: {"model": ErrorResponse, "description": "score is not quantized/spelled yet"},
     },
@@ -354,4 +363,4 @@ def get_score_preview_musicxml(
         data = render_musicxml(score.model_dump(mode="json"))
     except ExportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return Response(content=data, media_type="application/vnd.recordare.musicxml+xml")
+    return Response(content=data, media_type=_PREVIEW_MUSICXML_MEDIA_TYPE)

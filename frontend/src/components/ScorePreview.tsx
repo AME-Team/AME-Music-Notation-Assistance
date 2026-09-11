@@ -77,14 +77,25 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
 
   const part = score.parts[0];
   const selectedArray = [...selectedNoteIds];
+  const lastBar = part
+    ? (() => {
+        const lastTick = part.notes.reduce(
+          (max, n) => Math.max(max, (n.onset_tick ?? 0) + (n.duration_tick ?? 0)),
+          1,
+        );
+        const boundaries = barBoundariesTicks(score.time_signatures, score.divisions, lastTick);
+        return boundaries.length;
+      })()
+    : null;
+
   let autoFromBar: number | null = null;
   let autoToBar: number | null = null;
   if (part && selectedArray.length === 1 && manualFromBar === "" && manualToBar === "") {
     const note = part.notes.find((n) => n.id === selectedArray[0]);
     if (note?.onset_tick != null) {
-      const lastTick = Math.max(
+      const lastTick = part.notes.reduce(
+        (max, n) => Math.max(max, (n.onset_tick ?? 0) + (n.duration_tick ?? 0)),
         note.onset_tick + 1,
-        ...part.notes.map((n) => (n.onset_tick ?? 0) + (n.duration_tick ?? 0)),
       );
       const boundaries = barBoundariesTicks(score.time_signatures, score.divisions, lastTick);
       const bar = barNumberForTick(boundaries, note.onset_tick);
@@ -93,8 +104,15 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
     }
   }
 
-  const effectiveFromBar = manualFromBar !== "" ? Number(manualFromBar) : autoFromBar;
-  const effectiveToBar = manualToBar !== "" ? Number(manualToBar) : autoToBar;
+  // #33-M3レビュー指摘: 開始/終了の片方だけ手動指定した場合、もう片方が
+  // auto値(未計算ならnull)のままだと範囲指定全体が無視されてしまうため、
+  // 空欄側は既定値(開始側は1小節目、終了側は最終小節)で補う。
+  const effectiveFromBar =
+    manualFromBar !== "" ? Number(manualFromBar) : (autoFromBar ?? (manualToBar !== "" ? 1 : null));
+  const effectiveToBar =
+    manualToBar !== ""
+      ? Number(manualToBar)
+      : (autoToBar ?? (manualFromBar !== "" ? lastBar : null));
 
   // 表示範囲が変わるたびにOSMDのオプションを更新して再描画する(再取得・
   // 再ロードは不要、既にロード済みの譜面に対する描画範囲の変更のみ)。
