@@ -11,6 +11,7 @@ import {
   xToTick,
   yToMidi,
 } from "../lib/pianoRoll";
+import { usePlaybackStore } from "../stores/playbackStore";
 
 const ROW_HEIGHT_PX = 14;
 const DEFAULT_PX_PER_TICK = 0.15;
@@ -198,6 +199,22 @@ export function PianoRoll({
       ctx.strokeRect(rectX + 0.5, rectY + 0.5, Math.abs(x2 - x1), Math.abs(y2 - y1));
     }
 
+    // #34: 再生プレイヘッド。propsを介さず`usePlaybackStore`を直接読む
+    // (`useMixStore`をTrackListの子が直接importするのと同じ既存パターン)。
+    // `positionTick === 0`(未再生/停止直後の初期値)は非表示にする。
+    const playbackTick = usePlaybackStore.getState().positionTick;
+    if (playbackTick > 0) {
+      const x = tickToX(playbackTick, scrollTick, pxPerTick);
+      if (x >= -1 && x <= widthCss + 1) {
+        ctx.strokeStyle = "#dc2626";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x) + 0.5, 0);
+        ctx.lineTo(Math.round(x) + 0.5, heightCss);
+        ctx.stroke();
+      }
+    }
+
     ctx.restore();
   }, []);
 
@@ -206,6 +223,9 @@ export function PianoRoll({
   useEffect(() => {
     let raf = 0;
     const loop = () => {
+      // #34: 再生中はプレイヘッドが毎フレーム動くため、他に変更が無くても
+      // 強制的にdirtyにする(通常は選択/ドラッグ/データ変更時のみdirtyになる)。
+      if (usePlaybackStore.getState().isPlaying) dirtyRef.current = true;
       if (dirtyRef.current) {
         dirtyRef.current = false;
         draw();
