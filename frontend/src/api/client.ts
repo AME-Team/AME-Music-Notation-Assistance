@@ -287,6 +287,15 @@ export async function redoScoreOps(projectId: string): Promise<UndoRedoResult> {
   return (await resp.json()) as UndoRedoResult;
 }
 
+/**
+ * #33: `ScorePreview`(OSMD)向けのプレビュー用MusicXML(文字列)。404(採譜未実行)・
+ * 422(量子化/L0未実行)は`apiFetch`が例外として送出する。
+ */
+export async function getScorePreviewMusicXml(projectId: string): Promise<string> {
+  const resp = await apiFetch(`/api/projects/${projectId}/score/preview.musicxml`);
+  return await resp.text();
+}
+
 /** #21 TrackList: 分離済みステム名の一覧(分離未実行なら空配列)。 */
 export async function listStems(projectId: string): Promise<string[]> {
   const resp = await apiFetch(`/api/projects/${projectId}/stems`);

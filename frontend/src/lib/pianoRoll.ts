@@ -75,6 +75,22 @@ export function barBoundariesTicks(
   return boundaries;
 }
 
+/**
+ * #33: `tick`が何小節目(1始まり)にあるかを求める(`barBoundariesTicks`の
+ * 出力に対する二分探索)。`ScorePreview`が選択ノートの小節番号を求めて
+ * OSMDの表示範囲を自動追従させるのに使う。
+ */
+export function barNumberForTick(boundaries: number[], tick: number): number {
+  let lo = 0;
+  let hi = boundaries.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (boundaries[mid] <= tick) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.max(1, lo);
+}
+
 export function tickToX(tick: number, scrollTick: number, pxPerTick: number): number {
   return (tick - scrollTick) * pxPerTick;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   barBoundariesTicks,
+  barNumberForTick,
   hitTestNote,
   midiToY,
   type PianoRollNote,
@@ -56,6 +57,28 @@ describe("barBoundariesTicks", () => {
   it("does not loop forever for a degenerate zero-numerator signature", () => {
     const boundaries = barBoundariesTicks([{ bar: 1, numerator: 0, denominator: 4 }], 480, 1000);
     expect(boundaries).toEqual([0]);
+  });
+});
+
+describe("barNumberForTick", () => {
+  const boundaries = [0, 1920, 3840, 5760]; // 4/4, divisions=480 -> 1920tick/bar
+
+  it("returns 1 for the first tick of bar 1", () => {
+    expect(barNumberForTick(boundaries, 0)).toBe(1);
+  });
+
+  it("returns the bar containing a mid-bar tick", () => {
+    expect(barNumberForTick(boundaries, 1000)).toBe(1);
+    expect(barNumberForTick(boundaries, 1920)).toBe(2);
+    expect(barNumberForTick(boundaries, 2000)).toBe(2);
+  });
+
+  it("returns the last bar for a tick beyond the last boundary", () => {
+    expect(barNumberForTick(boundaries, 999_999)).toBe(4);
+  });
+
+  it("clamps to bar 1 for a negative tick (defensive, should not occur in practice)", () => {
+    expect(barNumberForTick(boundaries, -100)).toBe(1);
   });
 });
 

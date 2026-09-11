@@ -3,6 +3,7 @@ import type { NoteOp } from "../api/client";
 import { useScore, useScoreEditing } from "../hooks/useScore";
 import type { PianoRollNote } from "../lib/pianoRoll";
 import { PianoRoll } from "./PianoRoll";
+import { ScorePreview } from "./ScorePreview";
 
 interface PianoRollEditorProps {
   projectId: string;
@@ -197,6 +198,7 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
         onSelectionChange={setSelectedNoteIds}
         onApplyOps={handleApplyOps}
       />
+      <ScorePreview projectId={projectId} score={score} selectedNoteIds={selectedNoteIds} />
     </section>
   );
 }

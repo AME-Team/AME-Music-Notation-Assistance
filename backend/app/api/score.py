@@ -1,8 +1,4 @@
-"""Score IR取得・編集API(#23/#31, 設計書§11.5)。
-
-`GET /score/preview.musicxml`(部分小節プレビュー)はM2完了条件に含まれない
-ため未実装(ユーザー確認済み、将来PRで対応)。
-"""
+"""Score IR取得・編集API(#23/#31/#33, 設計書§11.5)。"""
 
 from __future__ import annotations
 
@@ -10,7 +6,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.api.deps import ensure_project_exists, get_project_service, get_settings, read_score_or_404
 from app.api.schemas import ErrorResponse, ScoreOpsRequest
@@ -18,6 +14,8 @@ from app.config import Settings
 from app.domain.migrations import migrate_to_current
 from app.domain.score import ScoreIR
 from app.infra import storage
+from app.pipeline.export.musicxml import render_musicxml
+from app.pipeline.export.score_builder import ExportError
 from app.pipeline.quantize import beat_tick_anchors
 from app.services import score_undo
 from app.services.project_service import ProjectService
@@ -319,3 +317,50 @@ def redo_score_ops(
     200を返す。
     """
     return _undo_or_redo(project_id, service, settings, direction="redo")
+
+
+_PREVIEW_MUSICXML_MEDIA_TYPE = "application/vnd.recordare.musicxml+xml"
+
+
+@router.get(
+    "/score/preview.musicxml",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {
+                _PREVIEW_MUSICXML_MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}}
+            }
+        },
+        404: {"model": ErrorResponse, "description": "score not found"},
+        422: {"model": ErrorResponse, "description": "score is not quantized/spelled yet"},
+    },
+)
+def get_score_preview_musicxml(
+    project_id: str,
+    service: ProjectService = Depends(get_project_service),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """#33: `ScorePreview`(OSMD)向けのプレビュー用MusicXML(FR-11)。
+
+    `POST /export`(#27)と同じ`render_musicxml`をそのまま再利用する
+    (新規のレンダリングロジックは無い)。`POST /export`と異なり
+    `storage.musicxml_export_path`には保存しない(こちらは編集のたびに
+    都度再生成される一時プレビューであり、ユーザーが明示的にエクスポート
+    した恒久成果物とは別物のため)。
+
+    小節範囲の絞り込み(設計書§11.5の`?bars=1-16`)はここでは実装しない:
+    OSMD自身が`drawFromMeasureNumber`/`drawUpToMeasureNumber`オプションで
+    描画範囲をクライアント側で絞り込めるため、常に全体のMusicXMLを返し
+    フロントエンド側で絞る設計とする(#33-M3設計判断)。
+
+    `async def`ではなく通常の`def`にする(同ファイルの他エンドポイントと
+    同じ理由): `render_musicxml`はpartitura呼び出しを含む同期CPUバウンド
+    処理であり、`async def`のままだとイベントループを直接ブロックする。
+    """
+    ensure_project_exists(project_id, service)
+    score = read_score_or_404(project_id, settings)
+    try:
+        data = render_musicxml(score.model_dump(mode="json"))
+    except ExportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(content=data, media_type=_PREVIEW_MUSICXML_MEDIA_TYPE)
