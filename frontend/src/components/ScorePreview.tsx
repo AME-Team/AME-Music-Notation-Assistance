@@ -41,10 +41,21 @@ const INPUT_CLASS =
 export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const osmdRef = useRef<OpenSheetMusicDisplay | null>(null);
-  const loadedRef = useRef(false);
+  // #33-M3レビュー指摘: `loaded`はrefではなくstateにする。refだと`true`に
+  // なっても後述の表示範囲effect(`[effectiveFromBar, effectiveToBar, loaded]`
+  // 依存)が再評価されず、初回ロード完了時点で既に選択済みだった自動追従の
+  // 範囲が反映されない(全体表示のままになる)。
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualFromBar, setManualFromBar] = useState("");
   const [manualToBar, setManualToBar] = useState("");
+  // #33-M3レビュー指摘: デバウンスされた非同期ロードに順序保証・キャンセルが
+  // 無いと、連続編集時に古いリクエストのレスポンスが後から解決して新しい
+  // 描画を上書きしうる。世代カウンタで「自分が最新のリクエストか」を
+  // `.then`/`.catch`内で確認し、古ければ結果を破棄する(`useScore.ts`の
+  // `latestMutationIdRef`と同じ考え方)。アンマウント時にもインクリメントし、
+  // 未マウント後の`setState`を防ぐ。
+  const latestRequestIdRef = useRef(0);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -52,6 +63,9 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
       autoResize: true,
       drawTitle: false,
     });
+    return () => {
+      latestRequestIdRef.current += 1;
+    };
   }, []);
 
   // NFR-03: scoreが変わるたびにタイマーをリセットし、500ms操作が無ければ
@@ -61,14 +75,17 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
     const timer = setTimeout(() => {
       const osmd = osmdRef.current;
       if (!osmd || score.parts.length === 0) return;
+      const requestId = ++latestRequestIdRef.current;
       getScorePreviewMusicXml(projectId)
         .then((xml) => osmd.load(xml))
         .then(() => {
-          loadedRef.current = true;
+          if (latestRequestIdRef.current !== requestId) return; // 古いリクエストの結果は破棄
           setError(null);
+          setLoaded(true);
           osmd.render();
         })
         .catch((err: unknown) => {
+          if (latestRequestIdRef.current !== requestId) return;
           setError(err instanceof Error ? err.message : String(err));
         });
     }, DEBOUNCE_MS);
@@ -118,7 +135,7 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
   // 再ロードは不要、既にロード済みの譜面に対する描画範囲の変更のみ)。
   useEffect(() => {
     const osmd = osmdRef.current;
-    if (!osmd || !loadedRef.current) return;
+    if (!osmd || !loaded) return;
     if (effectiveFromBar != null && effectiveToBar != null) {
       // 既知の制約(実機検証で確認): OSMDの`drawUpToMeasureNumber`は指定した
       // 小節番号ちょうどではなく、実際には1小節分多く表示することがある
@@ -144,7 +161,7 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
       osmd.EngravingRules.MaxMeasureToDrawNumber = Number.MAX_VALUE;
     }
     osmd.render();
-  }, [effectiveFromBar, effectiveToBar]);
+  }, [effectiveFromBar, effectiveToBar, loaded]);
 
   return (
     <section className="space-y-3 rounded-lg border border-gray-200 p-4">
