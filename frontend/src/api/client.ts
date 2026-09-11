@@ -264,6 +264,29 @@ export async function applyScoreOps(projectId: string, ops: NoteOp[]): Promise<S
   return (await resp.json()) as ScoreIR;
 }
 
+/**
+ * #32: `/score/undo`・`/score/redo`の戻り値。`GET /score`/`applyScoreOps`と
+ * 同じ理由(コンポーネント名衝突回避)でgenerated型が無く、手書きする。
+ * `applied=false`はUndo/Redoスタックが空で何も変化しなかったことを示す
+ * (200のまま返る、「元に戻す操作が無い」はエラーではないため)。
+ */
+export interface UndoRedoResult {
+  score: ScoreIR;
+  applied: boolean;
+}
+
+/** #32: 直近の編集を1つ元に戻す。404(score未実行)・409(並行更新)は`apiFetch`が例外として送出する。 */
+export async function undoScoreOps(projectId: string): Promise<UndoRedoResult> {
+  const resp = await apiFetch(`/api/projects/${projectId}/score/undo`, { method: "POST" });
+  return (await resp.json()) as UndoRedoResult;
+}
+
+/** #32: 直近にUndoした編集を1つやり直す。404/409は`apiFetch`が例外として送出する。 */
+export async function redoScoreOps(projectId: string): Promise<UndoRedoResult> {
+  const resp = await apiFetch(`/api/projects/${projectId}/score/redo`, { method: "POST" });
+  return (await resp.json()) as UndoRedoResult;
+}
+
 /** #21 TrackList: 分離済みステム名の一覧(分離未実行なら空配列)。 */
 export async function listStems(projectId: string): Promise<string[]> {
   const resp = await apiFetch(`/api/projects/${projectId}/stems`);
