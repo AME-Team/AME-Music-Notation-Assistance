@@ -897,6 +897,57 @@
         }
       }
     },
+    "/api/projects/{project_id}/score/preview.musicxml": {
+      "get": {
+        "tags": [
+          "score"
+        ],
+        "summary": "Get Score Preview Musicxml",
+        "description": "#33: `ScorePreview`(OSMD)向けのプレビュー用MusicXML(FR-11)。\n\n`POST /export`(#27)と同じ`render_musicxml`をそのまま再利用する\n(新規のレンダリングロジックは無い)。`POST /export`と異なり\n`storage.musicxml_export_path`には保存しない(こちらは編集のたびに\n都度再生成される一時プレビューであり、ユーザーが明示的にエクスポート\nした恒久成果物とは別物のため)。\n\n小節範囲の絞り込み(設計書§11.5の`?bars=1-16`)はここでは実装しない:\nOSMD自身が`drawFromMeasureNumber`/`drawUpToMeasureNumber`オプションで\n描画範囲をクライアント側で絞り込めるため、常に全体のMusicXMLを返し\nフロントエンド側で絞る設計とする(#33-M3設計判断)。\n\n`async def`ではなく通常の`def`にする(同ファイルの他エンドポイントと\n同じ理由): `render_musicxml`はpartitura呼び出しを含む同期CPUバウンド\n処理であり、`async def`のままだとイベントループを直接ブロックする。",
+        "operationId": "get_score_preview_musicxml_api_projects__project_id__score_preview_musicxml_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "score not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "score is not quantized/spelled yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{project_id}/export": {
       "post": {
         "tags": [

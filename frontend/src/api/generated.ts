@@ -370,6 +370,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/score/preview.musicxml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Score Preview Musicxml
+         * @description #33: `ScorePreview`(OSMD)向けのプレビュー用MusicXML(FR-11)。
+         *
+         *     `POST /export`(#27)と同じ`render_musicxml`をそのまま再利用する
+         *     (新規のレンダリングロジックは無い)。`POST /export`と異なり
+         *     `storage.musicxml_export_path`には保存しない(こちらは編集のたびに
+         *     都度再生成される一時プレビューであり、ユーザーが明示的にエクスポート
+         *     した恒久成果物とは別物のため)。
+         *
+         *     小節範囲の絞り込み(設計書§11.5の`?bars=1-16`)はここでは実装しない:
+         *     OSMD自身が`drawFromMeasureNumber`/`drawUpToMeasureNumber`オプションで
+         *     描画範囲をクライアント側で絞り込めるため、常に全体のMusicXMLを返し
+         *     フロントエンド側で絞る設計とする(#33-M3設計判断)。
+         *
+         *     `async def`ではなく通常の`def`にする(同ファイルの他エンドポイントと
+         *     同じ理由): `render_musicxml`はpartitura呼び出しを含む同期CPUバウンド
+         *     処理であり、`async def`のままだとイベントループを直接ブロックする。
+         */
+        get: operations["get_score_preview_musicxml_api_projects__project_id__score_preview_musicxml_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{project_id}/export": {
         parameters: {
             query?: never;
@@ -1402,6 +1437,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_score_preview_musicxml_api_projects__project_id__score_preview_musicxml_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description score not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description score is not quantized/spelled yet */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
