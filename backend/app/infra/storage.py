@@ -77,6 +77,21 @@ def score_current_path(workspace_dir: Path, project_id: str) -> Path:
     return project_dir(workspace_dir, project_id) / "score" / "current.json"
 
 
+def score_ops_log_path(workspace_dir: Path, project_id: str) -> Path:
+    """#32: 編集オペレーションの追記専用監査ログ(設計書§10.4)。
+
+    `score/staging`/`score/revisions`(`ensure_project_layout`参照)はL1/L2 AI整音の
+    提案差分用に予約されたディレクトリのため、Undo/Redo用のファイルはそれらとは
+    別に`score/`直下へ置く。
+    """
+    return project_dir(workspace_dir, project_id) / "score" / "ops.jsonl"
+
+
+def score_undo_state_path(workspace_dir: Path, project_id: str) -> Path:
+    """#32: Undo/Redoの2本のスタック(`done`/`undone`)の永続化先。"""
+    return project_dir(workspace_dir, project_id) / "score" / "undo_state.json"
+
+
 def musicxml_export_path(workspace_dir: Path, project_id: str) -> Path:
     """#27 Stage 6: `POST /export` が書き出すMusicXMLの保存先。"""
     return project_dir(workspace_dir, project_id) / "export" / "score.musicxml"

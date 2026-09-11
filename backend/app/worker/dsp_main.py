@@ -32,7 +32,7 @@ from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_
 from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
 from app.pipeline.transcribe.piano import run_piano_transcription
-from app.services import stage_invalidation
+from app.services import score_undo, stage_invalidation
 from app.services.score_service import ScoreService
 
 
@@ -60,6 +60,24 @@ def _invalidate_downstream_or_reset(workspace_dir: Path, project_id: str, stage:
     except BaseException:
         storage.stage_metadata_path(workspace_dir, project_id, stage).unlink(missing_ok=True)
         raise
+
+
+def _reset_undo_history_or_warn(workspace_dir: Path, project_id: str) -> None:
+    """#32-M3レビュー指摘: transcribe/quantize再実行後にUndo/Redoスタックをクリアする。
+
+    `score_undo.reset_undo_state`のdocstring参照: transcribeはamtノートを新しい
+    IDで作り直し、quantizeは全ノートのtick位置を再計算するため、再実行前の
+    UndoEntryをそのまま適用すると消えたノートの復活や巻き戻りを起こしうる。
+    Undo履歴はスコア本体より優先度の低い副次的な状態のため、リセット自体が
+    (ディスクI/Oエラー等で)失敗してもステージを失敗させず警告に留める。
+    """
+    try:
+        score_undo.reset_undo_state(storage.score_undo_state_path(workspace_dir, project_id))
+    except OSError as exc:
+        print(
+            f"[dsp_main] warning: failed to reset undo history for project {project_id}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _package_version(name: str) -> str:
@@ -511,6 +529,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     # 無効化する(直前の「並行変更検知でwrite skip」分岐はScore IRの内容が変わって
     # いないため対象外)。自ステージのstage_metadataを書く前に呼ぶこと。
     _invalidate_downstream_or_reset(workspace_dir, project_id, "transcribe")
+    _reset_undo_history_or_warn(workspace_dir, project_id)
     storage.write_stage_metadata(
         workspace_dir,
         project_id,
@@ -713,6 +732,7 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         return
 
     score_service.write_score(project_id, score)
+    _reset_undo_history_or_warn(workspace_dir, project_id)
     storage.write_stage_metadata(
         workspace_dir,
         project_id,

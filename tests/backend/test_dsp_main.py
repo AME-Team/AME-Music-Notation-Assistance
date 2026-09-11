@@ -749,6 +749,56 @@ def test_transcribe_stage_preserves_non_amt_notes(
     assert ("amt", 60) not in provenances  # 古いAMT結果は消える
 
 
+def test_transcribe_stage_resets_undo_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#32-M3レビュー指摘): 再採譜はamtノートを新しいIDで作り直すため、
+
+    古いUndoEntryが参照するnote_idが無関係になりうる。再採譜のたびに
+    Undo/Redoスタックをクリアする(`score_undo.reset_undo_state`参照)。
+    """
+    from app.services import score_undo
+
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+
+    undo_state_path = storage.score_undo_state_path(tmp_path, project_id)
+    stale_state = score_undo.UndoState(
+        done=[
+            score_undo.UndoEntry(
+                ops=[{"type": "note.update", "note_ids": [1], "midi": 61}],
+                actor="user",
+                ts="2026-01-01T00:00:00Z",
+                changes={
+                    "1": score_undo.NoteChange(
+                        part_id="piano", before={"midi": 60}, after={"midi": 61}
+                    )
+                },
+            )
+        ]
+    )
+    score_undo.write_undo_state(undo_state_path, stale_state)
+
+    (tmp_path / project_id / "stems" / "piano.wav").write_bytes(b"RIFF....WAVEfmt X")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 62, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
+
+    reloaded = score_undo.read_undo_state(undo_state_path)
+    assert reloaded.done == []
+    assert reloaded.undone == []
+
+
 def test_transcribe_stage_skips_write_if_score_modified_concurrently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -873,6 +923,51 @@ def test_quantize_stage_sets_tick_spelling_voice_staff(
         assert note.spelling is not None
         assert note.staff in (1, 2)
         assert 1 <= note.voice <= 4
+
+
+def test_quantize_stage_resets_undo_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#32-M3レビュー指摘): quantizeは全ノートのonset_tick/duration_tickを
+
+    再計算するため、古いUndoEntryを適用すると再量子化前の位置に巻き戻って
+    しまう。再実行のたびにUndo/Redoスタックをクリアする。
+    """
+    from app.services import score_undo
+
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    undo_state_path = storage.score_undo_state_path(tmp_path, project_id)
+    stale_state = score_undo.UndoState(
+        done=[
+            score_undo.UndoEntry(
+                ops=[{"type": "note.update", "note_ids": [1], "midi": 61}],
+                actor="user",
+                ts="2026-01-01T00:00:00Z",
+                changes={
+                    "1": score_undo.NoteChange(
+                        part_id="piano", before={"midi": 60}, after={"midi": 61}
+                    )
+                },
+            )
+        ]
+    )
+    score_undo.write_undo_state(undo_state_path, stale_state)
+
+    dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+
+    reloaded = score_undo.read_undo_state(undo_state_path)
+    assert reloaded.done == []
+    assert reloaded.undone == []
 
 
 def test_quantize_stage_sets_pedal_ticks(
