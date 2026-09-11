@@ -60,6 +60,13 @@ export function TransportBar({ projectId }: TransportBarProps) {
   const audioVolumeRef = useRef<Tone.Volume | null>(null);
   const playersRef = useRef<{ name: string; player: Tone.Player }[]>([]);
   const rafRef = useRef<number | null>(null);
+  // #34-M3レビュー指摘: 曲終端の自動停止用`scheduleOnce`のイベントIDを保持する。
+  // 再生開始のたびに`transport.cancel(0)`(Transport上のスケジュールを全消去)
+  // していたが、これは`Tone.Part`が`.start(0)`で内部的にスケジュールした
+  // ノートイベントも巻き添えで消してしまい、MIDIモードが無音になる原因だった
+  // (Part自体は`notes`が変わらない限り作り直されないため)。前回のIDだけを
+  // `transport.clear()`で個別に解除する。
+  const stopEventIdRef = useRef<number | null>(null);
   const boundariesRef = useRef<number[]>([0]);
   const tickMappingPointsRef = useRef<{ sec: number; tick: number }[]>([]);
 
@@ -256,8 +263,13 @@ export function TransportBar({ projectId }: TransportBarProps) {
     }
     // #34: 曲の終端(source.duration_sec)で自動停止する。再生開始のたびに
     // 直前のスケジュールが残っていれば重複するため、開始前に一旦クリアする。
-    transport.cancel(0);
-    transport.scheduleOnce(() => {
+    // #34-M3レビュー指摘: `transport.cancel(0)`はTransport上の全スケジュールを
+    // 消去するため、MIDI再生用に`Tone.Part`が`.start(0)`で内部スケジュール
+    // 済みのノートイベントも巻き添えで消えてしまう(Partは`notes`が変わらない
+    // 限り作り直されないため、以降MIDIモードが無音になる)。前回の自動停止
+    // イベントIDだけを`transport.clear()`で個別に解除する。
+    if (stopEventIdRef.current != null) transport.clear(stopEventIdRef.current);
+    stopEventIdRef.current = transport.scheduleOnce(() => {
       handleStop();
     }, durationSec);
     transport.start();
