@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as Tone from "tone";
 import { getStemAudioUrl } from "../api/client";
 import { useScore } from "../hooks/useScore";
@@ -85,9 +85,24 @@ export function TransportBar({ projectId }: TransportBarProps) {
     };
   }, []);
 
+  // rAFループ(高頻度)や各種ハンドラから呼ぶ、Tone.Transportの現在位置を
+  // playbackStoreへ反映する処理。`useCallback`にして、実際に依存する`tempoMap`
+  // (score由来、scoreが変わらない限り参照は安定)が変わらない限り毎レンダー
+  // 再生成されないようにする(下の境界計算effectの依存配列に安全に含めるため)。
+  const syncPosition = useCallback(() => {
+    const positionSec = Tone.getTransport().seconds;
+    const positionTick = secondsToTick(tickMappingNotesRef.current, positionSec);
+    const currentBar = barNumberForTick(boundariesRef.current, positionTick);
+    const bpm = bpmAtBar(tempoMap, currentBar);
+    usePlaybackStore.setState({ positionSec, positionTick, currentBar, bpm });
+  }, [tempoMap]);
+
   // 小節境界(tick<->秒変換用の点列/BPM表示用のtempo_mapはstateではなくrefに
   // 保持し、rAFループ(高頻度)から毎回`score`をクロージャ経由で読まなくても
   // 済むようにする(#30のドラッグプレビューと同じ「高頻度アクセスはrefで」方針)。
+  // 更新後に`syncPosition()`を呼ぶことで、再生開始前(positionSec=0)でも
+  // score読み込み直後の時点でBar 1のBPMが表示されるようにする(呼ばないと
+  // playbackStoreの初期値である既定120のままになってしまう)。
   useEffect(() => {
     tickMappingNotesRef.current = notes
       .filter((n) => n.onset_tick != null)
@@ -97,7 +112,8 @@ export function TransportBar({ projectId }: TransportBarProps) {
       1,
     );
     boundariesRef.current = barBoundariesTicks(timeSignatures, divisions, lastTick);
-  }, [notes, timeSignatures, divisions]);
+    syncPosition();
+  }, [notes, timeSignatures, divisions, syncPosition]);
 
   // MIDI再生: scoreのノートが変わるたびにTone.Partを作り直す。編集操作の
   // たびに(再生中でも)作り直すため、再生中に編集すると一瞬途切れる/巻き戻る
@@ -177,14 +193,6 @@ export function TransportBar({ projectId }: TransportBarProps) {
       playersRef.current = [];
     };
   }, [stems, projectId]);
-
-  function syncPosition() {
-    const positionSec = Tone.getTransport().seconds;
-    const positionTick = secondsToTick(tickMappingNotesRef.current, positionSec);
-    const currentBar = barNumberForTick(boundariesRef.current, positionTick);
-    const bpm = bpmAtBar(tempoMap, currentBar);
-    usePlaybackStore.setState({ positionSec, positionTick, currentBar, bpm });
-  }
 
   function loop() {
     syncPosition();
