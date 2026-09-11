@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ScoreIR } from "../api/client";
 import { getScorePreviewMusicXml } from "../api/client";
 import { barBoundariesTicks, barNumberForTick } from "../lib/pianoRoll";
+import { usePlaybackStore } from "../stores/playbackStore";
 
 interface ScorePreviewProps {
   projectId: string;
@@ -18,7 +19,7 @@ const INPUT_CLASS =
   "w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500";
 
 /**
- * #33: OSMDによる楽譜プレビュー(FR-11/NFR-03)。
+ * #33/#34: OSMDによる楽譜プレビュー(FR-11/NFR-03)+再生カーソル連動(FR-12)。
  *
  * OSMDインスタンスはマウント時に1回だけ生成し(`osmdRef`)、`score`propの
  * 変更を500msデバウンスしてから`GET /score/preview.musicxml`を再取得→
@@ -28,8 +29,13 @@ const INPUT_CLASS =
  * 表示範囲(小節)は2通りの経路で決まる: (1) `fromBar`/`toBar`入力欄
  * (両方空欄なら手動指定なし)、(2) 手動指定が無い場合、ピアノロールで
  * ちょうど1件選択されているノートの小節を中心とした自動追従(#33設計:
- * 「ピアノロールとのカーソル連動」を、#34(TransportBar)が担う再生位置ベース
- * の連動とは別に、選択ベースの簡易版として実装する)。
+ * 「ピアノロールとのカーソル連動」を選択ベースの簡易版として実装する)。
+ *
+ * 再生中のカーソル連動(#34)は上記の表示範囲とは独立に動く: `playbackStore`の
+ * `currentBar`が変わるたびにOSMDの`Cursor`(`nextMeasure()`/`previousMeasure()`)
+ * を小節単位で追従させる(音符単位の精密な追従はスコープ外)。手動で表示範囲を
+ * 絞っている間に再生中の小節がその範囲外になった場合、カーソル自体は動くが
+ * 画面上には見えない(既知の制約として許容する)。
  *
  * OSMDには明示的なdispose APIが無いため、このコンポーネントが再マウントされる
  * (親`PianoRollEditor`は`key={projectId}`でプロジェクトごとに再マウントする)
@@ -56,6 +62,12 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
   // `latestMutationIdRef`と同じ考え方)。アンマウント時にもインクリメントし、
   // 未マウント後の`setState`を防ぐ。
   const latestRequestIdRef = useRef(0);
+  // #34: OSMDカーソルの現在位置(小節番号、1始まり)。`nextMeasure()`/
+  // `previousMeasure()`は相対移動APIのため、直前の同期位置を覚えておき
+  // 差分から呼び分ける必要がある。
+  const lastSyncedBarRef = useRef(1);
+  const currentBar = usePlaybackStore((s) => s.currentBar);
+  const isPlaying = usePlaybackStore((s) => s.isPlaying);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -162,6 +174,41 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
     }
     osmd.render();
   }, [effectiveFromBar, effectiveToBar, loaded]);
+
+  // #34: 譜面が(再)ロードされた直後は小節1から同期を始める(直前のプロジェクト
+  // /直前ロードの小節位置を引き継がない)。
+  useEffect(() => {
+    if (loaded) lastSyncedBarRef.current = 1;
+  }, [loaded]);
+
+  // #34: TransportBar(playbackStore)の再生状態に合わせてOSMDカーソルの表示を
+  // 切り替える。ピアノロールとOSMDのカーソル連動(#34の作業項目)を、
+  // 小節(bar)単位の粒度で実装する(#34設計判断: OSMDの`Cursor`が
+  // `nextMeasure()`/`previousMeasure()`という小節単位のAPIしか持たないため、
+  // 音符単位の精密な追従はスコープ外とする)。
+  useEffect(() => {
+    const osmd = osmdRef.current;
+    if (!osmd || !loaded) return;
+    if (isPlaying) osmd.cursor.show();
+    else osmd.cursor.hide();
+  }, [isPlaying, loaded]);
+
+  useEffect(() => {
+    const osmd = osmdRef.current;
+    if (!osmd || !loaded) return;
+    const delta = currentBar - lastSyncedBarRef.current;
+    if (delta === 1) {
+      osmd.cursor.nextMeasure();
+    } else if (delta === -1) {
+      osmd.cursor.previousMeasure();
+    } else if (delta !== 0) {
+      // 連続していない移動(シーク・巻き戻し・初回同期)は一旦先頭へ戻してから
+      // 目的の小節まで進める。
+      osmd.cursor.reset();
+      for (let i = 1; i < currentBar; i += 1) osmd.cursor.nextMeasure();
+    }
+    lastSyncedBarRef.current = currentBar;
+  }, [currentBar, loaded]);
 
   return (
     <section className="space-y-3 rounded-lg border border-gray-200 p-4">
