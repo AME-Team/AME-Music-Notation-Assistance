@@ -30,10 +30,9 @@ const MODE_BUTTON_CLASS = (active: boolean) =>
  * 即応性の意図を損なう)。
  *
  * 再生対象は`score.parts[0]`のみ(#30以来のこのプロジェクトの既存スコープ
- * 限定「先頭パートのみ編集/表示対象」を踏襲)。ステムは`useMixStore`
- * (`TrackList`と共有)の**マウント時点**のソロ/ミュート状態のみ初期値として
- * 反映する(その後のTrackList側の操作にライブ追従はしない、意図的なスコープ
- * 限定)。
+ * 限定「先頭パートのみ編集/表示対象」を踏襲)。ステムのソロ/ミュートは
+ * `useMixStore`(`TrackList`と共有)をライブ購読して反映する(`TrackList`側で
+ * 操作した結果が再生中でも即座に効く)。
  *
  * 親`ProjectWorkspace`は他のプロジェクト依存コンポーネント
  * (`PianoRollEditor`/`TrackList`と同様)`key={projectId}`でこのコンポーネント
@@ -46,15 +45,20 @@ export function TransportBar({ projectId }: TransportBarProps) {
   const [error, setError] = useState<string | null>(null);
   const mode = usePlaybackStore((s) => s.mode);
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
-  const positionSec = usePlaybackStore((s) => s.positionSec);
   const currentBar = usePlaybackStore((s) => s.currentBar);
   const bpm = usePlaybackStore((s) => s.bpm);
+  // #34-M3レビュー指摘: `positionSec`は再生中rAFごと(約60fps)に変わるため、
+  // これをセレクタで購読すると`TransportBar`全体が毎フレーム再レンダーされ、
+  // playbackStoreの設計意図(高頻度更新はgetState()直読み、`PianoRoll`と同じ
+  // 方針)に反する。時間表示だけはDOMを`ref`経由で直接書き換え、Reactの
+  // 再レンダーを経由しない(`PianoRoll`のCanvas直接描画と同じ考え方)。
+  const timeTextRef = useRef<HTMLSpanElement>(null);
 
   const synthRef = useRef<Tone.PolySynth | null>(null);
   const partRef = useRef<Tone.Part | null>(null);
   const midiVolumeRef = useRef<Tone.Volume | null>(null);
   const audioVolumeRef = useRef<Tone.Volume | null>(null);
-  const playersRef = useRef<Tone.Player[]>([]);
+  const playersRef = useRef<{ name: string; player: Tone.Player }[]>([]);
   const rafRef = useRef<number | null>(null);
   const boundariesRef = useRef<number[]>([0]);
   const tickMappingNotesRef = useRef<{ onset_sec: number; onset_tick: number | null }[]>([]);
@@ -97,6 +101,15 @@ export function TransportBar({ projectId }: TransportBarProps) {
     usePlaybackStore.setState({ positionSec, positionTick, currentBar, bpm });
   }, [tempoMap]);
 
+  // `syncPosition`と同じ理由でuseCallback化する(下の境界計算effectの依存配列に
+  // 安全に含めるため)。`positionSec`自体は`usePlaybackStore.getState()`で直読み
+  // し、Reactのセレクタ購読は使わない。
+  const updateTimeText = useCallback(() => {
+    if (!timeTextRef.current) return;
+    const sec = usePlaybackStore.getState().positionSec;
+    timeTextRef.current.textContent = `${formatTime(sec)} / ${formatTime(durationSec)}`;
+  }, [durationSec]);
+
   // 小節境界(tick<->秒変換用の点列/BPM表示用のtempo_mapはstateではなくrefに
   // 保持し、rAFループ(高頻度)から毎回`score`をクロージャ経由で読まなくても
   // 済むようにする(#30のドラッグプレビューと同じ「高頻度アクセスはrefで」方針)。
@@ -113,7 +126,8 @@ export function TransportBar({ projectId }: TransportBarProps) {
     );
     boundariesRef.current = barBoundariesTicks(timeSignatures, divisions, lastTick);
     syncPosition();
-  }, [notes, timeSignatures, divisions, syncPosition]);
+    updateTimeText();
+  }, [notes, timeSignatures, divisions, syncPosition, updateTimeText]);
 
   // MIDI再生: scoreのノートが変わるたびにTone.Partを作り直す。編集操作の
   // たびに(再生中でも)作り直すため、再生中に編集すると一瞬途切れる/巻き戻る
@@ -151,7 +165,9 @@ export function TransportBar({ projectId }: TransportBarProps) {
   // ステム再生: ステム一覧(分離の再実行時のみ変わる)が変わるたびに全プレイヤーを
   // 作り直す。`fetchAudioObjectUrl`ベースの`getStemAudioUrl`(既存、TrackList/
   // AudioPlayerと同じ認証済みfetch→Blob→objectURL、`file://`を使わない、
-  // NFR-17)をそのまま再利用する。
+  // NFR-17)をそのまま再利用する。呼び出しのたびに新規fetch+新規objectURLが
+  // 発行される(キャッシュ/共有はしない)ため、ここでrevokeしてもTrackList側の
+  // 独立したobjectURLに影響しない。
   useEffect(() => {
     if (!audioVolumeRef.current || !stems || stems.length === 0) {
       playersRef.current = [];
@@ -159,7 +175,11 @@ export function TransportBar({ projectId }: TransportBarProps) {
     }
     let cancelled = false;
     const audioVolume = audioVolumeRef.current;
-    const created: Tone.Player[] = [];
+    const created: { name: string; player: Tone.Player }[] = [];
+    // #34-M3レビュー指摘: 成功時のobjectURLも保持し、クリーンアップで解放する
+    // (キャンセル時は既にrevokeしているが、成功時は`player.dispose()`だけでは
+    // objectURL自体は解放されずリークしていた)。
+    const createdUrls: string[] = [];
 
     Promise.all(
       stems.map(async (name) => {
@@ -176,10 +196,11 @@ export function TransportBar({ projectId }: TransportBarProps) {
             URL.revokeObjectURL(url);
             return;
           }
+          createdUrls.push(url);
           player.mute = !useMixStore.getState().isAudible(name);
           player.connect(audioVolume);
           player.sync().start(0);
-          created.push(player);
+          created.push({ name, player });
           playersRef.current = created;
         } catch (err) {
           if (!cancelled) setError((err as Error).message);
@@ -189,13 +210,30 @@ export function TransportBar({ projectId }: TransportBarProps) {
 
     return () => {
       cancelled = true;
-      for (const player of created) player.dispose();
+      for (const { player } of created) player.dispose();
+      for (const url of createdUrls) URL.revokeObjectURL(url);
       playersRef.current = [];
     };
   }, [stems, projectId]);
 
+  // #34-M3レビュー指摘: ステムのソロ/ミュートをマウント時点だけでなくライブに
+  // 反映する(FR-12の聴き比べ用途では、TrackList側の操作が再生に効かないと
+  // 混乱しうるため)。`useMixStore`の生の`subscribe`(Reactフックではない)を使い、
+  // `TransportBar`自体の再レンダーは発生させない(`playersRef`を直接更新する
+  // だけで十分なため)。
+  useEffect(() => {
+    const unsubscribe = useMixStore.subscribe(() => {
+      const { isAudible } = useMixStore.getState();
+      for (const { name, player } of playersRef.current) {
+        player.mute = !isAudible(name);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
   function loop() {
     syncPosition();
+    updateTimeText();
     if (Tone.getTransport().state === "started") {
       rafRef.current = requestAnimationFrame(loop);
     }
@@ -209,6 +247,7 @@ export function TransportBar({ projectId }: TransportBarProps) {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       usePlaybackStore.setState({ isPlaying: false });
       syncPosition();
+      updateTimeText();
       return;
     }
     try {
@@ -235,11 +274,13 @@ export function TransportBar({ projectId }: TransportBarProps) {
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     usePlaybackStore.setState({ isPlaying: false });
     syncPosition();
+    updateTimeText();
   }
 
   function handleRewind() {
     Tone.getTransport().seconds = 0;
     syncPosition();
+    updateTimeText();
   }
 
   function handleSetMode(next: PlaybackMode) {
@@ -278,8 +319,8 @@ export function TransportBar({ projectId }: TransportBarProps) {
           ⏹
         </button>
       </div>
-      <span className="text-sm text-gray-700">
-        {formatTime(positionSec)} / {formatTime(durationSec)}
+      <span ref={timeTextRef} className="text-sm text-gray-700">
+        {formatTime(usePlaybackStore.getState().positionSec)} / {formatTime(durationSec)}
       </span>
       <span className="text-sm text-gray-700">Bar {currentBar}</span>
       <span className="text-sm text-gray-700">♩={Math.round(bpm)}</span>
