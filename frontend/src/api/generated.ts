@@ -306,10 +306,18 @@ export interface paths {
          *     パターン): リクエスト開始時に読んだ生JSON(`raw_before`)を保持し、
          *     `apply_ops`はその場でパースした`ScoreIR`(まだ書き込んでいない)に対して
          *     行う。書き込み直前に再読込して`raw_before`と一致するか確認し、不一致なら
-         *     409。`read_score_or_404`(単に読んでパースするだけ)ではなく生JSONを直接
-         *     読むのは、`run_quantize_stage`の2巡目レビュー指摘と同じ理由: `raw_before`用
-         *     の読み取りと、モデル構築に使う読み取りを分離すると、その間の並行書き込みを
-         *     検出できずlost-updateになる。
+         *     409(`_read_score_raw_or_404`のdocstring参照)。
+         *
+         *     #32-M3レビュー指摘: `score/current.json`だけでなく`score/undo_state.json`も
+         *     同じ比較対象に含める。このエンドポイントは`_record_edit_or_warn`経由で
+         *     undo_state.jsonも更新するため、対象に含めないと「本リクエストが
+         *     score/ops.jsonlへ追記→undo_state.jsonを更新するまでの間に、別リクエスト
+         *     (`/score/undo`等)がundo_state.jsonを読んで書き換える」という競合を
+         *     見逃し、どちらか一方の更新が消える(lost update)。ただし
+         *     `_record_edit_or_warn`自身がこのチェックの後でundo_state.jsonを再度
+         *     読み直すため、そこから実際に書き込むまでの狭い窓は依然として残る
+         *     (`patch_beatmap`等で既に許容されているのと同種の、単一ユーザー向け
+         *     デスクトップアプリとして許容するTOCTOUギャップ)。
          */
         post: operations["apply_score_ops_api_projects__project_id__score_ops_post"];
         delete?: never;
