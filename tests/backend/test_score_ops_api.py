@@ -291,3 +291,90 @@ def test_concurrent_modification_returns_409(
     final = storage.read_json(score_path)
     assert final["meta"]["stages"].get("_concurrent_marker") == {"touched": True}
     assert final["parts"][0]["notes"][0]["midi"] == 60  # 更新は反映されない
+
+
+def test_concurrent_undo_state_modification_returns_409(
+    client: TestClient,
+    settings: Settings,
+    tiny_wav_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回帰(#32-M3レビュー指摘): score/current.jsonだけでなく
+
+    score/undo_state.jsonも並行変更検知の対象に含める。含めないと、本
+    リクエストがscore本体を書き込んでからundo_state.jsonを更新するまでの
+    間に、別リクエスト(/score/undo等)がundo_state.jsonを読んで書き換える
+    競合を見逃し、どちらか一方の更新が消える(lost update)。
+    """
+    import app.api.score as score_module
+
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score(settings, project_id)
+    _write_beatmap_120bpm_4_4(settings, project_id)
+
+    undo_state_path = storage.score_undo_state_path(settings.workspace_dir, project_id)
+    original_apply_ops = score_module.apply_ops
+
+    def _apply_and_concurrently_modify_undo_state(score, ops, anchors):
+        # apply_ops呼び出し中(=raw_undo_before読み取り後、書き込み前)に、別
+        # リクエストがundo_state.jsonを書き換えたことを模擬する。
+        storage.write_json(
+            undo_state_path,
+            {"done": [], "undone": [], "_concurrent_marker": True},
+        )
+        return original_apply_ops(score, ops, anchors)
+
+    monkeypatch.setattr(
+        score_module, "apply_ops", _apply_and_concurrently_modify_undo_state
+    )
+
+    note_id = (
+        ScoreService(workspace_dir=settings.workspace_dir)
+        .read_score(project_id)
+        .parts[0]
+        .notes[0]
+        .id
+    )
+    resp = client.post(
+        f"/api/projects/{project_id}/score/ops",
+        json={"ops": [{"type": "note.update", "note_ids": [note_id], "midi": 61}]},
+    )
+    assert resp.status_code == 409, resp.text
+
+    # スコア本体は書き換わっていない(undo_state側の競合で弾かれたため)。
+    score = storage.read_json(
+        storage.score_current_path(settings.workspace_dir, project_id)
+    )
+    assert score["parts"][0]["notes"][0]["midi"] == 60
+
+
+def test_ops_succeeds_when_undo_state_json_is_corrupted(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#32-M3レビュー指摘、2巡目、HIGH): 破損したundo_state.json
+
+    (不正なJSON)があっても、`/score/ops`は500にならず正常に処理を続ける。
+    `_read_undo_state_raw`は`score_undo.read_undo_state`と同じく
+    OSError/ValueErrorを握りつぶしてNoneへフォールバックする。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score(settings, project_id)
+    _write_beatmap_120bpm_4_4(settings, project_id)
+
+    undo_state_path = storage.score_undo_state_path(settings.workspace_dir, project_id)
+    undo_state_path.parent.mkdir(parents=True, exist_ok=True)
+    undo_state_path.write_text("{not valid json", encoding="utf-8")
+
+    note_id = (
+        ScoreService(workspace_dir=settings.workspace_dir)
+        .read_score(project_id)
+        .parts[0]
+        .notes[0]
+        .id
+    )
+    resp = client.post(
+        f"/api/projects/{project_id}/score/ops",
+        json={"ops": [{"type": "note.update", "note_ids": [note_id], "midi": 61}]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["parts"][0]["notes"][0]["midi"] == 61

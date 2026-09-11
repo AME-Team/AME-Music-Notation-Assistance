@@ -306,12 +306,64 @@ export interface paths {
          *     パターン): リクエスト開始時に読んだ生JSON(`raw_before`)を保持し、
          *     `apply_ops`はその場でパースした`ScoreIR`(まだ書き込んでいない)に対して
          *     行う。書き込み直前に再読込して`raw_before`と一致するか確認し、不一致なら
-         *     409。`read_score_or_404`(単に読んでパースするだけ)ではなく生JSONを直接
-         *     読むのは、`run_quantize_stage`の2巡目レビュー指摘と同じ理由: `raw_before`用
-         *     の読み取りと、モデル構築に使う読み取りを分離すると、その間の並行書き込みを
-         *     検出できずlost-updateになる。
+         *     409(`_read_score_raw_or_404`のdocstring参照)。
+         *
+         *     #32-M3レビュー指摘: `score/current.json`だけでなく`score/undo_state.json`も
+         *     同じ比較対象に含める。このエンドポイントは`_record_edit_or_warn`経由で
+         *     undo_state.jsonも更新するため、対象に含めないと「本リクエストが
+         *     score/ops.jsonlへ追記→undo_state.jsonを更新するまでの間に、別リクエスト
+         *     (`/score/undo`等)がundo_state.jsonを読んで書き換える」という競合を
+         *     見逃し、どちらか一方の更新が消える(lost update)。ただし
+         *     `_record_edit_or_warn`自身がこのチェックの後でundo_state.jsonを再度
+         *     読み直すため、そこから実際に書き込むまでの狭い窓は依然として残る
+         *     (`patch_beatmap`等で既に許容されているのと同種の、単一ユーザー向け
+         *     デスクトップアプリとして許容するTOCTOUギャップ)。
          */
         post: operations["apply_score_ops_api_projects__project_id__score_ops_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/score/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undo Score Ops
+         * @description #32: 直近の編集を1つ元に戻す。Undoスタックが空なら`applied=false`で200を返す
+         *
+         *     (「元に戻す操作が無い」はエラーではないため)。
+         */
+        post: operations["undo_score_ops_api_projects__project_id__score_undo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/score/redo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Redo Score Ops
+         * @description #32: 直近にUndoした編集を1つやり直す。Redoスタックが空なら`applied=false`で
+         *
+         *     200を返す。
+         */
+        post: operations["redo_score_ops_api_projects__project_id__score_redo_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1211,6 +1263,108 @@ export interface operations {
                 "application/json": components["schemas"]["ScoreOpsRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description score not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description score modified concurrently */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undo_score_ops_api_projects__project_id__score_undo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description score not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description score modified concurrently */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    redo_score_ops_api_projects__project_id__score_redo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
