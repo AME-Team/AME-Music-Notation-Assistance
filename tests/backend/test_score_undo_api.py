@@ -275,3 +275,22 @@ def test_undo_concurrent_undo_state_modification_returns_409(
         storage.score_current_path(settings.workspace_dir, project_id)
     )
     assert score["parts"][0]["notes"][0]["midi"] == 67  # undoは反映されない
+
+
+def test_undo_succeeds_when_undo_state_json_is_corrupted(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#32-M3レビュー指摘、2巡目、HIGH): 破損したundo_state.json
+
+    があっても`/score/undo`は500にならず、スタックが無い(空扱い)ものとして
+    `applied=false`で200を返す。
+    """
+    project_id, _ = _setup(client, settings, tiny_wav_bytes)
+
+    undo_state_path = storage.score_undo_state_path(settings.workspace_dir, project_id)
+    undo_state_path.parent.mkdir(parents=True, exist_ok=True)
+    undo_state_path.write_text("{not valid json", encoding="utf-8")
+
+    resp = client.post(f"/api/projects/{project_id}/score/undo")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["applied"] is False

@@ -52,12 +52,31 @@ def _read_score_raw_or_404(project_id: str, settings: Settings) -> tuple[dict, S
 
 
 def _read_undo_state_raw(project_id: str, settings: Settings) -> dict | None:
-    """`undo_state.json`の生JSON(無ければ`None`)。#32-M3レビュー指摘対応:
+    """`undo_state.json`の生JSON(無い/読み取れなければ`None`)。#32-M3レビュー指摘対応:
 
     スコア本体と同じ楽観的並行性制御をこのファイルにも及ぼすための読み取り。
+
+    #32-M3レビュー指摘(2巡目、HIGH): 破損した`undo_state.json`
+    (不正なJSON/クラッシュ時の部分書き込み等)に対して`storage.read_json`が
+    `json.JSONDecodeError`を送出すると、`score_undo.read_undo_state`が
+    まさにこの状況を握りつぶして空状態へフォールバックする設計(#32)に
+    反して、この生読み取りだけが例外を伝播させ`/score/ops`等を丸ごと500に
+    してしまう。`read_undo_state`と同じ`except (OSError, ValueError)`で
+    フォールバックする(`None`は「ファイルが無い」と同じ扱いになるため、
+    後続の比較は「変化した」側に倒れ、安全側の409またはself-healing
+    (次の書き込みで上書きされる)につながる)。
     """
     path = storage.score_undo_state_path(settings.workspace_dir, project_id)
-    return storage.read_json(path) if path.exists() else None
+    if not path.exists():
+        return None
+    try:
+        return storage.read_json(path)
+    except (OSError, ValueError) as exc:
+        print(
+            f"[score] warning: undo_state.json is unreadable for project {project_id}: {exc}",
+            file=sys.stderr,
+        )
+        return None
 
 
 def _record_edit_or_warn(
