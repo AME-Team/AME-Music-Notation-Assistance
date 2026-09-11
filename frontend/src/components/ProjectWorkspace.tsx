@@ -17,6 +17,7 @@ import { BeatGridEditor } from "./BeatGridEditor";
 import { BeatGridOverlay } from "./BeatGridOverlay";
 import { PianoRollEditor } from "./PianoRollEditor";
 import { TrackList } from "./TrackList";
+import { TransportBar } from "./TransportBar";
 import { Waveform } from "./Waveform";
 
 const PRESET_LABEL: Record<SeparationPreset, string> = {
@@ -325,6 +326,8 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
         <h3 className="text-lg font-semibold text-gray-700">トラック</h3>
         <TrackList key={projectId} projectId={projectId} />
       </section>
+
+      <TransportBar key={projectId} projectId={projectId} />
     </div>
   );
 }
