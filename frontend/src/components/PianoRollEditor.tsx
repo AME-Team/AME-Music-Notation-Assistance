@@ -19,8 +19,9 @@ const BUTTON_CLASS =
  * 常にマウントしてよい)。
  *
  * ピアノロール編集UI自体はM2で意図的に見送られていた(ユーザー決定済み、M3の
- * スコープ)。楽譜プレビュー(#33)・再生同期(#34)・視覚エンコーディング/
- * Inspector(#35)は未実装で、それぞれ後続PRで対応する。
+ * スコープ)。楽譜プレビュー(#33)・再生同期(#34、`TransportBar`は
+ * `ProjectWorkspace`が別途マウントする)は実装済み。視覚エンコーディング/
+ * Inspector(#35)は未実装で、後続PRで対応する。
  */
 export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
   const { data: score, isLoading, error } = useScore(projectId);
