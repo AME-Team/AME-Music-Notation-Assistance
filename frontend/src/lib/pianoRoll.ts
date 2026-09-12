@@ -22,6 +22,37 @@ export interface PianoRollNote {
   duration_tick: number;
   midi: number;
   status: string;
+  provenance: string;
+  flags: string[];
+}
+
+/** #35: 出自(`provenance`)ごとの塗り/枠線パターン(設計書§12.4)。 */
+export interface ProvenanceStyle {
+  /** 塗り色。 */
+  fill: string;
+  /** `CanvasRenderingContext2D.setLineDash()`にそのまま渡すダッシュパターン
+   * (`[]`は実線)。色だけでなくパターンでも出自を区別できるようにする
+   * (色覚特性への配慮、設計書§12.4の作業項目)。本番の色覚シミュレーション
+   * ツールでの検証はこの環境では実施できないため、「色+パターンの2軸で
+   * 区別できる」設計方針を満たすことをもって十分とする。
+   */
+  dash: number[];
+  lineWidth: number;
+}
+
+const DEFAULT_PROVENANCE_STYLE: ProvenanceStyle = { fill: "#9ca3af", dash: [], lineWidth: 1 };
+
+export const PROVENANCE_STYLE: Record<string, ProvenanceStyle> = {
+  amt: DEFAULT_PROVENANCE_STYLE, // グレー実線: AMT生出力
+  baseline: { fill: "#3b82f6", dash: [], lineWidth: 1 }, // 青実線: L0決定論的整音済み
+  llm: { fill: "#a855f7", dash: [2, 2], lineWidth: 1 }, // 紫点線: L1が変更(要レビュー)
+  agent: { fill: "#d946ef", dash: [6, 2, 2, 2], lineWidth: 1 }, // マゼンタ破線点: L2が変更(要レビュー)
+  user: { fill: "#f97316", dash: [], lineWidth: 2 }, // オレンジ太実線: 手動編集済み
+};
+
+/** 未知の`provenance`値(スキーマ上あり得ないが、防御的に)は`amt`相当で描く。 */
+export function provenanceStyle(provenance: string): ProvenanceStyle {
+  return PROVENANCE_STYLE[provenance] ?? DEFAULT_PROVENANCE_STYLE;
 }
 
 /** `bar`時点で有効な拍子`(numerator, denominator)`。指定が無ければ4/4相当。
@@ -159,7 +190,10 @@ function upperBoundByOnsetTick(notes: PianoRollNote[], target: number): number {
   return lo;
 }
 
-export type HitRegion = "move" | "resize-right";
+/** #35: `"restore"`は削除済みノートのクリックで復活させる操作(設計書§12.4
+ * 「クリックで復活」)。ドラッグ(移動/リサイズ)の対象にはならない。
+ */
+export type HitRegion = "move" | "resize-right" | "restore";
 
 export interface NoteHit {
   note: PianoRollNote;
@@ -173,6 +207,10 @@ const RESIZE_HANDLE_WIDTH_PX = 8;
  * 指定したtick/midi位置にあるノートを探す(#30: ヒットテスト)。`sortedNotes`は
  * `visibleNoteRange`で絞り込んだ後の(可視範囲付近の)配列を渡す想定。
  * 複数重なる場合は最後に描画される(=配列の後方にある)ノートを優先する。
+ *
+ * `status === "deleted"`のノートも対象に含める(#35: クリックで復活)。
+ * `"muted"`(現状どのパイプラインも設定しない)は#30時点から一貫して対象外
+ * のまま維持する。
  */
 export function hitTestNote(
   sortedNotes: PianoRollNote[],
@@ -182,10 +220,13 @@ export function hitTestNote(
 ): NoteHit | null {
   for (let i = sortedNotes.length - 1; i >= 0; i -= 1) {
     const note = sortedNotes[i];
-    if (note.status !== "active") continue;
+    if (note.status === "muted") continue;
     if (Math.round(note.midi) !== Math.round(midi)) continue;
     const end = note.onset_tick + note.duration_tick;
     if (tick < note.onset_tick || tick > end) continue;
+    if (note.status === "deleted") {
+      return { note, region: "restore" };
+    }
     // #30-M3レビュー指摘: handleWidthを固定px幅のままにすると、低ズーム
     // (pxPerTickが小さい)時や短いノートでハンドル幅がノート全体を覆って
     // しまい、"move"領域が消えて移動操作が不能になる。ノート幅の半分を

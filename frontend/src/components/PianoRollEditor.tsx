@@ -87,6 +87,8 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
       duration_tick: n.duration_tick,
       midi: n.midi,
       status: n.status,
+      provenance: n.provenance,
+      flags: n.flags,
     }));
 
   const selectedArray = [...selectedNoteIds];
