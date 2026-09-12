@@ -8,6 +8,7 @@ from app.domain.score_ops import (
     NoteAddOp,
     NoteDeleteOp,
     NoteMergeOp,
+    NoteRestoreOp,
     NoteSplitOp,
     NoteUpdateOp,
     PartTransposeOctaveOp,
@@ -216,6 +217,31 @@ class TestNoteDelete:
         score = _make_score()
         with pytest.raises(ScoreOpError, match="note not found"):
             apply_ops(score, [NoteDeleteOp(note_ids=[9999])], _ANCHORS)
+
+
+class TestNoteRestore:
+    def test_restores_a_deleted_note_and_marks_user_provenance(self) -> None:
+        score = _make_score()
+        note = _add_note(score, status="deleted", provenance="amt")
+        apply_ops(score, [NoteRestoreOp(note_ids=[note.id])], _ANCHORS)
+        assert note.status == "active"
+        assert note.provenance == "user"
+
+    def test_rejects_unknown_note_id(self) -> None:
+        score = _make_score()
+        with pytest.raises(ScoreOpError, match="note not found"):
+            apply_ops(score, [NoteRestoreOp(note_ids=[9999])], _ANCHORS)
+
+    def test_is_a_noop_for_a_note_that_is_already_active(self) -> None:
+        """#35-M3レビュー指摘: 既にactiveなノートへの誤送信でprovenanceを
+
+        上書きしない(AI変更のレビュー情報を保持したままにする)。
+        """
+        score = _make_score()
+        note = _add_note(score, status="active", provenance="llm")
+        apply_ops(score, [NoteRestoreOp(note_ids=[note.id])], _ANCHORS)
+        assert note.status == "active"
+        assert note.provenance == "llm"
 
 
 class TestNoteSplit:

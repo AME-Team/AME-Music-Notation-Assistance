@@ -99,6 +99,20 @@ describe("applyOpsOptimistically", () => {
     expect(result.parts[0].notes[0].status).toBe("deleted");
   });
 
+  it("note.restore reactivates a deleted note", () => {
+    const s = score([part({ notes: [note({ id: 1, status: "deleted" })] })]);
+    const result = applyOpsOptimistically(s, [{ type: "note.restore", note_ids: [1] }]);
+    expect(result.parts[0].notes[0].status).toBe("active");
+    expect(result.parts[0].notes[0].provenance).toBe("user");
+  });
+
+  it("note.restore is a no-op for a note that is already active (#35-M3 review)", () => {
+    const s = score([part({ notes: [note({ id: 1, status: "active", provenance: "llm" })] })]);
+    const result = applyOpsOptimistically(s, [{ type: "note.restore", note_ids: [1] }]);
+    expect(result.parts[0].notes[0].status).toBe("active");
+    expect(result.parts[0].notes[0].provenance).toBe("llm");
+  });
+
   it("note.split creates a second note covering the remainder", () => {
     const s = score([part({ notes: [note({ id: 1, onset_tick: 0, duration_tick: 480 })] })]);
     const result = applyOpsOptimistically(s, [{ type: "note.split", note_id: 1, at_tick: 240 }]);

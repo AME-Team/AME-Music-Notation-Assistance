@@ -599,6 +599,23 @@ export interface components {
             note_ids: number[];
         };
         /**
+         * NoteRestoreOp
+         * @description `note.delete`の逆操作(#35)。`status`を`"active"`へ戻す。
+         *
+         *     Undo(#32)は「直前の操作を取り消す」のに対し、本opは「この特定のノートを
+         *     復元する」という別の意味を持つ(ピアノロール上で削除済みノートを
+         *     クリックして復活させるUI操作に対応する、設計書§12.4「クリックで復活」)。
+         */
+        NoteRestoreOp: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "note.restore";
+            /** Note Ids */
+            note_ids: number[];
+        };
+        /**
          * NoteSplitOp
          * @description 1つのノートを`at_tick`で2つに分割する。
          */
@@ -717,7 +734,7 @@ export interface components {
          */
         ScoreOpsRequest: {
             /** Ops */
-            ops: (components["schemas"]["NoteAddOp"] | components["schemas"]["NoteUpdateOp"] | components["schemas"]["NoteDeleteOp"] | components["schemas"]["NoteSplitOp"] | components["schemas"]["NoteMergeOp"] | components["schemas"]["PartTransposeOctaveOp"])[];
+            ops: (components["schemas"]["NoteAddOp"] | components["schemas"]["NoteUpdateOp"] | components["schemas"]["NoteDeleteOp"] | components["schemas"]["NoteRestoreOp"] | components["schemas"]["NoteSplitOp"] | components["schemas"]["NoteMergeOp"] | components["schemas"]["PartTransposeOctaveOp"])[];
         };
         /** StageStatus */
         StageStatus: {

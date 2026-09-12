@@ -19,6 +19,7 @@ from app.domain.score_ops import (
     NoteDeleteOp,
     NoteMergeOp,
     NoteOp,
+    NoteRestoreOp,
     NoteSplitOp,
     NoteUpdateOp,
     PartTransposeOctaveOp,
@@ -57,6 +58,8 @@ def apply_ops(score: ScoreIR, ops: list[NoteOp], beat_anchors: list[tuple[float,
             _apply_update(score, op, beat_anchors)
         elif isinstance(op, NoteDeleteOp):
             _apply_delete(score, op)
+        elif isinstance(op, NoteRestoreOp):
+            _apply_restore(score, op)
         elif isinstance(op, NoteSplitOp):
             _apply_split(score, op, beat_anchors)
         elif isinstance(op, NoteMergeOp):
@@ -167,6 +170,24 @@ def _apply_delete(score: ScoreIR, op: NoteDeleteOp) -> None:
     for note_id in op.note_ids:
         _, note = _find_note(score, note_id)
         note.status = "deleted"
+        note.provenance = "user"
+
+
+def _apply_restore(score: ScoreIR, op: NoteRestoreOp) -> None:
+    """`_apply_delete`の逆操作(#35)。復元自体もユーザー操作のため
+
+    `provenance="user"`を付与する(削除時と同じ扱い)。
+
+    #35-M3レビュー指摘: 対象が実際に`"deleted"`である場合のみ書き換える。
+    ガード無しだと、既に`"active"`なノートへ`note.restore`を送った場合(内容は
+    何も変えていない)でも出自が無条件に`"user"`へ上書きされ、AI変更のレビュー
+    情報(`provenance_run_id`/`ai_reason`と整合する出自)が失われてしまう。
+    """
+    for note_id in op.note_ids:
+        _, note = _find_note(score, note_id)
+        if note.status != "deleted":
+            continue
+        note.status = "active"
         note.provenance = "user"
 
 

@@ -223,6 +223,36 @@ def test_delete_note_persists_soft_delete(
     assert note["provenance"] == "user"
 
 
+def test_restore_note_persists_active_status(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """#35: `note.restore`(`note.delete`の逆操作)がAPI経由で永続化されること。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score(settings, project_id)
+    _write_beatmap_120bpm_4_4(settings, project_id)
+    note_id = (
+        ScoreService(workspace_dir=settings.workspace_dir)
+        .read_score(project_id)
+        .parts[0]
+        .notes[0]
+        .id
+    )
+    resp = client.post(
+        f"/api/projects/{project_id}/score/ops",
+        json={"ops": [{"type": "note.delete", "note_ids": [note_id]}]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = client.post(
+        f"/api/projects/{project_id}/score/ops",
+        json={"ops": [{"type": "note.restore", "note_ids": [note_id]}]},
+    )
+    assert resp.status_code == 200, resp.text
+    note = resp.json()["parts"][0]["notes"][0]
+    assert note["status"] == "active"
+    assert note["provenance"] == "user"
+
+
 def test_invalid_op_returns_422_and_does_not_persist(
     client: TestClient, settings: Settings, tiny_wav_bytes: bytes
 ) -> None:

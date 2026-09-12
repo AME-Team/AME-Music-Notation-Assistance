@@ -18,6 +18,8 @@ const NOTE = (overrides: Partial<PianoRollNote> = {}): PianoRollNote => ({
   duration_tick: 480,
   midi: 60,
   status: "active",
+  provenance: "amt",
+  flags: [],
   ...overrides,
 });
 
@@ -138,8 +140,15 @@ describe("hitTestNote", () => {
     expect(hitTestNote(notes, 100, 61, 1)).toBeNull();
   });
 
-  it("ignores deleted notes", () => {
-    const notes = [NOTE({ onset_tick: 0, duration_tick: 480, midi: 60, status: "deleted" })];
+  it("reports a restore region for deleted notes (#35: click to restore)", () => {
+    const notes = [NOTE({ id: 1, onset_tick: 0, duration_tick: 480, midi: 60, status: "deleted" })];
+    const hit = hitTestNote(notes, 100, 60, 1);
+    expect(hit?.note.id).toBe(1);
+    expect(hit?.region).toBe("restore");
+  });
+
+  it("still ignores muted notes", () => {
+    const notes = [NOTE({ onset_tick: 0, duration_tick: 480, midi: 60, status: "muted" })];
     expect(hitTestNote(notes, 100, 60, 1)).toBeNull();
   });
 

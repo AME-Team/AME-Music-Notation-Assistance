@@ -95,6 +95,7 @@ export type NoteOp =
   | NoteAddOp
   | components["schemas"]["NoteUpdateOp"]
   | components["schemas"]["NoteDeleteOp"]
+  | components["schemas"]["NoteRestoreOp"]
   | components["schemas"]["NoteSplitOp"]
   | components["schemas"]["NoteMergeOp"]
   | components["schemas"]["PartTransposeOctaveOp"];

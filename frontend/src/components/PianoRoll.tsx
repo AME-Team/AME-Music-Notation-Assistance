@@ -5,6 +5,7 @@ import {
   hitTestNote,
   midiToY,
   type PianoRollNote,
+  provenanceStyle,
   type TimeSignatureEntry,
   tickToX,
   visibleNoteRange,
@@ -20,6 +21,35 @@ const MAX_PX_PER_TICK = 2;
 const DEFAULT_TOP_MIDI = 84;
 const INITIAL_SCROLL_MARGIN_TICK = 480;
 const MIN_DRAG_DISTANCE_PX = 3; // これ未満の移動はクリック(選択)として扱う
+const HATCH_SPACING_PX = 4;
+
+/** #35: `flags: ghost_candidate`ノートの斜線ハッチ(設計書§12.4)。
+ *
+ * `ctx.clip()`で矩形にクリップしてから等間隔の斜線を引く、標準的な
+ * Canvas斜線ハッチの実装。呼び出し元が既に`ctx.save()`/`ctx.restore()`で
+ * 囲んでいる前提(このスコープ内の`clip()`が呼び出し元へ漏れないように)。
+ */
+function drawDiagonalHatch(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.lineWidth = 1;
+  for (let offset = -h; offset < w; offset += HATCH_SPACING_PX) {
+    ctx.beginPath();
+    ctx.moveTo(x + offset, y + h);
+    ctx.lineTo(x + offset + h, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 interface PianoRollProps {
   /** #30/#31: 量子化済み(`onset_tick`/`duration_tick`が設定済み)のノートのみ。
@@ -154,13 +184,17 @@ export function PianoRoll({
       ctx.stroke();
     }
 
-    // ノート。
+    // ノート。#35: 出自(provenance)ごとに塗り/枠線パターンを変える
+    // (設計書§12.4、色だけでなくパターンでも区別できるようにする)。
+    // 削除済み(status==="deleted")も#35からは描画対象にする(以前は完全に
+    // スキップしていた)。"muted"(現状どのパイプラインも設定しない)のみ
+    // 引き続きスキップする。
     const notesNow = sortedNotesRef.current;
     const [startIdx, endIdx] = visibleNoteRange(notesNow, scrollTick, viewEndTick);
     const drag = dragRef.current;
     for (let i = startIdx; i < endIdx; i += 1) {
       const note = notesNow[i];
-      if (note.status !== "active") continue;
+      if (note.status === "muted") continue;
       let onsetTick = note.onset_tick;
       let durationTick = note.duration_tick;
       if (drag?.mode === "move" && drag.noteStarts.has(note.id)) {
@@ -172,14 +206,43 @@ export function PianoRoll({
       const w = Math.max(durationTick * pxPerTick, 2);
       const y = midiToY(note.midi, topMidi, ROW_HEIGHT_PX);
       if (x + w < 0 || x > widthCss || y + ROW_HEIGHT_PX < 0 || y > heightCss) continue;
+
       const isSelected = selectedRef.current.has(note.id);
-      ctx.fillStyle = isSelected ? "#f59e0b" : "#3b82f6";
-      ctx.fillRect(x, y + 1, w, ROW_HEIGHT_PX - 2);
-      if (isSelected) {
-        ctx.strokeStyle = "#78350f";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, y + 1.5, w - 1, ROW_HEIGHT_PX - 3);
+      const isDeleted = note.status === "deleted";
+      const style = provenanceStyle(note.provenance);
+      const rectX = x;
+      const rectY = y + 1;
+      const rectW = w;
+      const rectH = ROW_HEIGHT_PX - 2;
+
+      ctx.save();
+      // #35: 削除済みは「破線アウトライン(半透明)」(設計書§12.4)。塗りは
+      // `note.provenance`をそのまま使うが、`_apply_delete`(services/score_ops.py)
+      // が削除時に常に`provenance="user"`へ上書きするため、削除済みノートの
+      // 塗りは実際には常にuser色(オレンジ)になる(#35-M3レビュー指摘: 削除前の
+      // 出自を判別できるという意味ではない、単に他の状態と同じ`style.fill`
+      // ロジックを再利用しているだけ)。
+      if (isDeleted) ctx.globalAlpha = 0.4;
+      ctx.fillStyle = style.fill;
+      ctx.fillRect(rectX, rectY, rectW, rectH);
+
+      // #35: `flags: ghost_candidate`は斜線ハッチを塗りの上に重ねる
+      // (現状どのパイプラインも設定しないため実際には描画されないが、
+      // 汎用的なロジックとして実装しておく)。
+      if (note.flags.includes("ghost_candidate")) {
+        drawDiagonalHatch(ctx, rectX, rectY, rectW, rectH);
       }
+
+      // 枠線: 削除済みは出自のパターンによらず常に破線に上書きする
+      // (設計書§12.4「破線アウトライン」)。選択中は出自非依存の高コントラスト色
+      // (黒系)の太線に上書きし、色覚特性に関わらず輝度差で選択状態を判別
+      // できるようにする(`user`出自のオレンジ太線と紛らわしくならないよう、
+      // 以前の琥珀色ではなくこちらを使う)。
+      ctx.setLineDash(isDeleted ? [6, 3] : style.dash);
+      ctx.lineWidth = isSelected ? 2 : style.lineWidth;
+      ctx.strokeStyle = isSelected ? "#111827" : style.stroke;
+      ctx.strokeRect(rectX + 0.5, rectY + 0.5, rectW - 1, rectH - 1);
+      ctx.restore();
     }
 
     // 選択矩形。専用のDOMオーバーレイにせず同じCanvas上に直接描く
@@ -321,6 +384,13 @@ export function PianoRoll({
     pointerDownRef.current = { x: e.clientX, y: e.clientY };
     const { tick, midi } = eventToTickMidi(e);
     const hit = hitTestNote(sortedNotesRef.current, tick, midi, viewRef.current.pxPerTick);
+
+    // #35: 削除済みノートのクリックは即座に復活させる(設計書§12.4「クリックで
+    // 復活」)。選択状態は変えず、ドラッグ(移動/リサイズ)にも入らない。
+    if (hit?.region === "restore") {
+      onApplyOps([{ type: "note.restore", note_ids: [hit.note.id] }]);
+      return;
+    }
 
     if (hit) {
       const alreadySelected = selectedRef.current.has(hit.note.id);
