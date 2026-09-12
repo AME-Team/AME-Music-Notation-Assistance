@@ -216,24 +216,31 @@ export async function runQuantizeStage(projectId: string): Promise<{ job_id: str
   return runStage(projectId, "quantize", {});
 }
 
+export type ExportFormat = "musicxml" | "midi";
+
+const EXPORT_FILENAME: Record<ExportFormat, string> = {
+  musicxml: "score.musicxml",
+  midi: "score.mid",
+};
+
 /**
- * #27: Stage 6 MusicXML書き出し。生成物をブラウザのダウンロードとして保存させる
- * (`<a download>`方式。認証ヘッダ付きfetchが必要なため`<a href>`直リンクは使えない)。
- * バックエンドはMIDIも生成できるが(`format: "midi"`)、M2のフロントエンド最小
- * スコープ(ユーザー決定済み)ではMusicXMLのみを露出する。到達しないコード
- * (未使用のformatパラメータ)を残さないため、あえて汎用化しない。
+ * #27/#36: Stage 6 MusicXML/MIDI書き出し。生成物をブラウザのダウンロードとして
+ * 保存させる(`<a download>`方式。認証ヘッダ付きfetchが必要なため`<a href>`
+ * 直リンクは使えない)。M2時点では「バックエンドはMIDIも生成できるが
+ * フロントエンド最小スコープではMusicXMLのみを露出する」という意図的な
+ * 制限があったが、#36(M3)でMIDIエクスポートUIを追加するにあたり汎用化した。
  */
-export async function exportMusicXml(projectId: string): Promise<void> {
+export async function exportScore(projectId: string, format: ExportFormat): Promise<void> {
   const resp = await apiFetch(`/api/projects/${projectId}/export`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ format: "musicxml" }),
+    body: JSON.stringify({ format }),
   });
   const blob = await resp.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "score.musicxml";
+  a.download = EXPORT_FILENAME[format];
   // ダウンロード開始前にURLが無効化されるのを避けるため、`document.body`への
   // 追加とclick()の完了を1マクロタスク挟んでから`revokeObjectURL`する
   // (#27-M2レビュー指摘: `a.click()`直後の同期的なrevokeは、一部環境で
