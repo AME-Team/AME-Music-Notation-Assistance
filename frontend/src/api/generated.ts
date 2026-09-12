@@ -489,14 +489,18 @@ export interface components {
         };
         /**
          * ExportRequest
-         * @description 設計書§11.6の`parts`/`options`による部分エクスポートはM3スコープ。
+         * @description 設計書§11.6の`parts`による部分エクスポート(#36)。`options`は本Issueの
          *
-         *     M2の完了条件(実曲からMusicXMLが出力されスキーマ的に妥当であること)には
-         *     不要であり、`pipeline/export`側も現時点ではパート選択に対応していないため
-         *     受け付けない。`extra="forbid"`(#27-M2レビュー指摘)により`parts`/`options`
-         *     等の未知フィールドを黙って無視せず422で拒否する(Pydantic v2の既定
-         *     `extra="ignore"`のままだと、送っても効果が無いのに送れてしまい、部分
-         *     エクスポートが指定できたと誤認させる)。
+         *     作業内容・設計書抜粋のいずれにも具体的な中身の言及が無いため未実装のまま
+         *     とする。`extra="forbid"`(#27-M2レビュー指摘)により`options`等の未知
+         *     フィールドを黙って無視せず422で拒否する(Pydantic v2の既定`extra="ignore"`
+         *     のままだと、送っても効果が無いのに送れてしまい、指定できたと誤認させる)。
+         *
+         *     `parts`は`None`(既定、全パート)またはpart idのリスト。#30以来このプロジェクト
+         *     は常にピアノ1パートのみを生成するため、実際に複数パートから選択する場面は
+         *     現状無いが、将来複数パート対応時にそのまま使える汎用フィルタとして実装する
+         *     (フロントエンドの選択UIは、選択肢が常に1つしかない現状では意味を持たない
+         *     ため実装しない、#36設計判断)。
          */
         ExportRequest: {
             /**
@@ -504,6 +508,8 @@ export interface components {
              * @enum {string}
              */
             format: "musicxml" | "midi";
+            /** Parts */
+            parts?: string[] | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {

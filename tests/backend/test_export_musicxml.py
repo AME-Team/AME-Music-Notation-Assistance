@@ -332,6 +332,39 @@ class TestRenderMidi:
         assert len(program_changes) == 1
         assert program_changes[0].program == 40
 
+    def test_tempo_map_is_embedded_as_set_tempo(self) -> None:
+        """#36: tempo_mapが実際にSMFの`set_tempo`メタメッセージとして
+
+        埋め込まれることを確認する(DAWでの正しい再生速度に必要)。
+        `build_score`(score_builder.py)はMusicXML/MIDI共有のため
+        `Tempo`オブジェクトの追加自体は既存だが、MIDI側でこれが実際に
+        `set_tempo`として出力されることを検証する専用テストはこれまで
+        無かった。
+        """
+        import io
+
+        import mido
+
+        score = _score(
+            [_piano_part([_note(1, 0, 480)])],
+            tempo_map=[{"bar": 1, "beat": 1.0, "bpm": 140.0}],
+        )
+        midi_bytes = render_midi(score)
+
+        midi_file = mido.MidiFile(file=io.BytesIO(midi_bytes))
+        tempo_messages = [
+            msg
+            for track in midi_file.tracks
+            for msg in track
+            if msg.type == "set_tempo"
+        ]
+        assert len(tempo_messages) == 1
+        # MIDIのテンポは「1拍あたりのマイクロ秒」を整数で表すため、bpmとの
+        # 相互変換に浮動小数点の丸め誤差が乗る(実測: 140.00014000014)。
+        # 既定の相対許容誤差(1e-6)では失敗するため、実用上十分な精度
+        # (0.01bpm)で比較する。
+        assert mido.tempo2bpm(tempo_messages[0].tempo) == pytest.approx(140.0, abs=0.01)
+
 
 class TestRenderMusicxmlReparses:
     def test_output_reparses_with_music21(self) -> None:
