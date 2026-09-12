@@ -12,6 +12,24 @@ interface PianoRollEditorProps {
 const BUTTON_CLASS =
   "rounded-md px-3 py-1.5 text-sm font-medium text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50";
 
+/** #35: レイヤ表示切替(設計書§12.4)の3カテゴリ。`baseline`/`llm`/`agent`
+ * (L0/L1/L2)は「AI提案」としてまとめる(design docの3分類に合わせる、
+ * 5色の出自エンコーディングとは別軸のグルーピング)。
+ */
+type LayerCategory = "amt" | "ai" | "user";
+
+const LAYER_LABEL: Record<LayerCategory, string> = {
+  amt: "AMT原案",
+  ai: "AI提案",
+  user: "手動編集",
+};
+
+function layerCategoryForProvenance(provenance: string): LayerCategory {
+  if (provenance === "amt") return "amt";
+  if (provenance === "user") return "user";
+  return "ai"; // baseline/llm/agent
+}
+
 /**
  * #30/#31/#32: PianoRoll描画+編集操作のコンテナ。ツールバー(削除/分割/結合/
  * ±1オクターブ一括/元に戻す/やり直す)を結線する。Score IR(採譜=transcribe
@@ -28,6 +46,21 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
   const { applyOps, canUndo, canRedo, isMutating, triggerUndo, triggerRedo } =
     useScoreEditing(projectId);
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<number>>(new Set());
+  // #35: レイヤ表示切替(初期値は全カテゴリ表示)。`PianoRollEditor`自体が
+  // 呼び出し元`ProjectWorkspace`から`key={projectId}`で再マウントされるため、
+  // プロジェクト切替時のリセットは自然に賄われる(新規storeは不要)。
+  const [visibleLayers, setVisibleLayers] = useState<Set<LayerCategory>>(
+    () => new Set<LayerCategory>(["amt", "ai", "user"]),
+  );
+
+  function toggleLayer(category: LayerCategory) {
+    setVisibleLayers((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }
 
   // #32: Ctrl+Z(Undo)・Ctrl+Shift+Z/Ctrl+Y(Redo)。BeatGridEditor等の数値入力
   // フォーカス中はネイティブUndoを奪わないよう何もしない。`PianoRollEditor`は
@@ -90,6 +123,13 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
       provenance: n.provenance,
       flags: n.flags,
     }));
+
+  // #35: レイヤ表示切替は表示のみに影響させる(`editableNotes`自体は
+  // split/merge等が選択ノートを引くために使うため、非表示レイヤーの
+  // ノートが選択済みのまま残っていても正しく引けるようにフィルタしない)。
+  const visibleNotes = editableNotes.filter((n) =>
+    visibleLayers.has(layerCategoryForProvenance(n.provenance)),
+  );
 
   const selectedArray = [...selectedNoteIds];
   const canDelete = selectedArray.length >= 1;
@@ -189,11 +229,25 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
             : "クリックで選択(Shiftで複数選択)・ドラッグで移動/範囲選択・右端ドラッグでリサイズ・ダブルクリックで追加・Ctrl+Z/Ctrl+Yで元に戻す/やり直す"}
         </span>
       </div>
+      {/* #35: レイヤ表示切替(設計書§12.4)。 */}
+      <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
+        <span className="text-xs font-medium text-gray-500">表示レイヤ:</span>
+        {(Object.keys(LAYER_LABEL) as LayerCategory[]).map((category) => (
+          <label key={category} className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={visibleLayers.has(category)}
+              onChange={() => toggleLayer(category)}
+            />
+            {LAYER_LABEL[category]}
+          </label>
+        ))}
+      </div>
       {applyOps.isError && (
         <p className="text-sm text-red-600">{(applyOps.error as Error).message}</p>
       )}
       <PianoRoll
-        notes={editableNotes}
+        notes={visibleNotes}
         partId={part.id}
         timeSignatures={score.time_signatures}
         divisions={score.divisions}
