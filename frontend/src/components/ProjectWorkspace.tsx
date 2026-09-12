@@ -1,8 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import type { ExecutionProvider, SeparationPreset } from "../api/client";
+import type { ExecutionProvider, ExportFormat, SeparationPreset } from "../api/client";
 import {
-  exportMusicXml,
+  exportScore,
   runBeatStage,
   runQuantizeStage,
   runSeparateStage,
@@ -50,7 +50,11 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   const [quantizeJobId, setQuantizeJobId] = useState<string | null>(null);
   const [stageError, setStageError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [isExporting, setIsExporting] = useState(false);
+  // #36: MusicXML/MIDIの2つのエクスポートボタンを持つため、どちらが実行中かを
+  // 区別する(このファイルの他のステージボタン(transcribe/quantize)と同じ
+  // 「アクションごとに個別のローディング状態を持つ」既存パターンに合わせる)。
+  const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
+  const isExporting = exportingFormat !== null;
 
   const {
     data: peaks,
@@ -181,15 +185,15 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     }
   }
 
-  async function handleExport() {
+  async function handleExport(format: ExportFormat) {
     setExportError(null);
-    setIsExporting(true);
+    setExportingFormat(format);
     try {
-      await exportMusicXml(projectId);
+      await exportScore(projectId, format);
     } catch (err) {
       setExportError((err as Error).message);
     } finally {
-      setIsExporting(false);
+      setExportingFormat(null);
     }
   }
 
@@ -286,7 +290,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
           )}
           <button
             type="button"
-            onClick={() => void handleExport()}
+            onClick={() => void handleExport("musicxml")}
             // #29-M2レビュー指摘: 量子化ボタンをtranscribe staleで無効化した
             // 意図(古いScore IRからの誤ったMusicXML出力を防ぐ)と揃え、
             // エクスポート側でも同じガードを掛ける(quantize/transcribeの
@@ -294,9 +298,22 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
             disabled={isExporting || quantizeStage?.stale || transcribeStage?.stale}
             className="rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50"
           >
-            {isExporting ? "エクスポート中..." : "MusicXMLをエクスポート"}
+            {exportingFormat === "musicxml" ? "エクスポート中..." : "MusicXMLをエクスポート"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExport("midi")}
+            disabled={isExporting || quantizeStage?.stale || transcribeStage?.stale}
+            className="rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50"
+          >
+            {exportingFormat === "midi" ? "エクスポート中..." : "MIDIをエクスポート"}
           </button>
         </div>
+        {/* #36: 設計書§6 Stage 6「SMFでは音名表記・声部・大譜表が失われる」を明示する。 */}
+        <p className="text-xs text-gray-500">
+          ⚠ MIDI(SMF)形式では音名表記・声部・大譜表の情報は失われます(音高・
+          タイミングのみ保持されます)。記譜情報を保持したい場合はMusicXMLを 使用してください。
+        </p>
         {exportError && <p className="text-sm text-red-600">{exportError}</p>}
       </section>
 

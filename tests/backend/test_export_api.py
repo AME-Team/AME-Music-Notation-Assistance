@@ -141,18 +141,106 @@ def test_export_rejects_unknown_format(
     assert resp.status_code == 422
 
 
-def test_export_rejects_unimplemented_parts_field(
+def test_export_rejects_unimplemented_options_field(
     client: TestClient, settings: Settings, tiny_wav_bytes: bytes
 ) -> None:
-    """回帰(#27-M2レビュー指摘): `parts`/`options`は`pipeline/export`側が未対応
+    """回帰(#27-M2レビュー指摘): `options`は`pipeline/export`側が未対応のため、
 
-    のため、黙って無視せず422で拒否するべき(`ExportRequest`の`extra="forbid"`)。
+    黙って無視せず422で拒否するべき(`ExportRequest`の`extra="forbid"`)。
+    `parts`は#36で実装したため、この回帰テストの対象は`options`のみに絞る。
     """
     project_id = _create_project(client, tiny_wav_bytes)
     _write_score(settings, project_id, quantized=True)
 
     resp = client.post(
         f"/api/projects/{project_id}/export",
+        json={"format": "musicxml", "options": {}},
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def _write_score_with_two_parts(settings: Settings, project_id: str) -> None:
+    """#36: パート選択(`parts`フィルタ)テスト用に2パート(quantized済み)の
+
+    Score IRを書く。
+    """
+    service = ScoreService(workspace_dir=settings.workspace_dir)
+    score = ScoreIR(
+        project_id=project_id,
+        source=SourceInfo(filename="song.wav", duration_sec=2.0, sample_rate=8000),
+    )
+    for part_id, name, midi in (("piano", "Piano", 60), ("bass", "Bass", 40)):
+        part = Part(
+            id=part_id,
+            name=name,
+            midi_program=0,
+            staves=1,
+            clefs=[Clef(staff=1, sign="G", line=2)],
+        )
+        part.notes.append(
+            Note(
+                id=score.allocate_note_id(),
+                onset_sec=0.0,
+                duration_sec=0.5,
+                onset_tick=0,
+                duration_tick=480,
+                midi=midi,
+                velocity=90,
+                provenance="amt",
+                spelling=Spelling(step="C", alter=0, octave=4),
+                voice=1,
+                staff=1,
+            )
+        )
+        score.parts.append(part)
+    service.write_score(project_id, score)
+
+
+def test_export_with_parts_filter_includes_only_selected_parts(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """#36: `parts`を指定すると、指定したpart idのみがエクスポートされる。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score_with_two_parts(settings, project_id)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/export",
         json={"format": "musicxml", "parts": ["piano"]},
+    )
+    assert resp.status_code == 200, resp.text
+    root = ET.fromstring(resp.content)
+    part_ids = [el.get("id") for el in root.findall(".//score-part")]
+    assert part_ids == ["piano"]
+
+
+def test_export_rejects_unknown_part_id(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """#36: 存在しないpart idを指定した場合は422(不正なリクエストとして拒否)。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score_with_two_parts(settings, project_id)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/export",
+        json={"format": "musicxml", "parts": ["nonexistent"]},
+    )
+    assert resp.status_code == 422, resp.text
+
+
+def test_export_rejects_empty_parts_list(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#36 Gate2レビュー指摘): 空リスト`[]`は「全パート」の`None`とは異なり、
+
+    素通しするとパートが1つも無い不正な出力を生成してしまう(MusicXMLの
+    part-listは1つ以上のscore-partが必須)。`Field(min_length=1)`により
+    422で明示的に拒否されることを固定化する。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score_with_two_parts(settings, project_id)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/export",
+        json={"format": "musicxml", "parts": []},
     )
     assert resp.status_code == 422, resp.text

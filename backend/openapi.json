@@ -1167,6 +1167,21 @@
               "midi"
             ],
             "title": "Format"
+          },
+          "parts": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts"
           }
         },
         "additionalProperties": false,
@@ -1175,7 +1190,7 @@
           "format"
         ],
         "title": "ExportRequest",
-        "description": "設計書§11.6の`parts`/`options`による部分エクスポートはM3スコープ。\n\nM2の完了条件(実曲からMusicXMLが出力されスキーマ的に妥当であること)には\n不要であり、`pipeline/export`側も現時点ではパート選択に対応していないため\n受け付けない。`extra=\"forbid\"`(#27-M2レビュー指摘)により`parts`/`options`\n等の未知フィールドを黙って無視せず422で拒否する(Pydantic v2の既定\n`extra=\"ignore\"`のままだと、送っても効果が無いのに送れてしまい、部分\nエクスポートが指定できたと誤認させる)。"
+        "description": "設計書§11.6の`parts`による部分エクスポート(#36)。`options`は本Issueの\n\n作業内容・設計書抜粋のいずれにも具体的な中身の言及が無いため未実装のまま\nとする。`extra=\"forbid\"`(#27-M2レビュー指摘)により`options`等の未知\nフィールドを黙って無視せず422で拒否する(Pydantic v2の既定`extra=\"ignore\"`\nのままだと、送っても効果が無いのに送れてしまい、指定できたと誤認させる)。\n\n`parts`は`None`(既定、全パート)またはpart idのリスト。#30以来このプロジェクト\nは常にピアノ1パートのみを生成するため、実際に複数パートから選択する場面は\n現状無いが、将来複数パート対応時にそのまま使える汎用フィルタとして実装する\n(フロントエンドの選択UIは、選択肢が常に1つしかない現状では意味を持たない\nため実装しない、#36設計判断)。"
       },
       "HTTPValidationError": {
         "properties": {
