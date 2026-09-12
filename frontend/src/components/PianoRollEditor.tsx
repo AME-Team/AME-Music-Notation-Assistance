@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { NoteOp } from "../api/client";
 import { useScore, useScoreEditing } from "../hooks/useScore";
 import type { PianoRollNote } from "../lib/pianoRoll";
+import { Inspector } from "./Inspector";
 import { PianoRoll } from "./PianoRoll";
 import { ScorePreview } from "./ScorePreview";
 
@@ -31,15 +32,15 @@ function layerCategoryForProvenance(provenance: string): LayerCategory {
 }
 
 /**
- * #30/#31/#32: PianoRoll描画+編集操作のコンテナ。ツールバー(削除/分割/結合/
- * ±1オクターブ一括/元に戻す/やり直す)を結線する。Score IR(採譜=transcribe
- * 未実行ならnull)が無ければ何も表示しない(呼び出し元`ProjectWorkspace`は
- * 常にマウントしてよい)。
+ * #30/#31/#32/#35: PianoRoll描画+編集操作のコンテナ。ツールバー(削除/分割/
+ * 結合/±1オクターブ一括/元に戻す/やり直す/レイヤ表示切替)を結線する。
+ * Score IR(採譜=transcribe未実行ならnull)が無ければ何も表示しない
+ * (呼び出し元`ProjectWorkspace`は常にマウントしてよい)。
  *
  * ピアノロール編集UI自体はM2で意図的に見送られていた(ユーザー決定済み、M3の
  * スコープ)。楽譜プレビュー(#33)・再生同期(#34、`TransportBar`は
- * `ProjectWorkspace`が別途マウントする)は実装済み。視覚エンコーディング/
- * Inspector(#35)は未実装で、後続PRで対応する。
+ * `ProjectWorkspace`が別途マウントする)・視覚エンコーディング/Inspector
+ * (#35)は実装済み。
  */
 export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
   const { data: score, isLoading, error } = useScore(projectId);
@@ -135,6 +136,11 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
   const canDelete = selectedArray.length >= 1;
   const canSplit = selectedArray.length === 1;
   const canMerge = selectedArray.length >= 2;
+  // #35: Inspectorは単一選択時のみ表示する。フルの`ScoreNote`(velocity/
+  // provenance/ai_reason等、`PianoRollNote`には無いフィールド)が要るため
+  // `editableNotes`ではなく元の`part.notes`から引く。
+  const inspectedNote =
+    selectedArray.length === 1 ? (part.notes.find((n) => n.id === selectedArray[0]) ?? null) : null;
 
   function handleApplyOps(ops: NoteOp[]) {
     applyOps.mutate(ops);
@@ -256,6 +262,7 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
         onApplyOps={handleApplyOps}
       />
       <ScorePreview projectId={projectId} score={score} selectedNoteIds={selectedNoteIds} />
+      <Inspector note={inspectedNote} onApplyOps={handleApplyOps} />
     </section>
   );
 }
