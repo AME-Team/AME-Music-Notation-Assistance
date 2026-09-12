@@ -216,8 +216,12 @@ export function PianoRoll({
       const rectH = ROW_HEIGHT_PX - 2;
 
       ctx.save();
-      // #35: 削除済みは「破線アウトライン(半透明)」(設計書§12.4)。塗り自体は
-      // 出自の色のまま透明度だけ下げる(誰が触った上で削除されたかは残す)。
+      // #35: 削除済みは「破線アウトライン(半透明)」(設計書§12.4)。塗りは
+      // `note.provenance`をそのまま使うが、`_apply_delete`(services/score_ops.py)
+      // が削除時に常に`provenance="user"`へ上書きするため、削除済みノートの
+      // 塗りは実際には常にuser色(オレンジ)になる(#35-M3レビュー指摘: 削除前の
+      // 出自を判別できるという意味ではない、単に他の状態と同じ`style.fill`
+      // ロジックを再利用しているだけ)。
       if (isDeleted) ctx.globalAlpha = 0.4;
       ctx.fillStyle = style.fill;
       ctx.fillRect(rectX, rectY, rectW, rectH);

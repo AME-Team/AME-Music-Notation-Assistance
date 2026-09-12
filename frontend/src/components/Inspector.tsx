@@ -20,6 +20,15 @@ const FIELD_LABEL_CLASS = "flex flex-col gap-1 text-sm text-gray-600";
 const BUTTON_CLASS =
   "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50";
 
+/** 空欄/空白のみを明示的に無効値として扱う(`Number("")`が`0`になる
+ * JavaScriptの挙動に対するガード、#35-M3レビュー指摘)。
+ */
+function parseValidNumber(value: string): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /**
  * #35: 選択ノートのプロパティ編集、AIの判断理由と出自runの表示(設計書§12.3)。
  *
@@ -72,19 +81,23 @@ function InspectorForm({
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const midiValue = Number(midi);
-    const onsetTickValue = Number(onsetTick);
-    const durationTickValue = Number(durationTick);
-    const velocityValue = Number(velocity);
-    const voiceValue = Number(voice);
-    const staffValue = Number(staff);
+    // #35-M3レビュー指摘: `Number("")`は`0`(finiteかつ有効な数値)になるため、
+    // `Number.isFinite`のチェックだけでは空欄を弾けない。空欄のまま「適用」を
+    // 押すとベロシティ等が意図せず0で送信されてしまっていた。空欄/空白のみは
+    // 明示的に無効値として扱う。
+    const midiValue = parseValidNumber(midi);
+    const onsetTickValue = parseValidNumber(onsetTick);
+    const durationTickValue = parseValidNumber(durationTick);
+    const velocityValue = parseValidNumber(velocity);
+    const voiceValue = parseValidNumber(voice);
+    const staffValue = parseValidNumber(staff);
     if (
-      !Number.isFinite(midiValue) ||
-      !Number.isFinite(onsetTickValue) ||
-      !Number.isFinite(durationTickValue) ||
-      !Number.isFinite(velocityValue) ||
-      !Number.isFinite(voiceValue) ||
-      !Number.isFinite(staffValue)
+      midiValue == null ||
+      onsetTickValue == null ||
+      durationTickValue == null ||
+      velocityValue == null ||
+      voiceValue == null ||
+      staffValue == null
     ) {
       return;
     }

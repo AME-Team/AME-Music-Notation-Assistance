@@ -112,14 +112,19 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
       flags: n.flags,
     }));
 
-  // #35: レイヤ表示切替は表示のみに影響させる(`editableNotes`自体は
-  // split/merge等が選択ノートを引くために使うため、非表示レイヤーの
-  // ノートが選択済みのまま残っていても正しく引けるようにフィルタしない)。
+  // #35: レイヤ表示切替は表示のみに影響させる意図だったが、`editableNotes`
+  // (split/merge等が選択ノートを引くのに使う)自体はフィルタしていなかった
+  // ため、非表示レイヤーのノートが選択済みのまま残っていると削除/分割/結合/
+  // Inspector編集の対象に含まれてしまっていた(#35-M3レビュー指摘)。
+  // `visibleNotes`(表示対象)と、操作対象を`visibleNotes`に限定した
+  // `selectedArray`の両方を用意する。
   const visibleNotes = editableNotes.filter((n) =>
     visibleLayers.has(layerCategoryForProvenance(n.provenance)),
   );
+  const visibleNoteIds = new Set(visibleNotes.map((n) => n.id));
 
-  const selectedArray = [...selectedNoteIds];
+  const selectedArray = [...selectedNoteIds].filter((id) => visibleNoteIds.has(id));
+  const visibleSelectedNoteIds = new Set(selectedArray);
   const canDelete = selectedArray.length >= 1;
   const canSplit = selectedArray.length === 1;
   const canMerge = selectedArray.length >= 2;
@@ -244,11 +249,11 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
         partId={part.id}
         timeSignatures={score.time_signatures}
         divisions={score.divisions}
-        selectedNoteIds={selectedNoteIds}
+        selectedNoteIds={visibleSelectedNoteIds}
         onSelectionChange={setSelectedNoteIds}
         onApplyOps={handleApplyOps}
       />
-      <ScorePreview projectId={projectId} score={score} selectedNoteIds={selectedNoteIds} />
+      <ScorePreview projectId={projectId} score={score} selectedNoteIds={visibleSelectedNoteIds} />
       <Inspector note={inspectedNote} onApplyOps={handleApplyOps} />
     </section>
   );
