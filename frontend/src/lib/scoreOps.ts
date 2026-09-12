@@ -130,6 +130,15 @@ function applyOne(score: ScoreIR, op: NoteOp, previewId: { next: number }): void
       }
       return;
     }
+    case "note.restore": {
+      for (const noteId of op.note_ids) {
+        const note = findNote(score, noteId);
+        if (!note) continue;
+        note.status = "active";
+        note.provenance = "user";
+      }
+      return;
+    }
     case "note.split": {
       const note = findNote(score, op.note_id);
       if (!note || note.onset_tick === null || note.duration_tick === null) return;

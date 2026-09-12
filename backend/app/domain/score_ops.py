@@ -60,6 +60,18 @@ class NoteDeleteOp(BaseModel):
     note_ids: list[int] = Field(min_length=1)
 
 
+class NoteRestoreOp(BaseModel):
+    """`note.delete`の逆操作(#35)。`status`を`"active"`へ戻す。
+
+    Undo(#32)は「直前の操作を取り消す」のに対し、本opは「この特定のノートを
+    復元する」という別の意味を持つ(ピアノロール上で削除済みノートを
+    クリックして復活させるUI操作に対応する、設計書§12.4「クリックで復活」)。
+    """
+
+    type: Literal["note.restore"] = "note.restore"
+    note_ids: list[int] = Field(min_length=1)
+
+
 class NoteSplitOp(BaseModel):
     """1つのノートを`at_tick`で2つに分割する。"""
 
@@ -88,6 +100,12 @@ class PartTransposeOctaveOp(BaseModel):
 
 
 NoteOp = Annotated[
-    NoteAddOp | NoteUpdateOp | NoteDeleteOp | NoteSplitOp | NoteMergeOp | PartTransposeOctaveOp,
+    NoteAddOp
+    | NoteUpdateOp
+    | NoteDeleteOp
+    | NoteRestoreOp
+    | NoteSplitOp
+    | NoteMergeOp
+    | PartTransposeOctaveOp,
     Field(discriminator="type"),
 ]
