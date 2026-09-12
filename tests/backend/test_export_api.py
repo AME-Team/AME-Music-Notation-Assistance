@@ -225,3 +225,22 @@ def test_export_rejects_unknown_part_id(
         json={"format": "musicxml", "parts": ["nonexistent"]},
     )
     assert resp.status_code == 422, resp.text
+
+
+def test_export_rejects_empty_parts_list(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """回帰(#36 Gate2レビュー指摘): 空リスト`[]`は「全パート」の`None`とは異なり、
+
+    素通しするとパートが1つも無い不正な出力を生成してしまう(MusicXMLの
+    part-listは1つ以上のscore-partが必須)。`Field(min_length=1)`により
+    422で明示的に拒否されることを固定化する。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score_with_two_parts(settings, project_id)
+
+    resp = client.post(
+        f"/api/projects/{project_id}/export",
+        json={"format": "musicxml", "parts": []},
+    )
+    assert resp.status_code == 422, resp.text

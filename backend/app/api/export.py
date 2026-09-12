@@ -42,7 +42,12 @@ class ExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     format: Literal["musicxml", "midi"]
-    parts: list[str] | None = Field(default=None)
+    # `min_length=1`: 空リスト`[]`は「フィルタなし(全パート)」を意味する`None`とは
+    # 異なり、素通しすると`score_dict["parts"]`が空になり不正な出力(MusicXMLは
+    # part-listに1つ以上のscore-partが必須)を生成してしまう(#36 Gate2レビュー
+    # 指摘)。既存の`NoteAddOp.note_ids`等(`domain/score_ops.py`)と同じ
+    # `Field(min_length=1)`パターンでPydanticに422判定を任せる。
+    parts: list[str] | None = Field(default=None, min_length=1)
 
 
 _EXPORT_MEDIA_TYPES = {
