@@ -57,6 +57,37 @@ export const PROVENANCE_STYLE: Record<string, ProvenanceStyle> = {
   user: { fill: "#f97316", stroke: "#9a3412", dash: [], lineWidth: 2 }, // オレンジ太実線: 手動編集済み
 };
 
+/** #35-M3レビュー指摘: 出自(`provenance`)まわりのキー集合/表示名/レイヤ分類は
+ * ここに一元化し、`Inspector.tsx`/`PianoRollEditor.tsx`はここから参照する
+ * (以前は3ファイルに分散しており、将来`provenance`が追加/変更された際に
+ * 表示・分類がずれる恐れがあった)。
+ */
+export const PROVENANCE_LABEL: Record<string, string> = {
+  amt: "AMT(未整音)",
+  baseline: "L0(決定論的整音済み)",
+  llm: "L1(AI変更・要レビュー)",
+  agent: "L2エージェント(AI変更・要レビュー)",
+  user: "手動編集済み",
+};
+
+/** #35: レイヤ表示切替(設計書§12.4)の3カテゴリ。`baseline`/`llm`/`agent`
+ * (L0/L1/L2)は「AI提案」としてまとめる(design docの3分類に合わせる、
+ * 5色の出自エンコーディングとは別軸のグルーピング)。
+ */
+export type LayerCategory = "amt" | "ai" | "user";
+
+export const LAYER_CATEGORY_LABEL: Record<LayerCategory, string> = {
+  amt: "AMT原案",
+  ai: "AI提案",
+  user: "手動編集",
+};
+
+export function layerCategoryForProvenance(provenance: string): LayerCategory {
+  if (provenance === "amt") return "amt";
+  if (provenance === "user") return "user";
+  return "ai"; // baseline/llm/agent
+}
+
 /** 未知の`provenance`値(スキーマ上あり得ないが、防御的に)は`amt`相当で描く。 */
 export function provenanceStyle(provenance: string): ProvenanceStyle {
   return PROVENANCE_STYLE[provenance] ?? DEFAULT_PROVENANCE_STYLE;
@@ -210,12 +241,23 @@ export interface NoteHit {
 /** ノート右端付近(ドラッグでリサイズするための当たり判定領域)の幅(px単位)。 */
 const RESIZE_HANDLE_WIDTH_PX = 8;
 
+function noteContainsPoint(note: PianoRollNote, tick: number, midi: number): boolean {
+  if (Math.round(note.midi) !== Math.round(midi)) return false;
+  const end = note.onset_tick + note.duration_tick;
+  return tick >= note.onset_tick && tick <= end;
+}
+
 /**
  * 指定したtick/midi位置にあるノートを探す(#30: ヒットテスト)。`sortedNotes`は
  * `visibleNoteRange`で絞り込んだ後の(可視範囲付近の)配列を渡す想定。
  * 複数重なる場合は最後に描画される(=配列の後方にある)ノートを優先する。
  *
- * `status === "deleted"`のノートも対象に含める(#35: クリックで復活)。
+ * #35-M3レビュー指摘: 二段階探索にする。まずactiveノートのみを対象に探索し
+ * (move/resize)、ヒットが無かった場合にのみdeletedノートを対象に探索する
+ * (restore)。1段階でactive/deletedを区別せず先に見つかった方を返す実装だと、
+ * merge等で論理削除されたノートがactiveノートと同じ位置に重なっている場合、
+ * activeノートを選択/移動しようとしたクリックが復活操作に化けてしまう
+ * (削除ノートは配列の後方に来やすく、描画上も重なりやすいため実害が出やすい)。
  * `"muted"`(現状どのパイプラインも設定しない)は#30時点から一貫して対象外
  * のまま維持する。
  */
@@ -227,13 +269,9 @@ export function hitTestNote(
 ): NoteHit | null {
   for (let i = sortedNotes.length - 1; i >= 0; i -= 1) {
     const note = sortedNotes[i];
-    if (note.status === "muted") continue;
-    if (Math.round(note.midi) !== Math.round(midi)) continue;
+    if (note.status !== "active") continue;
+    if (!noteContainsPoint(note, tick, midi)) continue;
     const end = note.onset_tick + note.duration_tick;
-    if (tick < note.onset_tick || tick > end) continue;
-    if (note.status === "deleted") {
-      return { note, region: "restore" };
-    }
     // #30-M3レビュー指摘: handleWidthを固定px幅のままにすると、低ズーム
     // (pxPerTickが小さい)時や短いノートでハンドル幅がノート全体を覆って
     // しまい、"move"領域が消えて移動操作が不能になる。ノート幅の半分を
@@ -243,6 +281,12 @@ export function hitTestNote(
       pxPerTick > 0 ? Math.min(RESIZE_HANDLE_WIDTH_PX / pxPerTick, note.duration_tick / 2) : 0;
     const region: HitRegion = tick >= end - handleWidthTicks ? "resize-right" : "move";
     return { note, region };
+  }
+  for (let i = sortedNotes.length - 1; i >= 0; i -= 1) {
+    const note = sortedNotes[i];
+    if (note.status !== "deleted") continue;
+    if (!noteContainsPoint(note, tick, midi)) continue;
+    return { note, region: "restore" };
   }
   return null;
 }

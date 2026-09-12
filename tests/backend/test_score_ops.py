@@ -232,6 +232,17 @@ class TestNoteRestore:
         with pytest.raises(ScoreOpError, match="note not found"):
             apply_ops(score, [NoteRestoreOp(note_ids=[9999])], _ANCHORS)
 
+    def test_is_a_noop_for_a_note_that_is_already_active(self) -> None:
+        """#35-M3レビュー指摘: 既にactiveなノートへの誤送信でprovenanceを
+
+        上書きしない(AI変更のレビュー情報を保持したままにする)。
+        """
+        score = _make_score()
+        note = _add_note(score, status="active", provenance="llm")
+        apply_ops(score, [NoteRestoreOp(note_ids=[note.id])], _ANCHORS)
+        assert note.status == "active"
+        assert note.provenance == "llm"
+
 
 class TestNoteSplit:
     def test_splits_into_two_notes_preserving_total_span(self) -> None:

@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import type { NoteOp } from "../api/client";
 import { useScore, useScoreEditing } from "../hooks/useScore";
-import type { PianoRollNote } from "../lib/pianoRoll";
+import {
+  LAYER_CATEGORY_LABEL,
+  type LayerCategory,
+  layerCategoryForProvenance,
+  type PianoRollNote,
+} from "../lib/pianoRoll";
 import { Inspector } from "./Inspector";
 import { PianoRoll } from "./PianoRoll";
 import { ScorePreview } from "./ScorePreview";
@@ -12,24 +17,6 @@ interface PianoRollEditorProps {
 
 const BUTTON_CLASS =
   "rounded-md px-3 py-1.5 text-sm font-medium text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50";
-
-/** #35: レイヤ表示切替(設計書§12.4)の3カテゴリ。`baseline`/`llm`/`agent`
- * (L0/L1/L2)は「AI提案」としてまとめる(design docの3分類に合わせる、
- * 5色の出自エンコーディングとは別軸のグルーピング)。
- */
-type LayerCategory = "amt" | "ai" | "user";
-
-const LAYER_LABEL: Record<LayerCategory, string> = {
-  amt: "AMT原案",
-  ai: "AI提案",
-  user: "手動編集",
-};
-
-function layerCategoryForProvenance(provenance: string): LayerCategory {
-  if (provenance === "amt") return "amt";
-  if (provenance === "user") return "user";
-  return "ai"; // baseline/llm/agent
-}
 
 /**
  * #30/#31/#32/#35: PianoRoll描画+編集操作のコンテナ。ツールバー(削除/分割/
@@ -238,14 +225,14 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
       {/* #35: レイヤ表示切替(設計書§12.4)。 */}
       <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
         <span className="text-xs font-medium text-gray-500">表示レイヤ:</span>
-        {(Object.keys(LAYER_LABEL) as LayerCategory[]).map((category) => (
+        {(Object.keys(LAYER_CATEGORY_LABEL) as LayerCategory[]).map((category) => (
           <label key={category} className="flex items-center gap-1.5">
             <input
               type="checkbox"
               checked={visibleLayers.has(category)}
               onChange={() => toggleLayer(category)}
             />
-            {LAYER_LABEL[category]}
+            {LAYER_CATEGORY_LABEL[category]}
           </label>
         ))}
       </div>

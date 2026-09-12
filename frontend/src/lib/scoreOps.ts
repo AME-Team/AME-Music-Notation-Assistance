@@ -131,9 +131,11 @@ function applyOne(score: ScoreIR, op: NoteOp, previewId: { next: number }): void
       return;
     }
     case "note.restore": {
+      // #35-M3レビュー指摘: バックエンド(services/score_ops.py)と同じガード。
+      // 既にactiveなノートへの誤った適用でprovenanceが上書きされないようにする。
       for (const noteId of op.note_ids) {
         const note = findNote(score, noteId);
-        if (!note) continue;
+        if (note?.status !== "deleted") continue;
         note.status = "active";
         note.provenance = "user";
       }

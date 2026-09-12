@@ -1,20 +1,12 @@
 import { type FormEvent, useState } from "react";
 import type { NoteOp, ScoreNote } from "../api/client";
-import { provenanceStyle } from "../lib/pianoRoll";
+import { PROVENANCE_LABEL, provenanceStyle } from "../lib/pianoRoll";
 
 interface InspectorProps {
   /** 単一選択時のみノートを渡す(0件/複数選択時は`null`)。 */
   note: ScoreNote | null;
   onApplyOps: (ops: NoteOp[]) => void;
 }
-
-const PROVENANCE_LABEL: Record<string, string> = {
-  amt: "AMT(未整音)",
-  baseline: "L0(決定論的整音済み)",
-  llm: "L1(AI変更・要レビュー)",
-  agent: "L2エージェント(AI変更・要レビュー)",
-  user: "手動編集済み",
-};
 
 const STATUS_LABEL: Record<string, string> = {
   active: "アクティブ",

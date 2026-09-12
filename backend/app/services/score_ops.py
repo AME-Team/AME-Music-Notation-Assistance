@@ -177,9 +177,16 @@ def _apply_restore(score: ScoreIR, op: NoteRestoreOp) -> None:
     """`_apply_delete`の逆操作(#35)。復元自体もユーザー操作のため
 
     `provenance="user"`を付与する(削除時と同じ扱い)。
+
+    #35-M3レビュー指摘: 対象が実際に`"deleted"`である場合のみ書き換える。
+    ガード無しだと、既に`"active"`なノートへ`note.restore`を送った場合(内容は
+    何も変えていない)でも出自が無条件に`"user"`へ上書きされ、AI変更のレビュー
+    情報(`provenance_run_id`/`ai_reason`と整合する出自)が失われてしまう。
     """
     for note_id in op.note_ids:
         _, note = _find_note(score, note_id)
+        if note.status != "deleted":
+            continue
         note.status = "active"
         note.provenance = "user"
 
