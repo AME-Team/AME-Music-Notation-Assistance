@@ -30,6 +30,8 @@ export interface PianoRollNote {
 export interface ProvenanceStyle {
   /** 塗り色。 */
   fill: string;
+  /** 枠線色(塗り色より暗いトーン、非選択時も常に描く)。 */
+  stroke: string;
   /** `CanvasRenderingContext2D.setLineDash()`にそのまま渡すダッシュパターン
    * (`[]`は実線)。色だけでなくパターンでも出自を区別できるようにする
    * (色覚特性への配慮、設計書§12.4の作業項目)。本番の色覚シミュレーション
@@ -40,14 +42,19 @@ export interface ProvenanceStyle {
   lineWidth: number;
 }
 
-const DEFAULT_PROVENANCE_STYLE: ProvenanceStyle = { fill: "#9ca3af", dash: [], lineWidth: 1 };
+const DEFAULT_PROVENANCE_STYLE: ProvenanceStyle = {
+  fill: "#9ca3af",
+  stroke: "#4b5563",
+  dash: [],
+  lineWidth: 1,
+};
 
 export const PROVENANCE_STYLE: Record<string, ProvenanceStyle> = {
   amt: DEFAULT_PROVENANCE_STYLE, // グレー実線: AMT生出力
-  baseline: { fill: "#3b82f6", dash: [], lineWidth: 1 }, // 青実線: L0決定論的整音済み
-  llm: { fill: "#a855f7", dash: [2, 2], lineWidth: 1 }, // 紫点線: L1が変更(要レビュー)
-  agent: { fill: "#d946ef", dash: [6, 2, 2, 2], lineWidth: 1 }, // マゼンタ破線点: L2が変更(要レビュー)
-  user: { fill: "#f97316", dash: [], lineWidth: 2 }, // オレンジ太実線: 手動編集済み
+  baseline: { fill: "#3b82f6", stroke: "#1e40af", dash: [], lineWidth: 1 }, // 青実線: L0決定論的整音済み
+  llm: { fill: "#a855f7", stroke: "#6b21a8", dash: [2, 2], lineWidth: 1 }, // 紫点線: L1が変更(要レビュー)
+  agent: { fill: "#d946ef", stroke: "#86198f", dash: [6, 2, 2, 2], lineWidth: 1 }, // マゼンタ破線点: L2が変更(要レビュー)
+  user: { fill: "#f97316", stroke: "#9a3412", dash: [], lineWidth: 2 }, // オレンジ太実線: 手動編集済み
 };
 
 /** 未知の`provenance`値(スキーマ上あり得ないが、防御的に)は`amt`相当で描く。 */
