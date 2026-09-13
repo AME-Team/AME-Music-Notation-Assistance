@@ -10,19 +10,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
+import anthropic
 from pydantic import BaseModel, Field
 
 from app.domain.invariants import Decision
 from app.pipeline.refine.l1_prompt import build_chunk_message
 
 if TYPE_CHECKING:
-    import anthropic
-
     from app.pipeline.refine.l1_chunker import ChunkInput
 
-# 設計書§7.3 API設定表。`Final[Literal[...]]`にすることで、`api/refine.py`の
+# 設計書§7.3 API設定表。型注記を省略した`Final`(明示的な`Literal[...]`は
+# 付けない)にすることで、mypyが代入値からそのまま狭いLiteral型
+# (`Literal["high"]`等)を推論し、`api/refine.py`の
 # `RefineRequest.effort: Literal["high", "medium"]`のデフォルト値として
-# 型チェックを通す(単なる`str`推論だと不整合になる、mypy指摘)。
+# 型チェックを通す(単なる`str: str = "high"`の書き方だと`str`型に
+# 広がってしまい不整合になる、mypy指摘、#39 Gate2レビュー指摘で
+# コメントの記述を実装に合わせて修正)。
 DEFAULT_MODEL: Final = "claude-opus-5"
 DEFAULT_EFFORT: Final = "high"
 MAX_TOKENS = 16000
@@ -54,11 +57,18 @@ class L1ChunkCallResult:
 
 
 class L1ClientError(RuntimeError):
-    """API呼び出し失敗(refusal、または構造化出力のパース失敗)。
+    """API呼び出し失敗(refusal、構造化出力のパース失敗、またはSDKレベルの
 
-    設計書§7.3のリトライ表: `stop_reason == "refusal"`は検証失敗扱いにする
-    (429/5xxはAnthropic SDK自身が既定でリトライ済みのため、ここまで来た時点で
-    リトライ後もなお失敗したことを意味する)。
+    エラー)。設計書§7.3のリトライ表: `stop_reason == "refusal"`は検証失敗
+    扱いにする(429/5xxはAnthropic SDK自身が既定でリトライ済みのため、
+    ここまで来た時点でリトライ後もなお失敗したことを意味する)。
+
+    `anthropic.AnthropicError`(`APIConnectionError`/`RateLimitError`/
+    `APIStatusError`/`APIResponseValidationError`等、SDKが送出しうる例外の
+    共通基底クラス)もここに包んで送出する(#39 Gate2レビュー指摘: 以前は
+    refusal/パース失敗しか変換しておらず、SDK例外がそのまま伝播すると
+    呼び出し元(`l1_runner.py`)の`except L1ClientError`で捕捉できず、
+    チャンク単位の棄却ではなくリクエスト全体が500になっていた)。
     """
 
 
@@ -78,29 +88,34 @@ def call_l1_chunk(
     楽曲全体コンテキスト(曲単位でキャッシュ) → チャンク入力JSON(毎回変わる)。
     `cache_control: {"type": "ephemeral"}`を該当ブロックに付与する。
     """
-    response = client.messages.parse(
-        model=model,
-        max_tokens=MAX_TOKENS,
-        system=[
-            {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}},
-        ],
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": song_context,
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {"type": "text", "text": build_chunk_message(chunk)},
-                ],
-            }
-        ],
-        output_config={"effort": effort},
-        output_format=L1ChunkResponse,
-        thinking={"type": "adaptive"},
-    )
+    try:
+        response = client.messages.parse(
+            model=model,
+            max_tokens=MAX_TOKENS,
+            system=[
+                {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}},
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": song_context,
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {"type": "text", "text": build_chunk_message(chunk)},
+                    ],
+                }
+            ],
+            output_config={"effort": effort},
+            output_format=L1ChunkResponse,
+            thinking={"type": "adaptive"},
+        )
+    except anthropic.AnthropicError as exc:
+        raise L1ClientError(
+            f"Anthropic API call failed for chunk {chunk.context.bars.target}: {exc}"
+        ) from exc
 
     if response.stop_reason == "refusal":
         raise L1ClientError(f"model refused chunk {chunk.context.bars.target}")

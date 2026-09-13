@@ -9,6 +9,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import anthropic
 import pytest
 
 from app.domain.invariants import Decision
@@ -83,6 +84,26 @@ def test_call_l1_chunk_passes_output_format_and_effort() -> None:
     assert kwargs["output_format"] is L1ChunkResponse
     assert kwargs["output_config"] == {"effort": "medium"}
     assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_call_l1_chunk_wraps_sdk_errors_as_l1_client_error() -> None:
+    """回帰(#39 Gate2レビュー指摘): 以前はrefusal/パース失敗しかL1ClientErrorに
+
+    変換しておらず、`anthropic.AnthropicError`系のSDK例外(レート制限・接続
+    エラー等、リトライ後もなお失敗した場合にSDKが送出する)がそのまま
+    伝播していた。呼び出し元(l1_runner.py)はL1ClientErrorだけを捕捉して
+    チャンク単位で棄却する設計のため、変換されないとリクエスト全体が
+    500になってしまう。
+    """
+    client = Mock()
+    client.messages.parse.side_effect = anthropic.RateLimitError(
+        "rate limited", response=Mock(status_code=429, headers={}), body=None
+    )
+
+    with pytest.raises(L1ClientError):
+        call_l1_chunk(
+            _chunk(), client=client, system_prompt="system", song_context="context"
+        )
 
 
 def test_call_l1_chunk_raises_on_refusal() -> None:

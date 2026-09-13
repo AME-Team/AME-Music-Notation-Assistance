@@ -5,8 +5,11 @@
 採否を決めて初めて`current.json`に反映される設計とする(設計書§10.3、M4完了
 条件「L0とL1の差分を確認し小節単位で採否を決める」)。
 
-`mode: "batch"`は#40の担当のためこのIssueでは未対応(`Literal["sync"]`のみ
-受け付ける、`extra="forbid"`は使わず単純に型で弾く)。
+`mode: "batch"`は#40の担当のためこのIssueでは未対応: `mode`は`Literal["sync"]`
+のみを許可し、未対応の値(将来の`"batch"`含む)は型検証で422として拒否する。
+未知フィールド全般は`RefineRequest`の`ConfigDict(extra="forbid")`で拒否する
+(#39 Gate2レビュー指摘: 以前はこのdocstringが`extra="forbid"`を使わないと
+誤って説明しており、実装と矛盾していた)。
 """
 
 from __future__ import annotations
