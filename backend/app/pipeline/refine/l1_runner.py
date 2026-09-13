@@ -62,27 +62,49 @@ class L1RunResult:
 
 
 def _validation_notes_for_chunk(
-    chunk: ChunkInput, notes_by_id: dict[int, Note]
+    chunk: ChunkInput, notes_by_id: dict[int, Note], decisions: list[Decision]
 ) -> list[ValidationNote]:
     """`ChunkInput.notes`(L1入力)から検証層向けの`ValidationNote`を組み立てる。
 
-    `voice`はL1入力スキーマに含まれない(L1が決定する側のフィールドのため)
-    が、V-8(同一voice内の時間重複、#37 Gate2レビュー指摘で暗黙keepも対象に
-    含めるよう修正済み)には現在のvoiceが必要なため、元の`Note`から補う。
+    `onset_beat`/`voice`は、対応する`decision`があれば**適用後**の値を使う
+    (#39 Gate2レビュー指摘、2巡目: `keep`の`snap`はonset位置を、
+    `voice`/`staff`はvoiceを変更しうるため、適用前の値のままV-8(同一voice内
+    時間重複)を検証すると、検証を通過したチャンクでも適用後に重複が生じる
+    ケースを見逃す。snapのbeat位置は`ChunkNote.snap_candidates[].beat`に
+    既にbeat単位で保持されているため、tick変換をやり直す必要はない)。
+
+    `voice`自体はL1入力スキーマに含まれない(L1が決定する側のフィールドの
+    ため)が、V-8には現在のvoiceが必要なため、decisionが無ければ元の`Note`
+    から補う(#37 Gate2レビュー指摘: 暗黙keepもV-8の対象に含める)。
     """
-    return [
-        ValidationNote(
-            id=chunk_note.id,
-            editable=chunk_note.editable,
-            midi=chunk_note.midi,
-            onset_beat=chunk_note.raw_beat,
-            duration_beat=chunk_note.raw_duration_beat,
-            voice=notes_by_id[chunk_note.id].voice,
-            snap_candidate_ids=[c.id for c in chunk_note.snap_candidates],
-            flags=chunk_note.flags,
+    decision_by_id = {d.note_id: d for d in decisions}
+    result = []
+    for chunk_note in chunk.notes:
+        decision = decision_by_id.get(chunk_note.id)
+        onset_beat = chunk_note.raw_beat
+        voice = notes_by_id[chunk_note.id].voice
+        if decision is not None:
+            if decision.voice is not None:
+                voice = decision.voice
+            if decision.snap is not None:
+                candidate = next(
+                    (c for c in chunk_note.snap_candidates if c.id == decision.snap), None
+                )
+                if candidate is not None:
+                    onset_beat = candidate.beat
+        result.append(
+            ValidationNote(
+                id=chunk_note.id,
+                editable=chunk_note.editable,
+                midi=chunk_note.midi,
+                onset_beat=onset_beat,
+                duration_beat=chunk_note.raw_duration_beat,
+                voice=voice,
+                snap_candidate_ids=[c.id for c in chunk_note.snap_candidates],
+                flags=chunk_note.flags,
+            )
         )
-        for chunk_note in chunk.notes
-    ]
+    return result
 
 
 def _resolve_split_at_tick(
@@ -237,7 +259,7 @@ def run_l1_sequential(
         for key in usage:
             usage[key] += result.usage[key]
 
-        validation_notes = _validation_notes_for_chunk(chunk, notes_by_id)
+        validation_notes = _validation_notes_for_chunk(chunk, notes_by_id, result.output.decisions)
         violations = validate_decisions(
             result.output.decisions, notes=validation_notes, part_staves=part.staves
         )

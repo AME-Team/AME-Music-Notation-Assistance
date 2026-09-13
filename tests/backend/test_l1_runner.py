@@ -48,7 +48,12 @@ def _part() -> Part:
 
 
 def _note(
-    score: ScoreIR, *, onset_tick: int = 0, duration_tick: int = 480, midi: int = 60
+    score: ScoreIR,
+    *,
+    onset_tick: int = 0,
+    duration_tick: int = 480,
+    midi: int = 60,
+    voice: int = 1,
 ) -> Note:
     return Note(
         id=score.allocate_note_id(),
@@ -58,6 +63,7 @@ def _note(
         duration_tick=duration_tick,
         midi=midi,
         velocity=90,
+        voice=voice,
         provenance="amt",
         spelling=Spelling(step="C", alter=0, octave=4),
         snap_candidates=[
@@ -263,6 +269,52 @@ def test_split_tie_creates_new_note_with_correct_tie_flags() -> None:
     assert second.duration_tick == 480
     assert second.tie.start is True
     assert second.provenance == "llm"
+
+
+def test_voice_reassignment_causing_post_apply_overlap_is_rejected() -> None:
+    """回帰(#39 Gate2レビュー指摘、2巡目): V-1〜V-9は適用前の(raw_beat・元の
+
+    voiceの)状態に対して検証していたため、`decision.voice`でvoiceを変更した
+    結果、適用後に別ノートと同一voice内で時間重複が生じるケースを見逃して
+    いた。2つの重ならないノート(voice 1とvoice 2)のうちvoice 2の方をvoice 1
+    へ再割り当てするdecisionは、適用後に重複するためV-8違反としてチャンク
+    全体が棄却されるべき。
+    """
+    score = _score()
+    part = _part()
+    note_a = _note(score, onset_tick=0, duration_tick=480, voice=1)
+    note_b = _note(score, onset_tick=0, duration_tick=480, voice=2)
+    part.notes.append(note_a)
+    part.notes.append(note_b)
+    score.parts.append(part)
+
+    # note_bをvoice 1へ再割り当て → note_aと同一voice・同一時間区間で重複する。
+    decision = Decision(
+        note_id=note_b.id,
+        action="keep",
+        snap="a",
+        spelling=note_b.spelling,
+        voice=1,
+        staff=1,
+        reason="voiceの統一",
+    )
+
+    with _mock_call([decision]):
+        result = run_l1_sequential(
+            score,
+            "piano",
+            client=object(),
+            run_id="run_abc",
+            beat_anchors=_BEAT_ANCHORS,
+            model="claude-opus-5",
+            effort="high",
+        )
+
+    assert result.chunks_ok == 0
+    assert result.chunks_rejected == 1
+    assert any("V-8" in reason for reason in result.rejected_reasons)
+    staged_note_b = next(n for n in _staged_notes(result) if n.id == note_b.id)
+    assert staged_note_b.voice == 2  # 棄却されたため変更されていない
 
 
 def test_merge_with_previous_is_skipped_and_logged() -> None:
