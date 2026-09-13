@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from app.pipeline.time_signature import (
     TimeSignature,
+    bar_start_ticks,
     count_beats_per_bar,
     derive_time_signatures,
     downbeat_indices,
     find_close_index,
+    tick_to_bar_beat,
 )
 
 
@@ -100,3 +102,68 @@ def test_find_close_index_respects_tolerance() -> None:
     times = [0.0, 0.5, 1.0]
     assert find_close_index(times, 0.5000001) == 1
     assert find_close_index(times, 0.6) is None
+
+
+class TestBarStartTicksAndTickToBarBeat:
+    """#38: `bar_start_ticks`(`score_builder.py`から昇格)と、その逆変換
+
+    `tick_to_bar_beat`(L1チャンク入力の`bar`/`raw_beat`用に新設)のテスト。
+    両者が同じ小節境界解釈を共有していることを、`bar_start_ticks`が返す
+    各小節開始tickを`tick_to_bar_beat`に通すと必ず`beat=1.0`に戻ることで
+    確認する。
+    """
+
+    def test_default_4_4_bar_starts(self) -> None:
+        starts = bar_start_ticks([], 480, 3)
+        assert starts == {1: 0, 2: 1920, 3: 3840}
+
+    def test_time_signature_change_shifts_subsequent_bar_lengths(self) -> None:
+        time_signatures = [
+            {"bar": 1, "numerator": 4, "denominator": 4},
+            {"bar": 3, "numerator": 3, "denominator": 4},
+        ]
+        starts = bar_start_ticks(time_signatures, 480, 5)
+        assert starts == {1: 0, 2: 1920, 3: 3840, 4: 5280, 5: 6720}
+
+    def test_tick_to_bar_beat_at_bar_start_is_beat_one(self) -> None:
+        time_signatures = [
+            {"bar": 1, "numerator": 4, "denominator": 4},
+            {"bar": 3, "numerator": 3, "denominator": 4},
+        ]
+        starts = bar_start_ticks(time_signatures, 480, 5)
+        for bar, tick in starts.items():
+            assert tick_to_bar_beat(
+                tick, time_signatures=time_signatures, divisions=480
+            ) == (
+                bar,
+                1.0,
+            )
+
+    def test_tick_to_bar_beat_mid_bar(self) -> None:
+        time_signatures = [{"bar": 1, "numerator": 4, "denominator": 4}]
+        # 480 ticks = 1拍(四分音符)。小節2開始(tick 1920)+960 tick = 2拍進んだ位置。
+        bar, beat = tick_to_bar_beat(
+            1920 + 960, time_signatures=time_signatures, divisions=480
+        )
+        assert bar == 2
+        assert beat == 3.0
+
+    def test_tick_to_bar_beat_roundtrips_with_bar_start_ticks_across_time_signature_change(
+        self,
+    ) -> None:
+        """小節ごとに拍子が変わっても、両関数の小節境界解釈が一致すること
+
+        (#38: 別々に実装すると、エクスポートとL1チャンク分割で小節番号が
+        ずれるバグを作り込みうるため、この一致を明示的に固定化する)。
+        """
+        time_signatures = [
+            {"bar": 1, "numerator": 4, "denominator": 4},
+            {"bar": 2, "numerator": 6, "denominator": 8},
+            {"bar": 3, "numerator": 3, "denominator": 4},
+        ]
+        starts = bar_start_ticks(time_signatures, 480, 4)
+        for bar in range(1, 4):
+            computed_bar, computed_beat = tick_to_bar_beat(
+                starts[bar], time_signatures=time_signatures, divisions=480
+            )
+            assert (computed_bar, computed_beat) == (bar, 1.0)
