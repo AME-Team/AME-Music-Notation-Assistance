@@ -16,6 +16,7 @@ import { AudioPlayer } from "./AudioPlayer";
 import { BeatGridEditor } from "./BeatGridEditor";
 import { BeatGridOverlay } from "./BeatGridOverlay";
 import { PianoRollEditor } from "./PianoRollEditor";
+import { RefineSection } from "./RefineSection";
 import { TrackList } from "./TrackList";
 import { TransportBar } from "./TransportBar";
 import { Waveform } from "./Waveform";
@@ -316,6 +317,11 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
         </p>
         {exportError && <p className="text-sm text-red-600">{exportError}</p>}
       </section>
+
+      <RefineSection
+        projectId={projectId}
+        isQuantizeReady={Boolean(quantizeStage?.status === "completed" && !quantizeStage?.stale)}
+      />
 
       <section className="space-y-2 rounded-lg border border-gray-200 p-4">
         <h3 className="text-lg font-semibold text-gray-700">波形とビートグリッド</h3>

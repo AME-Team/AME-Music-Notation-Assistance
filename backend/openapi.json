@@ -1011,6 +1011,82 @@
         }
       }
     },
+    "/api/projects/{project_id}/refine/estimate": {
+      "get": {
+        "tags": [
+          "refine"
+        ],
+        "summary": "Estimate Refine",
+        "description": "実行前の想定コスト事前見積もりエンドポイント(§7.5/NFR-07)。",
+        "operationId": "estimate_refine_api_projects__project_id__refine_estimate_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "part_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Part Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "sync",
+                "batch"
+              ],
+              "type": "string",
+              "default": "batch",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "claude-opus-5",
+              "title": "Model"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefineEstimateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{project_id}/refine": {
       "post": {
         "tags": [
@@ -1694,12 +1770,68 @@
         ],
         "title": "ProjectList"
       },
+      "RefineEstimateResponse": {
+        "properties": {
+          "part_id": {
+            "type": "string",
+            "title": "Part Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "batch"
+            ],
+            "title": "Mode"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "num_chunks": {
+            "type": "integer",
+            "title": "Num Chunks"
+          },
+          "estimated_input_tokens": {
+            "type": "integer",
+            "title": "Estimated Input Tokens"
+          },
+          "estimated_output_tokens": {
+            "type": "integer",
+            "title": "Estimated Output Tokens"
+          },
+          "estimated_cache_read_tokens": {
+            "type": "integer",
+            "title": "Estimated Cache Read Tokens"
+          },
+          "estimated_cost_usd": {
+            "type": "number",
+            "title": "Estimated Cost Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "part_id",
+          "mode",
+          "model",
+          "num_chunks",
+          "estimated_input_tokens",
+          "estimated_output_tokens",
+          "estimated_cache_read_tokens",
+          "estimated_cost_usd"
+        ],
+        "title": "RefineEstimateResponse"
+      },
       "RefineRequest": {
         "properties": {
           "mode": {
             "type": "string",
-            "const": "sync",
-            "title": "Mode"
+            "enum": [
+              "sync",
+              "batch"
+            ],
+            "title": "Mode",
+            "default": "batch"
           },
           "part_id": {
             "type": "string",
@@ -1723,7 +1855,6 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "mode",
           "part_id"
         ],
         "title": "RefineRequest"
@@ -1762,6 +1893,10 @@
             },
             "type": "object",
             "title": "Usage"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
           }
         },
         "type": "object",
@@ -1771,7 +1906,8 @@
           "chunks_rejected",
           "rejected_reasons",
           "skipped_decisions",
-          "usage"
+          "usage",
+          "cost_usd"
         ],
         "title": "RefineResponse"
       },

@@ -1,15 +1,15 @@
-"""Stage 6手前: L1構造化出力による注釈API(#39, 設計書§7.3/§11.3)。
+"""Stage 6手前: L1構造化出力による注釈API(#39/#40, 設計書§7.3/§7.5/§11.3)。
 
 `POST /refine`は`current.json`を一切書き換えない。L1の提案は
 `score/staging/{run_id}.json`へ保存し、ユーザーがDiffPanel(#41、未実装)で
 採否を決めて初めて`current.json`に反映される設計とする(設計書§10.3、M4完了
 条件「L0とL1の差分を確認し小節単位で採否を決める」)。
 
-`mode: "batch"`は#40の担当のためこのIssueでは未対応: `mode`は`Literal["sync"]`
-のみを許可し、未対応の値(将来の`"batch"`含む)は型検証で422として拒否する。
-未知フィールド全般は`RefineRequest`の`ConfigDict(extra="forbid")`で拒否する
-(#39 Gate2レビュー指摘: 以前はこのdocstringが`extra="forbid"`を使わないと
-誤って説明しており、実装と矛盾していた)。
+`mode`は`Literal["sync", "batch"]`をサポート(#40):
+- `"batch"`: Anthropic Messages Batches APIを使用(R-9: コスト50%割引、既定値)。
+- `"sync"`: チャンクごとの逐次同期呼び出し。
+- NFR-07: レスポンスにトークン使用量(`usage`)と実測コスト(`cost_usd`)を含める。
+- `GET /refine/estimate`: 実行前の事前見積もりエンドポイントを提供(§7.5)。
 """
 
 from __future__ import annotations
@@ -29,7 +29,10 @@ from app.api.deps import (
 from app.config import Settings, resolve_api_key
 from app.infra import ids, storage
 from app.pipeline.quantize import beat_tick_anchors
-from app.pipeline.refine.l1_client import DEFAULT_EFFORT, DEFAULT_MODEL
+from app.pipeline.refine.cost import calculate_usage_cost_usd, estimate_refine_cost
+from app.pipeline.refine.l1_batch import run_l1_batch
+from app.pipeline.refine.l1_chunker import build_chunks
+from app.pipeline.refine.l1_client import DEFAULT_EFFORT, DEFAULT_MODEL, L1ClientError
 from app.pipeline.refine.l1_runner import run_l1_sequential
 from app.services.project_service import ProjectService
 
@@ -39,7 +42,7 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["refine"])
 class RefineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["sync"]
+    mode: Literal["sync", "batch"] = "batch"
     part_id: str
     model: str = DEFAULT_MODEL
     effort: Literal["high", "medium"] = DEFAULT_EFFORT
@@ -52,6 +55,18 @@ class RefineResponse(BaseModel):
     rejected_reasons: list[str]
     skipped_decisions: list[str]
     usage: dict[str, int]
+    cost_usd: float
+
+
+class RefineEstimateResponse(BaseModel):
+    part_id: str
+    mode: Literal["sync", "batch"]
+    model: str
+    num_chunks: int
+    estimated_input_tokens: int
+    estimated_output_tokens: int
+    estimated_cache_read_tokens: int
+    estimated_cost_usd: float
 
 
 def _read_beat_anchors_or_422(
@@ -75,6 +90,37 @@ def _read_beat_anchors_or_422(
             detail="beatmap has no beats; cannot convert tick positions to seconds",
         )
     return anchors
+
+
+@router.get("/refine/estimate", response_model=RefineEstimateResponse)
+def estimate_refine(
+    project_id: str,
+    part_id: str,
+    mode: Literal["sync", "batch"] = "batch",
+    model: str = DEFAULT_MODEL,
+    service: ProjectService = Depends(get_project_service),
+    settings: Settings = Depends(get_settings),
+) -> RefineEstimateResponse:
+    """実行前の想定コスト事前見積もりエンドポイント(§7.5/NFR-07)。"""
+    ensure_project_exists(project_id, service)
+    score = read_score_or_404(project_id, settings)
+
+    if score.find_part(part_id) is None:
+        raise HTTPException(status_code=422, detail=f"part {part_id!r} not found in score")
+
+    chunks = build_chunks(score, part_id)
+    estimate = estimate_refine_cost(len(chunks), model=model, mode=mode)
+
+    return RefineEstimateResponse(
+        part_id=part_id,
+        mode=mode,
+        model=model,
+        num_chunks=estimate.num_chunks,
+        estimated_input_tokens=estimate.estimated_input_tokens,
+        estimated_output_tokens=estimate.estimated_output_tokens,
+        estimated_cache_read_tokens=estimate.estimated_cache_read_tokens,
+        estimated_cost_usd=estimate.estimated_cost_usd,
+    )
 
 
 @router.post("/refine", response_model=RefineResponse)
@@ -108,17 +154,32 @@ def refine_score(
     run_id = ids.new_id("run")
 
     try:
-        result = run_l1_sequential(
-            score,
-            body.part_id,
-            client=client,
-            run_id=run_id,
-            beat_anchors=beat_anchors,
-            model=body.model,
-            effort=body.effort,
-        )
+        if body.mode == "batch":
+            result = run_l1_batch(
+                score,
+                body.part_id,
+                client=client,
+                run_id=run_id,
+                beat_anchors=beat_anchors,
+                model=body.model,
+                effort=body.effort,
+            )
+        else:
+            result = run_l1_sequential(
+                score,
+                body.part_id,
+                client=client,
+                run_id=run_id,
+                beat_anchors=beat_anchors,
+                model=body.model,
+                effort=body.effort,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except L1ClientError as exc:
+        raise HTTPException(status_code=502, detail=f"L1 refine execution failed: {exc}") from exc
+
+    cost_usd = calculate_usage_cost_usd(result.usage, body.model, mode=body.mode)
 
     # `ensure_project_layout`(プロジェクト作成時)で"score/staging"ディレクトリは
     # 既に作成済みのため、ここで改めてmkdirする必要はない(`api/export.py`と同じ判断)。
@@ -132,4 +193,5 @@ def refine_score(
         rejected_reasons=result.rejected_reasons,
         skipped_decisions=result.skipped_decisions,
         usage=result.usage,
+        cost_usd=cost_usd,
     )

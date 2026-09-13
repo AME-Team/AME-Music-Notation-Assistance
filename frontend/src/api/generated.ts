@@ -430,6 +430,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/refine/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Estimate Refine
+         * @description 実行前の想定コスト事前見積もりエンドポイント(§7.5/NFR-07)。
+         */
+        get: operations["estimate_refine_api_projects__project_id__refine_estimate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{project_id}/refine": {
         parameters: {
             query?: never;
@@ -738,13 +758,36 @@ export interface components {
             /** Projects */
             projects: components["schemas"]["Project"][];
         };
+        /** RefineEstimateResponse */
+        RefineEstimateResponse: {
+            /** Part Id */
+            part_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "sync" | "batch";
+            /** Model */
+            model: string;
+            /** Num Chunks */
+            num_chunks: number;
+            /** Estimated Input Tokens */
+            estimated_input_tokens: number;
+            /** Estimated Output Tokens */
+            estimated_output_tokens: number;
+            /** Estimated Cache Read Tokens */
+            estimated_cache_read_tokens: number;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number;
+        };
         /** RefineRequest */
         RefineRequest: {
             /**
              * Mode
-             * @constant
+             * @default batch
+             * @enum {string}
              */
-            mode: "sync";
+            mode: "sync" | "batch";
             /** Part Id */
             part_id: string;
             /**
@@ -775,6 +818,8 @@ export interface components {
             usage: {
                 [key: string]: number;
             };
+            /** Cost Usd */
+            cost_usd: number;
         };
         /** RunStageRequest */
         RunStageRequest: {
@@ -1589,6 +1634,41 @@ export interface operations {
                 content: {
                     "application/vnd.recordare.musicxml+xml": string;
                     "audio/midi": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    estimate_refine_api_projects__project_id__refine_estimate_get: {
+        parameters: {
+            query: {
+                part_id: string;
+                mode?: "sync" | "batch";
+                model?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefineEstimateResponse"];
                 };
             };
             /** @description Validation Error */
