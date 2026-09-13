@@ -10,13 +10,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
 from app.config import Settings
 from app.domain.score import Clef, Note, Part, ScoreIR, SourceInfo
 from app.infra import storage
 from app.pipeline.refine.l1_client import L1ChunkCallResult, L1ChunkResponse
 from app.services.score_service import ScoreService
+from fastapi.testclient import TestClient
 
 
 def _create_project(client: TestClient, tiny_wav_bytes: bytes) -> str:
@@ -79,7 +78,12 @@ def _write_beatmap_120bpm_4_4(settings: Settings, project_id: str) -> None:
 def _mock_l1_response():
     result = L1ChunkCallResult(
         output=L1ChunkResponse(bar_range=(1, 1), decisions=[]),
-        usage={"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0},
+        usage={
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
     )
     return patch("app.pipeline.refine.l1_runner.call_l1_chunk", return_value=result)
 
@@ -146,6 +150,8 @@ def test_refine_success_writes_staging_and_does_not_touch_current(
     body = resp.json()
     assert body["chunks_ok"] == 1
     assert body["chunks_rejected"] == 0
+    assert "cost_usd" in body
+    assert body["cost_usd"] >= 0.0
 
     # current.jsonは一切変更されない(#39の設計判断)。
     assert current_path.read_bytes() == before
@@ -171,13 +177,96 @@ def test_refine_rejects_unknown_part_id(
     assert resp.status_code == 422, resp.text
 
 
-def test_refine_rejects_batch_mode(
+def test_refine_batch_mode_success(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes, monkeypatch
+) -> None:
+    """#40: mode: 'batch' で Batch API ランナーが呼び出され、cost_usd が計算される。"""
+    monkeypatch.setenv("AME_ANTHROPIC_API_KEY", "dummy-key-for-test")
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score(settings, project_id)
+    _write_beatmap_120bpm_4_4(settings, project_id)
+
+    service = ScoreService(workspace_dir=settings.workspace_dir)
+    staged_score = service.read_score(project_id)
+
+    from app.pipeline.refine.l1_runner import L1RunResult
+
+    mock_run_result = L1RunResult(
+        staged_score=staged_score,
+        chunks_ok=1,
+        chunks_rejected=0,
+        usage={
+            "input_tokens": 2000,
+            "output_tokens": 1000,
+            "cache_read_input_tokens": 0,
+        },
+    )
+
+    with patch(
+        "app.api.refine.run_l1_batch", return_value=mock_run_result
+    ) as mock_batch:
+        resp = client.post(
+            f"/api/projects/{project_id}/refine",
+            json={"mode": "batch", "part_id": "piano"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["chunks_ok"] == 1
+    assert body["chunks_rejected"] == 0
+    assert "cost_usd" in body
+    assert body["cost_usd"] > 0
+    mock_batch.assert_called_once()
+
+
+def test_refine_estimate_default_mode_is_sync(
     client: TestClient, settings: Settings, tiny_wav_bytes: bytes
 ) -> None:
-    """`mode: "batch"`は#40の担当のため422で拒否される(スキーマがLiteral["sync"]のみ許可)。"""
+    """#40: GET /refine/estimate は未指定時に mode='sync' を既定とする。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score(settings, project_id)
+
+    resp = client.get(
+        f"/api/projects/{project_id}/refine/estimate",
+        params={"part_id": "piano"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["part_id"] == "piano"
+    assert body["mode"] == "sync"
+    assert body["num_chunks"] >= 1
+    assert body["estimated_input_tokens"] > 0
+    assert body["estimated_output_tokens"] > 0
+    assert body["estimated_cost_usd"] > 0
+
+
+def test_refine_estimate_batch_mode_success(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """#40: GET /refine/estimate で明示的に mode='batch' を指定できる。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score(settings, project_id)
+
+    resp = client.get(
+        f"/api/projects/{project_id}/refine/estimate",
+        params={"part_id": "piano", "mode": "batch"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["part_id"] == "piano"
+    assert body["mode"] == "batch"
+    assert body["num_chunks"] >= 1
+    assert body["estimated_input_tokens"] > 0
+    assert body["estimated_output_tokens"] > 0
+    assert body["estimated_cost_usd"] > 0
+
+
+def test_refine_rejects_invalid_mode(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
     project_id = _create_project(client, tiny_wav_bytes)
     resp = client.post(
         f"/api/projects/{project_id}/refine",
-        json={"mode": "batch", "part_id": "piano"},
+        json={"mode": "unsupported_mode", "part_id": "piano"},
     )
     assert resp.status_code == 422

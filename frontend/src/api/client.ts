@@ -359,3 +359,45 @@ export async function getJob(jobId: string): Promise<Job> {
 export async function cancelJob(jobId: string): Promise<void> {
   await apiFetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
 }
+
+export type RefineRequest = components["schemas"]["RefineRequest"];
+export type RefineResponse = components["schemas"]["RefineResponse"];
+export type RefineEstimateResponse = components["schemas"]["RefineEstimateResponse"];
+
+/** #40: L1整音の事前見積もりを取得する(§7.5/NFR-07)。 */
+export async function getRefineEstimate(
+  projectId: string,
+  partId: string,
+  mode: "sync" | "batch" = "sync",
+  model?: string,
+): Promise<RefineEstimateResponse> {
+  const query = new URLSearchParams({ part_id: partId, mode });
+  if (model) query.set("model", model);
+  const resp = await apiFetch(`/api/projects/${projectId}/refine/estimate?${query.toString()}`);
+  return (await resp.json()) as RefineEstimateResponse;
+}
+
+/** #40: L1整音を実行する(NFR-07/R-9)。 */
+export async function runRefine(
+  projectId: string,
+  body: {
+    part_id: string;
+    mode?: "sync" | "batch";
+    model?: string;
+    effort?: "high" | "medium";
+  },
+): Promise<RefineResponse> {
+  const payload: Record<string, unknown> = {
+    part_id: body.part_id,
+  };
+  if (body.mode !== undefined) payload.mode = body.mode;
+  if (body.model !== undefined) payload.model = body.model;
+  if (body.effort !== undefined) payload.effort = body.effort;
+
+  const resp = await apiFetch(`/api/projects/${projectId}/refine`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return (await resp.json()) as RefineResponse;
+}
