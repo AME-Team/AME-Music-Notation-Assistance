@@ -67,19 +67,15 @@ def estimate_key_fifths(pitch_classes: list[int]) -> int:
     music21のKrumhansl-Schmuckler調推定(`Stream.analyze('key')`)を使う。
     これは固定の統計アルゴリズムであり、AIではない(M2の完了条件に抵触しない)。
     ノートが1件も無ければ既定でハ長調(0)を返す。
+
+    実体は`key_estimation.estimate_key`に委譲する(#38: L1チャンク入力の
+    `key_estimate`/`key_confidence`もこれを再利用する必要が生じたため、
+    music21呼び出しを共有モジュールへ集約した。L0とL1が異なる調推定結果に
+    基づいてしまう食い違いを避けるための統合)。
     """
-    if not pitch_classes:
-        return 0
+    from app.pipeline.refine.key_estimation import estimate_key
 
-    import music21
-
-    stream = music21.stream.Stream()
-    for pitch_class in pitch_classes:
-        # 調推定はピッチクラスの分布だけに依存するため、オクターブは任意
-        # (すべて中央ハ寄りの1オクターブ内に詰めて渡す)。
-        stream.append(music21.note.Note(MIDDLE_C + pitch_class))
-    key = stream.analyze("key")
-    return int(key.sharps)
+    return estimate_key(pitch_classes).fifths
 
 
 def _assign_spellings(

@@ -127,3 +127,46 @@ def time_signature_at_bar(time_signatures: list[dict], bar: int) -> tuple[int, i
         else:
             break
     return numerator, denominator
+
+
+def bar_start_ticks(time_signatures: list[dict], divisions: int, max_bar: int) -> dict[int, int]:
+    """各小節番号(1..max_bar) -> その小節開始点の絶対tick。
+
+    `pipeline/export/score_builder.py`のprivateヘルパーだったものを、#38で
+    `l1_chunker.py`(tick→bar/beat逆変換)からも必要になったため、
+    `time_signature_at_bar`と同じ理由でここに昇格した(小節境界解釈を
+    一元化しないと、エクスポートとL1チャンク分割で小節番号がずれうる)。
+    """
+    starts: dict[int, int] = {}
+    tick = 0
+    for bar in range(1, max_bar + 1):
+        starts[bar] = tick
+        numerator, denominator = time_signature_at_bar(time_signatures, bar)
+        tick += round(divisions * numerator * 4 / denominator)
+    return starts
+
+
+def tick_to_bar_beat(
+    tick: int, *, time_signatures: list[dict], divisions: int
+) -> tuple[int, float]:
+    """絶対tickから`(bar, beat)`を逆算する(#38, L1チャンク入力の`bar`/`raw_beat`用)。
+
+    `beat`は1始まり(小節頭がbeat=1.0)。拍子が小節ごとに変わりうるため、
+    小節の長さを事前に決め打ちできず、小節を1つずつ前進させながら`tick`を
+    含む小節を探す(`bar_start_ticks`と同じ小節長計算式を使う)。
+    """
+    bar = 1
+    bar_tick = 0
+    numerator, denominator = time_signature_at_bar(time_signatures, bar)
+    while True:
+        # `bar_start_ticks`と同じ丸め方式(round)にすることで、小節を跨いだ
+        # 累積計算の結果が両関数で食い違わないようにする。
+        pulse_ticks = divisions * 4 / denominator
+        bar_length_ticks = round(pulse_ticks * numerator)
+        if tick < bar_tick + bar_length_ticks:
+            break
+        bar_tick += bar_length_ticks
+        bar += 1
+        numerator, denominator = time_signature_at_bar(time_signatures, bar)
+    beat = 1.0 + (tick - bar_tick) / pulse_ticks
+    return bar, beat

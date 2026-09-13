@@ -36,24 +36,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.pipeline.time_signature import time_signature_at_bar
+from app.pipeline.time_signature import bar_start_ticks, time_signature_at_bar
 
 DEFAULT_DIVISIONS = 480
 
 
 class ExportError(ValueError):
     """エクスポート前提条件エラー(例: 量子化/L0未実行でtick/spellingが未設定)。"""
-
-
-def _bar_start_ticks(time_signatures: list[dict], divisions: int, max_bar: int) -> dict[int, int]:
-    """各小節番号(1..max_bar) -> その小節開始点の絶対tick。"""
-    starts: dict[int, int] = {}
-    tick = 0
-    for bar in range(1, max_bar + 1):
-        starts[bar] = tick
-        numerator, denominator = time_signature_at_bar(time_signatures, bar)
-        tick += round(divisions * numerator * 4 / denominator)
-    return starts
 
 
 def _max_referenced_bar(*entry_lists: list[dict]) -> int:
@@ -116,7 +105,7 @@ def build_score(score: dict[str, Any]) -> Any:  # noqa: ANN401 — partituraの�
     key_signatures = score.get("key_signatures", [])
     tempo_map = score.get("tempo_map", [])
     max_bar = _max_referenced_bar(time_signatures, key_signatures, tempo_map)
-    bar_starts = _bar_start_ticks(time_signatures, divisions, max_bar)
+    bar_starts = bar_start_ticks(time_signatures, divisions, max_bar)
 
     parts = []
     for part_data in score.get("parts", []):
