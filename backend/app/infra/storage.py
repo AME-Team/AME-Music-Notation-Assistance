@@ -92,6 +92,16 @@ def score_undo_state_path(workspace_dir: Path, project_id: str) -> Path:
     return project_dir(workspace_dir, project_id) / "score" / "undo_state.json"
 
 
+def score_staging_path(workspace_dir: Path, project_id: str, run_id: str) -> Path:
+    """#39: L1整音1回分(`run_id`)の提案結果(ステージング済みScore IR)の保存先。
+
+    `current.json`とは別に保存し、ユーザーがDiffPanel(#41)で採否を決めるまで
+    本番のScore IRには反映しない(設計書§10.3、`score_ops_log_path`のdocstring
+    参照)。
+    """
+    return project_dir(workspace_dir, project_id) / "score" / "staging" / f"{run_id}.json"
+
+
 def musicxml_export_path(workspace_dir: Path, project_id: str) -> Path:
     """#27 Stage 6: `POST /export` が書き出すMusicXMLの保存先。"""
     return project_dir(workspace_dir, project_id) / "export" / "score.musicxml"
