@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from app.pipeline.refine.key_estimation import estimate_key
 from app.pipeline.refine.l1_chunker import ChunkInput
 
 if TYPE_CHECKING:
@@ -87,10 +88,18 @@ def build_song_context_message(score: ScoreIR, part_id: str) -> str:
         f"{ts.numerator}/{ts.denominator}(小節{ts.bar}〜)" for ts in score.time_signatures
     ] or ["4/4(既定)"]
     tempos = [f"{t.bpm}bpm(小節{t.bar}〜)" for t in score.tempo_map] or ["120bpm(既定)"]
+    # パート全体のノートから推定した調(#38 Gate2レビュー指摘: 以前はdocstringが
+    # 「調」を含むと謳いながら実装に無かった)。`l1_chunker.build_chunks`の
+    # チャンクごとのkey_estimateは対象小節のノートのみから局所的に推定するため、
+    # チャンク間で調が食い違いうるが、ここ(曲単位でキャッシュされる文脈)では
+    # パート全体を1つの安定した調としてまとめて提示する。
+    pitch_classes = [note.midi % 12 for note in part.notes if note.status != "deleted"]
+    key = estimate_key(pitch_classes)
 
     lines = [
         "## 楽曲全体コンテキスト",
         f"- パート: {part.name}({part.id}), {part.staves}段譜表",
+        f"- 調: {key.label}(信頼度{key.confidence:.2f})",
         f"- 拍子: {', '.join(time_signatures)}",
         f"- テンポ: {', '.join(tempos)}",
     ]

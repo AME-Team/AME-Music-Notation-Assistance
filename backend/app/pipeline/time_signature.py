@@ -129,6 +129,16 @@ def time_signature_at_bar(time_signatures: list[dict], bar: int) -> tuple[int, i
     return numerator, denominator
 
 
+def _bar_length_ticks(divisions: int, numerator: int, denominator: int) -> int:
+    """1小節分のtick数。`bar_start_ticks`/`tick_to_bar_beat`で共有し、丸めの
+
+    評価順(`round(divisions * numerator * 4 / denominator)`)を完全に一致させる
+    (#38 Gate2レビュー指摘: 別々に書くと分母が2の冪でない拍子で浮動小数の
+    丸め誤差が評価順によって食い違い、両関数の小節境界解釈がずれうる)。
+    """
+    return round(divisions * numerator * 4 / denominator)
+
+
 def bar_start_ticks(time_signatures: list[dict], divisions: int, max_bar: int) -> dict[int, int]:
     """各小節番号(1..max_bar) -> その小節開始点の絶対tick。
 
@@ -142,7 +152,7 @@ def bar_start_ticks(time_signatures: list[dict], divisions: int, max_bar: int) -
     for bar in range(1, max_bar + 1):
         starts[bar] = tick
         numerator, denominator = time_signature_at_bar(time_signatures, bar)
-        tick += round(divisions * numerator * 4 / denominator)
+        tick += _bar_length_ticks(divisions, numerator, denominator)
     return starts
 
 
@@ -153,16 +163,15 @@ def tick_to_bar_beat(
 
     `beat`は1始まり(小節頭がbeat=1.0)。拍子が小節ごとに変わりうるため、
     小節の長さを事前に決め打ちできず、小節を1つずつ前進させながら`tick`を
-    含む小節を探す(`bar_start_ticks`と同じ小節長計算式を使う)。
+    含む小節を探す(`bar_start_ticks`と全く同じ小節長計算式`_bar_length_ticks`
+    を使うことで、両関数の小節境界解釈を一致させる)。
     """
     bar = 1
     bar_tick = 0
     numerator, denominator = time_signature_at_bar(time_signatures, bar)
     while True:
-        # `bar_start_ticks`と同じ丸め方式(round)にすることで、小節を跨いだ
-        # 累積計算の結果が両関数で食い違わないようにする。
+        bar_length_ticks = _bar_length_ticks(divisions, numerator, denominator)
         pulse_ticks = divisions * 4 / denominator
-        bar_length_ticks = round(pulse_ticks * numerator)
         if tick < bar_tick + bar_length_ticks:
             break
         bar_tick += bar_length_ticks

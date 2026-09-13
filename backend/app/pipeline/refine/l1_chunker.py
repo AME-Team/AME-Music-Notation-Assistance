@@ -101,12 +101,6 @@ def _bpm_at_bar(tempo_map: list[dict], bar: int) -> float:
     return bpm
 
 
-def _note_end_bar(note: dict, *, time_signatures: list[dict], divisions: int) -> int:
-    end_tick = note["onset_tick"] + note["duration_tick"]
-    bar, _ = tick_to_bar_beat(end_tick, time_signatures=time_signatures, divisions=divisions)
-    return bar
-
-
 def _duration_beats(
     note: dict, *, note_bar: int, time_signatures: list[dict], divisions: int
 ) -> float:
@@ -176,6 +170,12 @@ def build_chunks(score: ScoreIR, part_id: str) -> list[ChunkInput]:
 
     ノートが1件も無いパートは注釈対象が無いため空リストを返す。
     """
+    if score.find_part(part_id) is None:
+        # `build_song_context_message`(l1_prompt.py)と同じエラー契約に揃える
+        # (#38 Gate2レビュー指摘: 以前は`next(...)`が素のStopIterationを
+        # 送出しており、呼び出し元にとって原因が分かりにくかった)。
+        raise ValueError(f"part {part_id!r} not found in score")
+
     score_dict: dict[str, Any] = score.model_dump(mode="json")
     divisions = score_dict["divisions"]
     time_signatures = score_dict["time_signatures"]
@@ -192,9 +192,11 @@ def build_chunks(score: ScoreIR, part_id: str) -> list[ChunkInput]:
         )
         for n in notes
     }
-    max_bar = max(
-        _note_end_bar(n, time_signatures=time_signatures, divisions=divisions) for n in notes
-    )
+    # ノートの「開始」小節の最大値を使う(#38 Gate2レビュー指摘: 終端小節を
+    # 使うと、ノートがちょうど小節線上で終わる場合にノートが1つも開始しない
+    # 末尾の小節がtargetのチャンクとして生成され、空チャンクがLLM入力に
+    # 混入していた)。
+    max_bar = max(note_bar for note_bar, _ in bar_beat_by_note_id.values())
 
     chunks: list[ChunkInput] = []
     bar = 1
@@ -250,7 +252,10 @@ def build_chunks(score: ScoreIR, part_id: str) -> list[ChunkInput]:
         numerator, denominator = time_signature_at_bar(time_signatures, bar)
         target_notes = [n for n in notes if bar <= bar_beat_by_note_id[n["id"]][0] <= end]
         key = estimate_key([n["midi"] % 12 for n in target_notes])
-        chord_hints = [ChordHint(**c) for c in chords if bar <= c["bar"] <= end]
+        # #38 Gate2レビュー指摘: chunk_notes同様、context小節(前後1小節)の
+        # コード進行もLLMへの参考情報として含める(targetのみに限定すると、
+        # 対象小節の判断に必要な直前直後の和声文脈が欠落する)。
+        chord_hints = [ChordHint(**c) for c in chords if c["bar"] in included_bars]
 
         chunks.append(
             ChunkInput(
@@ -259,7 +264,10 @@ def build_chunks(score: ScoreIR, part_id: str) -> list[ChunkInput]:
                     key_confidence=key.confidence,
                     time_signature=f"{numerator}/{denominator}",
                     tempo_bpm=_bpm_at_bar(tempo_map, bar),
-                    part=ChunkPart(id=part["id"], instrument=part["id"], staves=part["staves"]),
+                    # `Part`は`instrument`フィールドを持たないため、人間可読な
+                    # `name`を使う(#38 Gate2レビュー指摘: 以前は`id`を流用しており、
+                    # part.idが"part_1"のような値だとLLMに無意味な楽器名を渡していた)。
+                    part=ChunkPart(id=part["id"], instrument=part["name"], staves=part["staves"]),
                     chord_hints=chord_hints,
                     bars=ChunkBars(
                         target=(bar, end),

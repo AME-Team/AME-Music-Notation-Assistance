@@ -177,6 +177,68 @@ def test_chord_hints_are_limited_to_target_and_context_bar_range() -> None:
     assert symbols == ["C"]
 
 
+def test_chord_hints_in_context_bars_are_included() -> None:
+    """回帰(#38 Gate2レビュー指摘): 以前はtarget小節のみに限定しており、
+
+    ノートと同様にcontext小節(前後1小節)の和声文脈も含めるべき。
+    """
+    chords = [
+        ChordEntry(bar=1, beat=1.0, symbol="C", confidence=0.9),
+        ChordEntry(bar=5, beat=1.0, symbol="G", confidence=0.9),  # context_after
+    ]
+    score = _score(chords=chords)
+    part = _part()
+    for bar in range(1, 6):
+        part.notes.append(_note(score, bar=bar))
+    score.parts.append(part)
+
+    chunks = build_chunks(score, "piano")
+    assert chunks[0].context.bars.context_after == [5]
+    symbols = {hint.symbol for hint in chunks[0].context.chord_hints}
+    assert symbols == {"C", "G"}
+
+
+def test_trailing_bar_with_no_note_starts_does_not_produce_empty_chunk() -> None:
+    """回帰(#38 Gate2レビュー指摘): ノートが小節線ちょうどで終わる場合に、
+
+    ノートが1つも開始しない末尾小節がtargetの空チャンクとして生成されないこと。
+    """
+    score = _score()
+    part = _part()
+    # 4小節目開始・1920tick(=1小節分)の長さのノート = ちょうど5小節目頭で終わる。
+    note = _note(score, bar=4)
+    note.duration_tick = 1920
+    part.notes.append(note)
+    score.parts.append(part)
+
+    chunks = build_chunks(score, "piano")
+    all_notes = [n for c in chunks for n in c.notes]
+    assert all(n.bar <= 4 for n in all_notes if n.editable)
+    assert all(len(c.notes) > 0 for c in chunks)
+
+
+def test_unknown_part_id_raises_value_error() -> None:
+    score = _score()
+    score.parts.append(_part())
+    try:
+        build_chunks(score, "nonexistent")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+
+def test_instrument_uses_part_name_not_id() -> None:
+    score = _score()
+    part = _part()
+    part.id = "part_1"
+    part.name = "Piano"
+    part.notes.append(_note(score, bar=1))
+    score.parts.append(part)
+
+    chunks = build_chunks(score, "part_1")
+    assert chunks[0].context.part.instrument == "Piano"
+
+
 def test_snap_candidate_conversion_preserves_grid_and_computes_cost_from_beat_distance() -> (
     None
 ):

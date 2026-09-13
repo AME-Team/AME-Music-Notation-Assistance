@@ -6,6 +6,7 @@ import json
 
 from app.domain.score import (
     Clef,
+    Note,
     Part,
     ScoreIR,
     SourceInfo,
@@ -65,6 +66,34 @@ def test_song_context_message_includes_part_and_tempo() -> None:
     assert "Piano" in message
     assert "3/4" in message
     assert "140.0bpm" in message
+
+
+def test_song_context_message_includes_key_estimated_from_whole_part() -> None:
+    """回帰(#38 Gate2レビュー指摘): docstringが「調」を含むと謳いながら
+
+    実装に無かったバグ。パート全体のノートから推定した調を含める。
+    """
+    score = ScoreIR(
+        project_id="p1",
+        source=SourceInfo(filename="song.wav", duration_sec=60.0, sample_rate=44100),
+    )
+    part = Part(id="piano", name="Piano", midi_program=0, staves=2)
+    for i, midi in enumerate([60, 60, 60, 64, 64, 67, 67, 62, 69, 71]):
+        part.notes.append(
+            Note(
+                id=i + 1,
+                onset_sec=float(i),
+                duration_sec=0.4,
+                midi=midi,
+                velocity=90,
+                provenance="amt",
+            )
+        )
+    score.parts.append(part)
+
+    message = build_song_context_message(score, "piano")
+    assert "調:" in message
+    assert "C major" in message
 
 
 def test_song_context_message_raises_for_unknown_part() -> None:
