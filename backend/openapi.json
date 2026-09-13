@@ -1831,7 +1831,7 @@
               "batch"
             ],
             "title": "Mode",
-            "default": "batch"
+            "default": "sync"
           },
           "part_id": {
             "type": "string",

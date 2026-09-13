@@ -42,7 +42,10 @@ router = APIRouter(prefix="/api/projects/{project_id}", tags=["refine"])
 class RefineRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["sync", "batch"] = "batch"
+    # Gate2レビュー指摘(PR #102): HTTPリクエストの長時間ブロッキングを防ぐため
+    # 既定値は同期呼び出し("sync")とし、クライアントが明示的にバッチ割引(R-9)を
+    # 要求した場合のみ"batch"を実行する設計とする。
+    mode: Literal["sync", "batch"] = "sync"
     part_id: str
     model: str = DEFAULT_MODEL
     effort: Literal["high", "medium"] = DEFAULT_EFFORT

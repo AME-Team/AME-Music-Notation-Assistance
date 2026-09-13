@@ -784,7 +784,7 @@ export interface components {
         RefineRequest: {
             /**
              * Mode
-             * @default batch
+             * @default sync
              * @enum {string}
              */
             mode: "sync" | "batch";

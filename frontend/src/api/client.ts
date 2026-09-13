@@ -387,15 +387,17 @@ export async function runRefine(
     effort?: "high" | "medium";
   },
 ): Promise<RefineResponse> {
+  const payload: Record<string, unknown> = {
+    part_id: body.part_id,
+  };
+  if (body.mode !== undefined) payload.mode = body.mode;
+  if (body.model !== undefined) payload.model = body.model;
+  if (body.effort !== undefined) payload.effort = body.effort;
+
   const resp = await apiFetch(`/api/projects/${projectId}/refine`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      mode: body.mode ?? "batch",
-      part_id: body.part_id,
-      model: body.model ?? "claude-opus-5",
-      effort: body.effort ?? "high",
-    }),
+    body: JSON.stringify(payload),
   });
   return (await resp.json()) as RefineResponse;
 }
