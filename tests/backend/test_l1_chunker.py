@@ -217,6 +217,25 @@ def test_trailing_bar_with_no_note_starts_does_not_produce_empty_chunk() -> None
     assert all(len(c.notes) > 0 for c in chunks)
 
 
+def test_internal_gap_between_sparse_notes_does_not_produce_empty_chunk() -> None:
+    """回帰(#38 Gate2レビュー指摘、2巡目): 末尾だけでなく、ノート開始が
+
+    チャンク幅(4小節)以上に空く内部ギャップ(例: 小節1と小節10のみに
+    ノートがある場合)でも、対象ノートが1件も無い空チャンクが生成されないこと。
+    全チャンクに対して一般化する(単発の`chunks[0]`だけでなく)。
+    """
+    score = _score()
+    part = _part()
+    part.notes.append(_note(score, bar=1))
+    part.notes.append(_note(score, bar=10))
+    score.parts.append(part)
+
+    chunks = build_chunks(score, "piano")
+    assert all(len(c.notes) > 0 for c in chunks)
+    target_note_bars = sorted(n.bar for c in chunks for n in c.notes if n.editable)
+    assert target_note_bars == [1, 10]
+
+
 def test_unknown_part_id_raises_value_error() -> None:
     score = _score()
     score.parts.append(_part())

@@ -210,6 +210,16 @@ def build_chunks(score: ScoreIR, part_id: str) -> list[ChunkInput]:
             size = SHRUNK_BARS_PER_CHUNK
         end = min(bar + size - 1, max_bar)
 
+        target_notes = [n for n in notes if bar <= bar_beat_by_note_id[n["id"]][0] <= end]
+        if not target_notes:
+            # #38 Gate2レビュー指摘(2巡目): 末尾だけでなく、ノート開始が
+            # チャンク幅以上に空く内部ギャップでも空チャンクが生成されうる
+            # (例: 小節1と小節10にのみノートがある場合のbar=5〜8チャンク)。
+            # targetに注釈対象のノートが1件も無いチャンクはLLM入力に含める
+            # 意味が無いため、生成せずに次の範囲へ進む。
+            bar = end + 1
+            continue
+
         context_before = [bar - 1] if bar > 1 else []
         context_after = [end + 1] if end + 1 <= max_bar else []
         included_bars = {*context_before, *range(bar, end + 1), *context_after}
@@ -250,7 +260,6 @@ def build_chunks(score: ScoreIR, part_id: str) -> list[ChunkInput]:
             )
 
         numerator, denominator = time_signature_at_bar(time_signatures, bar)
-        target_notes = [n for n in notes if bar <= bar_beat_by_note_id[n["id"]][0] <= end]
         key = estimate_key([n["midi"] % 12 for n in target_notes])
         # #38 Gate2レビュー指摘: chunk_notes同様、context小節(前後1小節)の
         # コード進行もLLMへの参考情報として含める(targetのみに限定すると、
