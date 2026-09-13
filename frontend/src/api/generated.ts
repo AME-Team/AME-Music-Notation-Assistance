@@ -430,6 +430,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/refine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refine Score
+         * @description 量子化(#25)+L0(#26)実行済みが前提。未実行なら404を返す。
+         *
+         *     `async def`にしない(`api/export.py`と同じ理由): `anthropic`のPython SDKは
+         *     同期クライアントであり、`async def`のままだと待機中にイベントループを
+         *     直接ブロックし、SSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。
+         */
+        post: operations["refine_score_api_projects__project_id__refine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -713,6 +737,44 @@ export interface components {
         ProjectList: {
             /** Projects */
             projects: components["schemas"]["Project"][];
+        };
+        /** RefineRequest */
+        RefineRequest: {
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "sync";
+            /** Part Id */
+            part_id: string;
+            /**
+             * Model
+             * @default claude-opus-5
+             */
+            model: string;
+            /**
+             * Effort
+             * @default high
+             * @enum {string}
+             */
+            effort: "high" | "medium";
+        };
+        /** RefineResponse */
+        RefineResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Chunks Ok */
+            chunks_ok: number;
+            /** Chunks Rejected */
+            chunks_rejected: number;
+            /** Rejected Reasons */
+            rejected_reasons: string[];
+            /** Skipped Decisions */
+            skipped_decisions: string[];
+            /** Usage */
+            usage: {
+                [key: string]: number;
+            };
         };
         /** RunStageRequest */
         RunStageRequest: {
@@ -1527,6 +1589,41 @@ export interface operations {
                 content: {
                     "application/vnd.recordare.musicxml+xml": string;
                     "audio/midi": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refine_score_api_projects__project_id__refine_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefineRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefineResponse"];
                 };
             };
             /** @description Validation Error */

@@ -1010,6 +1010,59 @@
           }
         }
       }
+    },
+    "/api/projects/{project_id}/refine": {
+      "post": {
+        "tags": [
+          "refine"
+        ],
+        "summary": "Refine Score",
+        "description": "量子化(#25)+L0(#26)実行済みが前提。未実行なら404を返す。\n\n`async def`にしない(`api/export.py`と同じ理由): `anthropic`のPython SDKは\n同期クライアントであり、`async def`のままだと待機中にイベントループを\n直接ブロックし、SSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。",
+        "operationId": "refine_score_api_projects__project_id__refine_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefineRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefineResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1640,6 +1693,87 @@
           "projects"
         ],
         "title": "ProjectList"
+      },
+      "RefineRequest": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "const": "sync",
+            "title": "Mode"
+          },
+          "part_id": {
+            "type": "string",
+            "title": "Part Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": "claude-opus-5"
+          },
+          "effort": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium"
+            ],
+            "title": "Effort",
+            "default": "high"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mode",
+          "part_id"
+        ],
+        "title": "RefineRequest"
+      },
+      "RefineResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "chunks_ok": {
+            "type": "integer",
+            "title": "Chunks Ok"
+          },
+          "chunks_rejected": {
+            "type": "integer",
+            "title": "Chunks Rejected"
+          },
+          "rejected_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rejected Reasons"
+          },
+          "skipped_decisions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped Decisions"
+          },
+          "usage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Usage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "chunks_ok",
+          "chunks_rejected",
+          "rejected_reasons",
+          "skipped_decisions",
+          "usage"
+        ],
+        "title": "RefineResponse"
       },
       "RunStageRequest": {
         "properties": {
