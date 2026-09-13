@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 
 import anthropic
 
-from app.domain.invariants import validate_decisions
 from app.pipeline.refine.cost import calculate_usage_cost_usd
 from app.pipeline.refine.l1_chunker import build_chunks
 from app.pipeline.refine.l1_client import (
@@ -27,14 +26,9 @@ from app.pipeline.refine.l1_prompt import (
     build_system_prompt,
 )
 from app.pipeline.refine.l1_runner import (
-    _UNSUPPORTED_ACTIONS,
     L1RunResult,
-    _apply_delete,
-    _apply_keep,
-    _apply_split_tie,
-    _validation_notes_for_chunk,
+    verify_and_apply_chunk_decisions,
 )
-from app.pipeline.time_signature import tick_to_bar_beat
 
 if TYPE_CHECKING:
     from app.domain.score import ScoreIR
@@ -96,7 +90,12 @@ def run_l1_batch(
             chunks_rejected=0,
             rejected_reasons=[],
             skipped_decisions=[],
-            usage={"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0},
+            usage={
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
         )
 
     system_prompt = build_system_prompt()
@@ -181,7 +180,12 @@ def run_l1_batch(
     chunks_rejected = 0
     rejected_reasons: list[str] = []
     skipped_decisions: list[str] = []
-    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
 
     for item in results:
         custom_id = item.custom_id
@@ -208,6 +212,9 @@ def run_l1_batch(
             usage["cache_read_input_tokens"] += (
                 getattr(msg_usage, "cache_read_input_tokens", 0) or 0
             )
+            usage["cache_creation_input_tokens"] += (
+                getattr(msg_usage, "cache_creation_input_tokens", 0) or 0
+            )
 
         try:
             chunk_output = _parse_batch_message_content(message, target_chunk.context.bars.target)
@@ -216,48 +223,23 @@ def run_l1_batch(
             rejected_reasons.append(f"bars {target_chunk.context.bars.target}: {exc}")
             continue
 
-        validation_notes = _validation_notes_for_chunk(
-            target_chunk, notes_by_id, chunk_output.decisions
+        ok, rejection_reason = verify_and_apply_chunk_decisions(
+            chunk=target_chunk,
+            decisions=chunk_output.decisions,
+            staged=staged,
+            part_staves=part.staves,
+            notes_by_id=notes_by_id,
+            run_id=run_id,
+            beat_anchors=beat_anchors,
+            time_signatures_raw=time_signatures_raw,
+            skipped_decisions=skipped_decisions,
         )
-        violations = validate_decisions(
-            chunk_output.decisions, notes=validation_notes, part_staves=part.staves
-        )
-        if violations:
+        if ok:
+            chunks_ok += 1
+        else:
             chunks_rejected += 1
-            reasons = "; ".join(f"{v.rule}(note {v.note_id}): {v.message}" for v in violations)
-            rejected_reasons.append(f"bars {target_chunk.context.bars.target}: {reasons}")
-            continue
-
-        chunks_ok += 1
-        for decision in chunk_output.decisions:
-            note = notes_by_id.get(decision.note_id)
-            if note is None:
-                continue
-            if decision.action in _UNSUPPORTED_ACTIONS:
-                skipped_decisions.append(
-                    f"note {decision.note_id}: unsupported action {decision.action!r}"
-                )
-                continue
-            note_bar, _ = tick_to_bar_beat(
-                note.onset_tick or 0,
-                time_signatures=time_signatures_raw,
-                divisions=staged.divisions,
-            )
-            if decision.action == "keep":
-                _apply_keep(note, decision, run_id=run_id, beat_anchors=beat_anchors)
-            elif decision.action == "delete":
-                _apply_delete(note, decision, run_id=run_id)
-            elif decision.action == "split_tie":
-                _apply_split_tie(
-                    staged,
-                    note,
-                    decision,
-                    note_bar=note_bar,
-                    run_id=run_id,
-                    time_signatures=time_signatures_raw,
-                    divisions=staged.divisions,
-                    beat_anchors=beat_anchors,
-                )
+            if rejection_reason:
+                rejected_reasons.append(rejection_reason)
 
     cost_usd = calculate_usage_cost_usd(usage, model, mode="batch")
 

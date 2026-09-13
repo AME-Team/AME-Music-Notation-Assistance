@@ -44,7 +44,10 @@ def _mock_response(
     response.stop_reason = stop_reason
     response.parsed_output = parsed_output
     response.usage = SimpleNamespace(
-        input_tokens=100, output_tokens=50, cache_read_input_tokens=30
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_input_tokens=30,
+        cache_creation_input_tokens=10,
     )
     return response
 
@@ -63,6 +66,7 @@ def test_call_l1_chunk_returns_parsed_output_and_usage() -> None:
         "input_tokens": 100,
         "output_tokens": 50,
         "cache_read_input_tokens": 30,
+        "cache_creation_input_tokens": 10,
     }
 
 

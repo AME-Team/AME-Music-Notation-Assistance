@@ -98,6 +98,7 @@ def test_run_l1_batch_success():
                     input_tokens=1000,
                     output_tokens=500,
                     cache_read_input_tokens=200,
+                    cache_creation_input_tokens=100,
                 ),
             ),
         ),
@@ -119,6 +120,7 @@ def test_run_l1_batch_success():
     assert result.usage["input_tokens"] == 1000
     assert result.usage["output_tokens"] == 500
     assert result.usage["cache_read_input_tokens"] == 200
+    assert result.usage["cache_creation_input_tokens"] == 100
 
     # ステージングScoreIRの確認
     part = result.staged_score.find_part("piano")

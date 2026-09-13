@@ -126,6 +126,9 @@ def call_l1_chunk(
     usage = {
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
-        "cache_read_input_tokens": response.usage.cache_read_input_tokens or 0,
+        "cache_read_input_tokens": (getattr(response.usage, "cache_read_input_tokens", 0) or 0),
+        "cache_creation_input_tokens": (
+            getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+        ),
     }
     return L1ChunkCallResult(output=response.parsed_output, usage=usage)

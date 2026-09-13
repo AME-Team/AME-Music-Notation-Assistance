@@ -1048,7 +1048,7 @@
                 "batch"
               ],
               "type": "string",
-              "default": "batch",
+              "default": "sync",
               "title": "Mode"
             }
           },

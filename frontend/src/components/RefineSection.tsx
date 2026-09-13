@@ -11,7 +11,7 @@ interface RefineSectionProps {
 /**
  * #40: L1 構造化出力整音 (Batch / Sync) とコスト可視化コンポーネント (NFR-07/R-9)。
  *
- * - R-9: 既定で Batch モード (50% 割引) を選択し、AI 呼び出しコストを抑制。
+ * - HTTPリクエストの長時間ブロッキングを防ぐため、既定で同期・逐次実行 ("sync") を選択。Batch API (50% 割引) も選択可能。
  * - 実行前の想定コスト事前見積もり表示 (§7.5)。
  * - 実行後の消費トークン数・実測コスト・承認/棄却内訳の可視化 (NFR-07)。
  * - 生成された run_id を保持し、将来の DiffPanel (#41) に引き継ぐ。
@@ -21,7 +21,7 @@ export function RefineSection({ projectId, isQuantizeReady }: RefineSectionProps
 
   const parts = score?.parts ?? [];
   const [selectedPart, setSelectedPart] = useState<string>("piano");
-  const [mode, setMode] = useState<"batch" | "sync">("batch");
+  const [mode, setMode] = useState<"batch" | "sync">("sync");
   const [effort, setEffort] = useState<"high" | "medium">("high");
 
   // 見積もり状態
@@ -121,8 +121,8 @@ export function RefineSection({ projectId, isQuantizeReady }: RefineSectionProps
             disabled={isRunning}
             className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
-            <option value="batch">Batch API (50%割引・推奨)</option>
-            <option value="sync">同期・逐次実行 (即時)</option>
+            <option value="sync">同期・逐次実行 (即時・既定)</option>
+            <option value="batch">Batch API (50%割引・非同期ポーリング)</option>
           </select>
         </label>
 

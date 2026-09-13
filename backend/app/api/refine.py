@@ -6,8 +6,8 @@
 条件「L0とL1の差分を確認し小節単位で採否を決める」)。
 
 `mode`は`Literal["sync", "batch"]`をサポート(#40):
-- `"batch"`: Anthropic Messages Batches APIを使用(R-9: コスト50%割引、既定値)。
-- `"sync"`: チャンクごとの逐次同期呼び出し。
+- `"sync"`: チャンクごとの逐次同期呼び出し(既定値)。
+- `"batch"`: Anthropic Messages Batches APIを使用(R-9: コスト50%割引)。
 - NFR-07: レスポンスにトークン使用量(`usage`)と実測コスト(`cost_usd`)を含める。
 - `GET /refine/estimate`: 実行前の事前見積もりエンドポイントを提供(§7.5)。
 """
@@ -99,7 +99,7 @@ def _read_beat_anchors_or_422(
 def estimate_refine(
     project_id: str,
     part_id: str,
-    mode: Literal["sync", "batch"] = "batch",
+    mode: Literal["sync", "batch"] = "sync",
     model: str = DEFAULT_MODEL,
     service: ProjectService = Depends(get_project_service),
     settings: Settings = Depends(get_settings),

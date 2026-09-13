@@ -368,7 +368,7 @@ export type RefineEstimateResponse = components["schemas"]["RefineEstimateRespon
 export async function getRefineEstimate(
   projectId: string,
   partId: string,
-  mode: "sync" | "batch" = "batch",
+  mode: "sync" | "batch" = "sync",
   model?: string,
 ): Promise<RefineEstimateResponse> {
   const query = new URLSearchParams({ part_id: partId, mode });

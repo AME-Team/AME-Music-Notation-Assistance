@@ -17,6 +17,7 @@ class ModelPricing:
     input_per_million: float
     output_per_million: float
     cache_read_per_million: float
+    cache_creation_per_million: float
 
 
 # Anthropic Messages Batches API は通常料金の 50% 割引 (R-9)
@@ -24,19 +25,21 @@ BATCH_DISCOUNT_FACTOR: Final[float] = 0.5
 
 # 設計書§7.5 の試算モデルに準拠:
 # - claude-opus-5: 逐次 約$3.5 / Batch 約$1.8
-#   (Input $5.00 / Output $25.00 / CacheRead $0.50 per MTok)
+#   (Input $5.00 / Output $25.00 / CacheRead $0.50 / CacheWrite $6.25 per MTok)
 # - claude-sonnet-5: Batch 約$1.1
-#   (Input $3.00 / Output $15.00 / CacheRead $0.30 per MTok)
+#   (Input $3.00 / Output $15.00 / CacheRead $0.30 / CacheWrite $3.75 per MTok)
 PRICING_TABLE: Final[dict[str, ModelPricing]] = {
     "claude-opus-5": ModelPricing(
         input_per_million=5.0,
         output_per_million=25.0,
         cache_read_per_million=0.5,
+        cache_creation_per_million=6.25,
     ),
     "claude-sonnet-5": ModelPricing(
         input_per_million=3.0,
         output_per_million=15.0,
         cache_read_per_million=0.3,
+        cache_creation_per_million=3.75,
     ),
 }
 
@@ -62,9 +65,10 @@ def calculate_usage_cost_usd(
     """実測トークン使用量から USD コストを算出する (NFR-07)。
 
     Anthropic API レスポンスの usage フィールド:
-    - input_tokens: 全入力トークン数
+    - input_tokens: キャッシュを含まない非キャッシュ入力トークン数
     - output_tokens: 生成出力トークン数
     - cache_read_input_tokens: キャッシュから読み込まれた入力トークン数 (90%引)
+    - cache_creation_input_tokens: キャッシュ書き込みトークン数 (通常単価の1.25倍)
     """
     pricing = PRICING_TABLE.get(model, DEFAULT_PRICING)
     discount = BATCH_DISCOUNT_FACTOR if mode == "batch" else 1.0
@@ -72,14 +76,13 @@ def calculate_usage_cost_usd(
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
     cache_read_tokens = usage.get("cache_read_input_tokens", 0)
-
-    # キャッシュ読み込み分は割引価格、残りの通常入力分は通常入力単価で計算
-    billable_input = max(0, input_tokens - cache_read_tokens)
+    cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
 
     cost = (
-        (billable_input * pricing.input_per_million / 1_000_000.0)
-        + (output_tokens * pricing.output_per_million / 1_000_000.0)
+        (input_tokens * pricing.input_per_million / 1_000_000.0)
+        + (cache_creation_tokens * pricing.cache_creation_per_million / 1_000_000.0)
         + (cache_read_tokens * pricing.cache_read_per_million / 1_000_000.0)
+        + (output_tokens * pricing.output_per_million / 1_000_000.0)
     ) * discount
 
     return round(cost, 4)
@@ -97,7 +100,9 @@ def estimate_refine_cost(
     - 曲コンテキスト: 500 トークン (キャッシュ)
     - チャンク入力: 2,500 トークン / チャンク
     - 出力: 1,500 トークン / チャンク
-    - キャッシュ効率: 2 チャンク目以降はプロンプト 2,000 トークンがキャッシュヒット
+    - キャッシュ効率:
+      - 初回: プロンプト 2,000 トークンがキャッシュ作成 (cache_creation)
+      - 2 チャンク目以降: プロンプト 2,000 トークンがキャッシュヒット (cache_read)
     """
     if num_chunks <= 0:
         return RefineCostEstimate(
@@ -112,14 +117,17 @@ def estimate_refine_cost(
     chunk_input_tokens = 2500
     chunk_output_tokens = 1500
 
-    total_input = chunk_input_tokens * num_chunks
+    total_chunk_input = chunk_input_tokens * num_chunks
+    total_input = prompt_tokens + total_chunk_input
     total_cache_read = prompt_tokens * max(0, num_chunks - 1)
+    cache_creation_tokens = prompt_tokens
     total_output = chunk_output_tokens * num_chunks
 
     usage_for_calc = {
-        "input_tokens": total_input,
+        "input_tokens": total_chunk_input,
+        "cache_creation_input_tokens": cache_creation_tokens,
+        "cache_read_input_tokens": total_cache_read,
         "output_tokens": total_output,
-        "cache_read_input_tokens": 0,
     }
 
     cost_usd = calculate_usage_cost_usd(usage_for_calc, model, mode)

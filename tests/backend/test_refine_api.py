@@ -78,7 +78,12 @@ def _write_beatmap_120bpm_4_4(settings: Settings, project_id: str) -> None:
 def _mock_l1_response():
     result = L1ChunkCallResult(
         output=L1ChunkResponse(bar_range=(1, 1), decisions=[]),
-        usage={"input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0},
+        usage={
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
     )
     return patch("app.pipeline.refine.l1_runner.call_l1_chunk", return_value=result)
 
@@ -214,10 +219,31 @@ def test_refine_batch_mode_success(
     mock_batch.assert_called_once()
 
 
-def test_refine_estimate_success(
+def test_refine_estimate_default_mode_is_sync(
     client: TestClient, settings: Settings, tiny_wav_bytes: bytes
 ) -> None:
-    """#40: GET /refine/estimate で事前見積もりが取得できる。"""
+    """#40: GET /refine/estimate は未指定時に mode='sync' を既定とする。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    _write_score(settings, project_id)
+
+    resp = client.get(
+        f"/api/projects/{project_id}/refine/estimate",
+        params={"part_id": "piano"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["part_id"] == "piano"
+    assert body["mode"] == "sync"
+    assert body["num_chunks"] >= 1
+    assert body["estimated_input_tokens"] > 0
+    assert body["estimated_output_tokens"] > 0
+    assert body["estimated_cost_usd"] > 0
+
+
+def test_refine_estimate_batch_mode_success(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """#40: GET /refine/estimate で明示的に mode='batch' を指定できる。"""
     project_id = _create_project(client, tiny_wav_bytes)
     _write_score(settings, project_id)
 
