@@ -26,6 +26,10 @@ DecisionAction = Literal["keep", "delete", "split_tie", "merge_with_previous"]
 _TIME_OCCUPYING_ACTIONS: frozenset[DecisionAction] = frozenset({"keep", "split_tie"})
 # V-3(snap候補チェック)の対象(deleteはsnapを持たない。merge_with_previousも
 # 対象ノート自体の位置は消えるため対象外)。
+# 現時点では_TIME_OCCUPYING_ACTIONSと内容が一致するが、「時間を占有するか」と
+# 「snapを要求するか」は別の関心事であり、将来actionが増えた際に独立して変化しうる
+# (例: mergeの対象側にだけsnapを求める等)ため、意図的に別定義とする
+# (#37 Gate2レビュー指摘: 二重定義に見えるが統合しない理由を明記)。
 _SNAP_REQUIRING_ACTIONS: frozenset[DecisionAction] = frozenset({"keep", "split_tie"})
 
 DEFAULT_MAX_DELETE_RATE = 0.15
@@ -61,6 +65,12 @@ class ValidationNote(BaseModel):
     midi: int
     onset_beat: float
     duration_beat: float
+    # L0/現在のvoice割り当て(`domain.score.Note.voice`と同じ既定値1)。L1入力
+    # スキーマ自体には無いフィールドだが、V-8(同一voice内の時間重複)をdecisionが
+    # 無い暗黙keepノート(V-10)にも適用するために必要(#37 Gate2レビュー指摘: これが
+    # 無いと、decisionで明示的に触られていないノート同士、または明示decisionと
+    # 暗黙keepノートとの重複を検出できない偽陰性が生じる)。
+    voice: int = 1
     snap_candidate_ids: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
 
@@ -124,15 +134,27 @@ def _overlap_violations(
 
     delete/merge_with_previousは占有区間から除外する(それ自体は時間を占有
     しなくなるため、#37設計判断)。同一voice内で区間が重なるペアを検出する。
+
+    decision(keep/split_tie)が明示されたノートに加え、**decisionが無い暗黙keep
+    ノート(editable=Trueかつdecision無し、V-10)もV-8の対象に含める**(#37 Gate2
+    レビュー指摘: これらは元のvoiceのまま時間を占有し続けるため、除外すると
+    「L0由来の未変更ノートと明示decisionノートの重複」を検出できない偽陰性が
+    生じる)。voiceは明示decisionが指定していればそれを、無ければノート自身の
+    (L0由来の)voiceを使う。
     """
+    decision_by_note_id = {d.note_id: d for d in decisions}
     by_voice: dict[int, list[tuple[float, float, int]]] = {}
-    for decision in decisions:
-        if decision.action not in _TIME_OCCUPYING_ACTIONS or decision.voice is None:
+    for note in notes_by_id.values():
+        if not note.editable:
             continue
-        note = notes_by_id.get(decision.note_id)
-        if note is None:
+        decision = decision_by_note_id.get(note.id)
+        if decision is None:
+            voice = note.voice
+        elif decision.action in _TIME_OCCUPYING_ACTIONS:
+            voice = decision.voice if decision.voice is not None else note.voice
+        else:
             continue
-        by_voice.setdefault(decision.voice, []).append(
+        by_voice.setdefault(voice, []).append(
             (note.onset_beat, note.onset_beat + note.duration_beat, note.id)
         )
 
@@ -255,21 +277,29 @@ def validate_decisions(
             )
 
         note_end = note.onset_beat + note.duration_beat
-        if (
-            decision.action == "split_tie"
-            and decision.split_at_beat is not None
-            and not (note.onset_beat <= decision.split_at_beat <= note_end)
-        ):
-            violations.append(
-                Violation(
-                    rule="V-9",
-                    note_id=decision.note_id,
-                    message=(
-                        f"split_at_beat {decision.split_at_beat} が発音区間"
-                        f"[{note.onset_beat}, {note_end}]の範囲外"
-                    ),
+        if decision.action == "split_tie":
+            # split_tieはsplit_at_beatが必須(V-3のsnap必須チェックと同じ非対称性
+            # 是正、#37 Gate2レビュー指摘: 未指定のままだと下流で分割点が確定
+            # できず、どのルールにも掛からず素通りしていた)。
+            if decision.split_at_beat is None:
+                violations.append(
+                    Violation(
+                        rule="V-9",
+                        note_id=decision.note_id,
+                        message="split_tieにsplit_at_beatが指定されていない",
+                    )
                 )
-            )
+            elif not (note.onset_beat <= decision.split_at_beat <= note_end):
+                violations.append(
+                    Violation(
+                        rule="V-9",
+                        note_id=decision.note_id,
+                        message=(
+                            f"split_at_beat {decision.split_at_beat} が発音区間"
+                            f"[{note.onset_beat}, {note_end}]の範囲外"
+                        ),
+                    )
+                )
 
     violations.extend(
         _delete_rate_violations(

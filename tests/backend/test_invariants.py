@@ -171,8 +171,8 @@ class TestV4V5Spelling:
 
 class TestV6DeleteRate:
     def test_delete_rate_within_threshold_is_not_violation(self) -> None:
-        # 10notes, 1 deleted = 10% <= 15%
-        notes = [_note(i) for i in range(1, 11)]
+        # 10notes(時間が重ならないよう1拍ずつずらす), 1 deleted = 10% <= 15%
+        notes = [_note(i, onset_beat=float(i)) for i in range(1, 11)]
         decisions = [_decision(1, action="delete")] + [
             _decision(i) for i in range(2, 11)
         ]
@@ -181,7 +181,7 @@ class TestV6DeleteRate:
 
     def test_delete_rate_exceeding_threshold_is_violation(self) -> None:
         # 10notes, 2 deleted = 20% > 15%
-        notes = [_note(i) for i in range(1, 11)]
+        notes = [_note(i, onset_beat=float(i)) for i in range(1, 11)]
         decisions = [_decision(1, action="delete"), _decision(2, action="delete")] + [
             _decision(i) for i in range(3, 11)
         ]
@@ -190,7 +190,10 @@ class TestV6DeleteRate:
 
     def test_ghost_candidate_allows_higher_delete_rate(self) -> None:
         # 10 ghost notes, 5 deleted = 50% <= 60%(ghost閾値)だが通常閾値15%は超える
-        notes = [_note(i, flags=("ghost_candidate",)) for i in range(1, 11)]
+        notes = [
+            _note(i, onset_beat=float(i), flags=("ghost_candidate",))
+            for i in range(1, 11)
+        ]
         decisions = [_decision(i, action="delete") for i in range(1, 6)] + [
             _decision(i) for i in range(6, 11)
         ]
@@ -198,14 +201,19 @@ class TestV6DeleteRate:
         assert violations == []
 
     def test_ghost_candidate_exceeding_ghost_threshold_is_violation(self) -> None:
-        notes = [_note(i, flags=("ghost_candidate",)) for i in range(1, 11)]
+        notes = [
+            _note(i, onset_beat=float(i), flags=("ghost_candidate",))
+            for i in range(1, 11)
+        ]
         decisions = [_decision(i, action="delete") for i in range(1, 8)]  # 70% > 60%
         violations = validate_decisions(decisions, notes=notes, part_staves=2)
         assert _rules(violations) == ["V-6"]
 
     def test_context_notes_excluded_from_delete_rate(self) -> None:
         """editable=falseのノートはV-1/V-2で別途弾かれるため、V-6の母数にも含めない。"""
-        notes = [_note(1, editable=False)] + [_note(i) for i in range(2, 11)]
+        notes = [_note(1, editable=False)] + [
+            _note(i, onset_beat=float(i)) for i in range(2, 11)
+        ]
         decisions = [_decision(i) for i in range(2, 11)]
         violations = validate_decisions(decisions, notes=notes, part_staves=2)
         assert "V-6" not in _rules(violations)
@@ -342,11 +350,33 @@ class TestV9SplitTieRange:
         violations = validate_decisions(decisions, notes=notes, part_staves=2)
         assert _rules(violations) == ["V-9"]
 
+    def test_split_tie_without_split_at_beat_is_violation(self) -> None:
+        """回帰(#37 Gate2レビュー指摘): split_tieなのにsplit_at_beat未指定のdecisionは
+
+        以前はどのルールにも掛からず素通りしていた(V-3のsnap必須チェックとの非対称)。
+        """
+        notes = [_note(1, onset_beat=0.0, duration_beat=2.0, snap_ids=("a",))]
+        decisions = [
+            _decision(
+                1,
+                action="split_tie",
+                snap="a",
+                spelling=Spelling(step="C", alter=0, octave=4),
+                voice=1,
+            )
+        ]
+        violations = validate_decisions(decisions, notes=notes, part_staves=2)
+        assert _rules(violations) == ["V-9"]
+
 
 class TestV10ImplicitKeep:
     def test_decisions_need_not_cover_every_editable_note(self) -> None:
         """decisionが無いノートは暗黙keep — 検証対象外であり違反にならない(§9)。"""
-        notes = [_note(1), _note(2), _note(3)]
+        notes = [
+            _note(1, onset_beat=0.0),
+            _note(2, onset_beat=1.0),
+            _note(3, onset_beat=2.0),
+        ]
         decisions = [
             _decision(1, snap="a", spelling=Spelling(step="C", alter=0, octave=4))
         ]
@@ -354,6 +384,24 @@ class TestV10ImplicitKeep:
         assert violations == []
 
     def test_empty_decisions_is_always_valid(self) -> None:
-        notes = [_note(i) for i in range(1, 5)]
+        notes = [_note(i, onset_beat=float(i)) for i in range(1, 5)]
         violations = validate_decisions([], notes=notes, part_staves=2)
         assert violations == []
+
+    def test_implicit_keep_note_overlapping_explicit_decision_is_v8_violation(
+        self,
+    ) -> None:
+        """decisionが無いノート(暗黙keep)も元のvoiceで時間を占有し続けるため、
+
+        明示decisionされた別ノートと同一voice内で重なればV-8違反になる
+        (#37 Gate2レビュー指摘: 暗黙keepがV-8の対象外だった偽陰性の回帰テスト)。
+        """
+        notes = [
+            _note(
+                1, onset_beat=0.0, duration_beat=2.0
+            ),  # decision無し(暗黙keep, voice既定1)
+            _note(2, onset_beat=1.0, duration_beat=1.0),
+        ]
+        decisions = [_decision(2, voice=1)]
+        violations = validate_decisions(decisions, notes=notes, part_staves=2)
+        assert _rules(violations) == ["V-8"]
