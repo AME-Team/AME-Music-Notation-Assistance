@@ -162,7 +162,13 @@ def _record_ai_decision(
 
     `api/score.py`の`_record_edit_or_warn`と同じ設計(#32): このAPIの主目的
     (current.json/stagingの書き換え)は既に完了しているため、監査ログの永続化
-    失敗はこの操作全体を失敗として扱わない(`OSError`のみ捕捉してstderrへ警告)。
+    失敗はこの操作全体を失敗として扱わない。
+
+    レビュー指摘(#41 Gate2): `OSError`だけでなく`ValueError`も捕捉する
+    (`_read_undo_state_raw`と同じ理由: `score_undo.read_undo_state`は内部で
+    破損したJSON/スキーマ不一致を`ValueError`系として自己修復するが、将来の
+    変更でここが変わった場合に備え、呼び出し側でも同じフォールバック方針を
+    崩さないようにする)。
     """
     scope_dict = {
         "part": scope.part_id,
@@ -183,7 +189,7 @@ def _record_ai_decision(
             state = score_undo.read_undo_state(undo_state_path)
             score_undo.record_edit(state, entry)
             score_undo.write_undo_state(undo_state_path, state)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         print(
             f"[diff] warning: failed to persist ai decision log for project {project_id}: {exc}",
             file=sys.stderr,

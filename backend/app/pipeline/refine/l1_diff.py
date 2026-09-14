@@ -84,19 +84,37 @@ def _copy_fields(dest: Note, src: Note) -> None:
 
 
 def _find_split_new_note(
-    orig: Note, staged_notes: list[Note], *, run_id: str, current_ids: set[int]
+    orig: Note,
+    staged_notes: list[Note],
+    *,
+    run_id: str,
+    current_by_id: dict[int, Note],
+    consumed: set[int],
 ) -> Note | None:
     """`orig`を`split_tie`した結果生まれた新規ノートを探す(`l1_runner._apply_split_tie`参照)。
 
     新規ノートは`current`にまだ存在せず(#41時点でid未割当)、`orig`の終了tickの
     位置から始まり、同じmidiを持つ(分割は音高を変えない)。
+
+    レビュー指摘(#41 Gate2): 上記の条件だけでは、`consumed`(他のペアで既に
+    使用済みの候補)を除外しておらず、また`orig`が実際に短縮されたことも
+    確認していないため、同一run内に偶然条件が一致する無関係なノートが
+    あると誤検出しうる。`current`側の`orig`のduration_tickと比較し、実際に
+    変化している場合のみ候補を探す。
     """
-    if orig.onset_tick is None or orig.duration_tick is None:
+    current_orig = current_by_id.get(orig.id)
+    if (
+        orig.onset_tick is None
+        or orig.duration_tick is None
+        or current_orig is None
+        or current_orig.duration_tick == orig.duration_tick
+    ):
         return None
     end_tick = orig.onset_tick + orig.duration_tick
     for candidate in staged_notes:
         if (
-            candidate.id not in current_ids
+            candidate.id not in current_by_id
+            and candidate.id not in consumed
             and candidate.provenance_run_id == run_id
             and candidate.onset_tick == end_tick
             and candidate.midi == orig.midi
@@ -130,7 +148,11 @@ def compute_diff(current: ScoreIR, staged: ScoreIR, run_id: str) -> list[NoteDif
             current_note = current_by_id[staged_note.id]
 
             new_note = _find_split_new_note(
-                staged_note, staged_part.notes, run_id=run_id, current_ids=current_ids
+                staged_note,
+                staged_part.notes,
+                run_id=run_id,
+                current_by_id=current_by_id,
+                consumed=consumed,
             )
             if new_note is not None:
                 consumed.add(staged_note.id)
