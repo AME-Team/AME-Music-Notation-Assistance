@@ -7,12 +7,14 @@
   このモジュールが提供する単価表ベースの計算は、実行前の事前見積もり
   (`GET /refine/estimate`)専用となる。`mode="batch"`はAnthropic Batches API
   (50%割引)ではなく並列claude CLI呼び出しに再定義されたため、割引係数は廃止した。
+  ただし`mode`は事前見積もりの**キャッシュ再利用前提**には引き続き影響する
+  (`estimate_refine_cost`のdocstring参照、#104 Gate2レビュー指摘)。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 
 @dataclass(frozen=True)
@@ -90,20 +92,27 @@ def calculate_usage_cost_usd(usage: dict[str, int], model: str) -> float:
     return round(cost, 4)
 
 
-def estimate_refine_cost(num_chunks: int, model: str) -> RefineCostEstimate:
+def estimate_refine_cost(
+    num_chunks: int, model: str, mode: Literal["sync", "batch"] = "sync"
+) -> RefineCostEstimate:
     """チャンク数から事前見積もりを算出する (設計書§7.5)。
 
     #104: `mode="batch"`は並列claude CLI呼び出しに再定義され、Anthropic Batches
-    APIの50%割引に相当する仕組みが無いため、sync/batchで見積もりコストは
-    区別しない(呼び出し回数・トークン量は同じで、並列実行によって速くなる
-    だけ)。
+    APIの50%割引に相当する仕組みは無いため、割引は行わない。ただし`mode`は
+    キャッシュ再利用の前提には引き続き影響する(#104 Gate2レビュー指摘):
+    `sync`(逐次実行)では2チャンク目以降が前のチャンクのプロンプトキャッシュを
+    `cache_read`(割安)として再利用できるが、`batch`(並列実行)では複数チャンクが
+    同時多発的にリクエストされるため、キャッシュがまだ書き込み中の状態で
+    互いに追い越し合い、ほぼ再利用が効かない。安全側に倒し、`batch`では
+    全チャンクが`cache_creation`(通常単価の1.25倍、`cache_read`より高価)を
+    個別に負担する前提で見積もる。
 
     §7.5 の試算モデル:
     - システムプロンプト: 1,500 トークン (キャッシュ)
     - 曲コンテキスト: 500 トークン (キャッシュ)
     - チャンク入力: 2,500 トークン / チャンク
     - 出力: 1,500 トークン / チャンク
-    - キャッシュ効率:
+    - キャッシュ効率(sync):
       - 初回: プロンプト 2,000 トークンがキャッシュ作成 (cache_creation)
       - 2 チャンク目以降: プロンプト 2,000 トークンがキャッシュヒット (cache_read)
     """
@@ -122,9 +131,15 @@ def estimate_refine_cost(num_chunks: int, model: str) -> RefineCostEstimate:
 
     total_chunk_input = chunk_input_tokens * num_chunks
     total_input = prompt_tokens + total_chunk_input
-    total_cache_read = prompt_tokens * max(0, num_chunks - 1)
-    cache_creation_tokens = prompt_tokens
     total_output = chunk_output_tokens * num_chunks
+
+    if mode == "batch":
+        # 全チャンクがキャッシュ再利用なしでcache_creationを個別に負担する。
+        total_cache_read = 0
+        cache_creation_tokens = prompt_tokens * num_chunks
+    else:
+        total_cache_read = prompt_tokens * max(0, num_chunks - 1)
+        cache_creation_tokens = prompt_tokens
 
     usage_for_calc = {
         "input_tokens": total_chunk_input,

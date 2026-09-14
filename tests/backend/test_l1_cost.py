@@ -52,6 +52,19 @@ def test_estimate_refine_cost_zero_chunks():
     assert est.estimated_cost_usd == 0.0
 
 
+def test_estimate_refine_cost_batch_has_no_cache_reuse():
+    """#104 Gate2レビュー指摘: 並列実行(batch)はキャッシュ再利用がほぼ効かない
+
+    ため、sync(逐次)より高い見積もりコストになる(全チャンクがcache_creationを
+    個別に負担する前提)。
+    """
+    est_sync = estimate_refine_cost(70, model="claude-opus-5", mode="sync")
+    est_batch = estimate_refine_cost(70, model="claude-opus-5", mode="batch")
+
+    assert est_batch.estimated_cache_read_tokens == 0
+    assert est_batch.estimated_cost_usd > est_sync.estimated_cost_usd
+
+
 def test_estimate_refine_cost_70_chunks_aligns_with_design_spec():
     """設計書§7.5の試算値(逐次実行の単価)と整合しているかを検証。
 

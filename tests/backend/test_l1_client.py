@@ -19,7 +19,12 @@ from app.pipeline.refine.l1_chunker import (
     ChunkInput,
     ChunkPart,
 )
-from app.pipeline.refine.l1_client import L1ChunkResponse, L1ClientError, call_l1_chunk
+from app.pipeline.refine.l1_client import (
+    L1ChunkResponse,
+    L1ClientError,
+    call_l1_chunk,
+    is_claude_cli_available,
+)
 
 
 def _chunk() -> ChunkInput:
@@ -101,6 +106,10 @@ def test_call_l1_chunk_returns_parsed_output_and_usage() -> None:
     assert "--allowedTools" in cmd
     assert "StructuredOutput" in cmd
     assert "--restricted" in cmd
+    # 楽曲コンテキスト+チャンクJSONはコマンドライン引数ではなく標準入力経由
+    # (#104 Gate2レビュー指摘: Windowsのコマンドライン長上限を回避するため)。
+    assert "context" not in cmd
+    assert mock_run.call_args.kwargs["input"].startswith("context\n\n")
 
 
 def test_call_l1_chunk_passes_model_and_effort() -> None:
@@ -124,26 +133,31 @@ def test_call_l1_chunk_passes_model_and_effort() -> None:
 
 
 def test_call_l1_chunk_raises_when_cli_unavailable() -> None:
-    with patch(
-        "app.pipeline.refine.l1_client.is_claude_cli_available", return_value=False
+    with (
+        patch(
+            "app.pipeline.refine.l1_client.is_claude_cli_available", return_value=False
+        ),
+        pytest.raises(L1ClientError),
     ):
-        with pytest.raises(L1ClientError):
-            call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
 
 
 def test_call_l1_chunk_raises_on_nonzero_exit() -> None:
     with (
         _patch_cli_available(),
         _mock_run(stdout="", returncode=1, stderr="boom"),
+        pytest.raises(L1ClientError),
     ):
-        with pytest.raises(L1ClientError):
-            call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
 
 
 def test_call_l1_chunk_raises_on_non_json_stdout() -> None:
-    with _patch_cli_available(), _mock_run(stdout="not json"):
-        with pytest.raises(L1ClientError):
-            call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+    with (
+        _patch_cli_available(),
+        _mock_run(stdout="not json"),
+        pytest.raises(L1ClientError),
+    ):
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
 
 
 def test_call_l1_chunk_raises_when_is_error() -> None:
@@ -152,18 +166,18 @@ def test_call_l1_chunk_raises_when_is_error() -> None:
         _mock_run(
             stdout=_cli_payload(structured_output=None, is_error=True, result="refused")
         ),
+        pytest.raises(L1ClientError),
     ):
-        with pytest.raises(L1ClientError):
-            call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
 
 
 def test_call_l1_chunk_raises_when_structured_output_missing() -> None:
     with (
         _patch_cli_available(),
         _mock_run(stdout=_cli_payload(structured_output=None)),
+        pytest.raises(L1ClientError),
     ):
-        with pytest.raises(L1ClientError):
-            call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
 
 
 def test_call_l1_chunk_raises_on_schema_validation_failure() -> None:
@@ -176,9 +190,39 @@ def test_call_l1_chunk_raises_on_schema_validation_failure() -> None:
     with (
         _patch_cli_available(),
         _mock_run(stdout=_cli_payload(structured_output=structured)),
+        pytest.raises(L1ClientError),
     ):
-        with pytest.raises(L1ClientError):
-            call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+
+
+def test_call_l1_chunk_raises_on_malformed_usage_field() -> None:
+    """`usage`がオブジェクトでない場合、TypeErrorをL1ClientErrorへ変換して隔離する
+
+    (#104 Gate2レビュー指摘: 未捕捉のTypeError/ValueErrorが
+    `run_l1_batch`の`executor.map`イテレーションを止め、他チャンクの結果ごと
+    失われるのを防ぐ)。
+    """
+    structured = {"bar_range": [1, 4], "decisions": [], "bar_annotations": []}
+    payload = json.loads(_cli_payload(structured_output=structured))
+    payload["usage"] = "not-an-object"
+    with (
+        _patch_cli_available(),
+        _mock_run(stdout=json.dumps(payload)),
+        pytest.raises(L1ClientError),
+    ):
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+
+
+def test_call_l1_chunk_raises_on_malformed_cost_field() -> None:
+    structured = {"bar_range": [1, 4], "decisions": [], "bar_annotations": []}
+    payload = json.loads(_cli_payload(structured_output=structured))
+    payload["total_cost_usd"] = "not-a-number"
+    with (
+        _patch_cli_available(),
+        _mock_run(stdout=json.dumps(payload)),
+        pytest.raises(L1ClientError),
+    ):
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
 
 
 def test_call_l1_chunk_raises_on_subprocess_timeout() -> None:
@@ -188,9 +232,49 @@ def test_call_l1_chunk_raises_on_subprocess_timeout() -> None:
             "app.pipeline.refine.l1_client.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["claude"], timeout=180),
         ),
+        pytest.raises(L1ClientError),
     ):
-        with pytest.raises(L1ClientError):
-            call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+
+
+def test_is_claude_cli_available_false_when_binary_missing() -> None:
+    with patch("app.pipeline.refine.l1_client.shutil.which", return_value=None):
+        assert is_claude_cli_available() is False
+
+
+def test_is_claude_cli_available_false_when_not_logged_in() -> None:
+    """`claude` CLIはPATH上にあるが未認証(#104 Gate2レビュー指摘)。
+
+    PATH上の存在確認だけでは検出できず、`claude auth status`の
+    `loggedIn: false`まで見て初めてゲートで弾けることを確認する。
+    """
+    with (
+        patch(
+            "app.pipeline.refine.l1_client.shutil.which", return_value="/usr/bin/claude"
+        ),
+        _mock_run(stdout=json.dumps({"loggedIn": False})),
+    ):
+        assert is_claude_cli_available() is False
+
+
+def test_is_claude_cli_available_true_when_logged_in() -> None:
+    with (
+        patch(
+            "app.pipeline.refine.l1_client.shutil.which", return_value="/usr/bin/claude"
+        ),
+        _mock_run(stdout=json.dumps({"loggedIn": True})),
+    ):
+        assert is_claude_cli_available() is True
+
+
+def test_is_claude_cli_available_false_when_auth_check_errors() -> None:
+    with (
+        patch(
+            "app.pipeline.refine.l1_client.shutil.which", return_value="/usr/bin/claude"
+        ),
+        _mock_run(stdout="", returncode=1),
+    ):
+        assert is_claude_cli_available() is False
 
 
 def test_l1_chunk_response_reuses_domain_decision_model() -> None:

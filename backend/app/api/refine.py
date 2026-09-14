@@ -10,7 +10,9 @@
 - `"batch"`: 複数チャンクを並列に`claude` CLI呼び出し(#104: 元はAnthropic
   Messages Batches APIによるコスト50%割引だったが、CLI呼び出し方式には
   Batches API相当の割引機構が無いため、並列実行による体感速度向上のみを
-  提供するモードへ再定義した)。
+  提供するモードへ再定義した)。並列実行はプロンプトキャッシュの再利用が
+  ほぼ効かないため、`GET /refine/estimate`の見積もりコストは`sync`より
+  高くなる(`pipeline/refine/cost.py`の`estimate_refine_cost`参照)。
 - NFR-07: レスポンスにトークン使用量(`usage`)と実測コスト(`cost_usd`、各
   チャンクの`claude` CLIが返す`total_cost_usd`の合計)を含める。
 - `GET /refine/estimate`: 実行前の事前見積もりエンドポイントを提供(§7.5)。
@@ -120,7 +122,7 @@ def estimate_refine(
         raise HTTPException(status_code=422, detail=f"part {part_id!r} not found in score")
 
     chunks = build_chunks(score, part_id)
-    estimate = estimate_refine_cost(len(chunks), model=model)
+    estimate = estimate_refine_cost(len(chunks), model=model, mode=mode)
 
     return RefineEstimateResponse(
         part_id=part_id,

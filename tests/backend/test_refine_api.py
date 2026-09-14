@@ -11,12 +11,13 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
 from app.config import Settings
 from app.domain.score import Clef, Note, Part, ScoreIR, SourceInfo
 from app.infra import storage
 from app.pipeline.refine.l1_client import L1ChunkCallResult, L1ChunkResponse
 from app.services.score_service import ScoreService
-from fastapi.testclient import TestClient
 
 
 def _create_project(client: TestClient, tiny_wav_bytes: bytes) -> str:
@@ -252,12 +253,16 @@ def test_refine_estimate_default_mode_is_sync(
     assert body["estimated_cost_usd"] > 0
 
 
-def test_refine_estimate_batch_mode_matches_sync_cost(
+def test_refine_estimate_batch_mode_costs_more_than_sync(
     client: TestClient, settings: Settings, tiny_wav_bytes: bytes
 ) -> None:
-    """#104: batchはAnthropic Batches APIの割引ではなく並列CLI実行に再定義された
+    """#104: batchはAnthropic Batches APIの割引ではなく並列CLI実行に再定義され、
 
-    ため、割引を伴わない(見積もりコストはsyncと同一)。
+    割引は伴わない。さらに並列実行はプロンプトキャッシュの再利用がほぼ効かない
+    ため、見積もりコストはsync以上になる(チャンクが2件以上ある場合は厳密に
+    高くなる。この計算式自体の詳細は`test_l1_cost.py`で単体検証済み。ここでは
+    APIの配線のみを検証するため、このfixtureのノート数(=チャンク1件)では
+    差が出ないことを許容し`>=`で確認する、#104 Gate2レビュー指摘)。
     """
     project_id = _create_project(client, tiny_wav_bytes)
     _write_score(settings, project_id)
@@ -278,7 +283,7 @@ def test_refine_estimate_batch_mode_matches_sync_cost(
     assert batch_body["part_id"] == "piano"
     assert batch_body["mode"] == "batch"
     assert batch_body["num_chunks"] >= 1
-    assert batch_body["estimated_cost_usd"] == sync_body["estimated_cost_usd"]
+    assert batch_body["estimated_cost_usd"] >= sync_body["estimated_cost_usd"]
 
 
 def test_refine_rejects_invalid_mode(

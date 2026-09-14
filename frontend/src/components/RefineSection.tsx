@@ -179,6 +179,11 @@ export function RefineSection({
               </span>
               <span className="text-indigo-700 font-semibold">
                 想定コスト: 約 ${estimate.estimated_cost_usd.toFixed(4)}
+                {mode === "batch" && (
+                  <span className="ml-1 text-amber-600">
+                    (並列実行はキャッシュ再利用が効きにくく、逐次実行より高くなる場合があります)
+                  </span>
+                )}
               </span>
             </div>
           ) : (
