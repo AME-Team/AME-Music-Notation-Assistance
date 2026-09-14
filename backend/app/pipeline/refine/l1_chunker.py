@@ -23,9 +23,10 @@ if TYPE_CHECKING:
     from app.domain.score import ScoreIR
 
 DEFAULT_BARS_PER_CHUNK = 4
-SHRUNK_BARS_PER_CHUNK = 2
 # 「テンポが速い/音数が多い場合は2小節に自動縮小」(設計書§7.3)の具体的な閾値は
-# 設計書に明記が無いため、#38の実装判断として以下を採用する。
+# 設計書に明記が無いため、#38の実装判断として以下を採用する。縮小先のサイズは
+# `build_chunks`内で`bars_per_chunk // 2`として計算する(#68: `bars_per_chunk`を
+# 可変にしたことに伴い、既定4→2小節の比率を維持する)。
 DENSE_NOTES_PER_BAR_THRESHOLD = 20
 FAST_TEMPO_BPM_THRESHOLD = 160.0
 DEFAULT_TEMPO_BPM = 120.0
@@ -165,10 +166,16 @@ def _should_shrink(
     return notes_per_bar > DENSE_NOTES_PER_BAR_THRESHOLD or tempo_bpm > FAST_TEMPO_BPM_THRESHOLD
 
 
-def build_chunks(score: ScoreIR, part_id: str) -> list[ChunkInput]:
+def build_chunks(
+    score: ScoreIR, part_id: str, *, bars_per_chunk: int = DEFAULT_BARS_PER_CHUNK
+) -> list[ChunkInput]:
     """1パートを対象に、設計書§7.3のチャンク分割+文脈注入を行う。
 
     ノートが1件も無いパートは注釈対象が無いため空リストを返す。
+
+    `bars_per_chunk`(#68 Q-6: チャンクサイズの実測比較用)は既定4小節。密集/
+    高速テンポ時の自動縮小先(`_should_shrink`)は`bars_per_chunk`に比例させ、
+    `bars_per_chunk // 2`(最小1小節)とする。
     """
     if score.find_part(part_id) is None:
         # `build_song_context_message`(l1_prompt.py)と同じエラー契約に揃える
@@ -198,16 +205,17 @@ def build_chunks(score: ScoreIR, part_id: str) -> list[ChunkInput]:
     # 混入していた)。
     max_bar = max(note_bar for note_bar, _ in bar_beat_by_note_id.values())
 
+    shrunk_size = max(1, bars_per_chunk // 2)
     chunks: list[ChunkInput] = []
     bar = 1
     while bar <= max_bar:
-        tentative_end = min(bar + DEFAULT_BARS_PER_CHUNK - 1, max_bar)
+        tentative_end = min(bar + bars_per_chunk - 1, max_bar)
         tentative_notes = [
             n for n in notes if bar <= bar_beat_by_note_id[n["id"]][0] <= tentative_end
         ]
-        size = DEFAULT_BARS_PER_CHUNK
+        size = bars_per_chunk
         if _should_shrink(tentative_notes, target_start=bar, target_size=size, tempo_map=tempo_map):
-            size = SHRUNK_BARS_PER_CHUNK
+            size = shrunk_size
         end = min(bar + size - 1, max_bar)
 
         target_notes = [n for n in notes if bar <= bar_beat_by_note_id[n["id"]][0] <= end]

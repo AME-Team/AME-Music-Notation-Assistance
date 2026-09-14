@@ -107,6 +107,60 @@ def test_ten_bars_splits_into_default_size_chunks_with_shared_context() -> None:
     assert chunks[1].context.bars.context_before == [4]
 
 
+def test_bars_per_chunk_param_controls_chunk_size() -> None:
+    """#68 Q-6: チャンクサイズ(4小節 vs 8小節)の実測比較用パラメータ。"""
+    score = _score()
+    part = _part()
+    for bar in range(1, 17):
+        part.notes.append(_note(score, bar=bar))
+    score.parts.append(part)
+
+    chunks = build_chunks(score, "piano", bars_per_chunk=8)
+
+    targets = [c.context.bars.target for c in chunks]
+    assert targets == [(1, 8), (9, 16)]
+    assert chunks[0].context.bars.context_after == [9]
+    assert chunks[1].context.bars.context_before == [8]
+
+
+def test_bars_per_chunk_default_is_unchanged() -> None:
+    """既定値(未指定時)は#38時点の4小節のまま(後方互換)。"""
+    score = _score()
+    part = _part()
+    for bar in range(1, 17):
+        part.notes.append(_note(score, bar=bar))
+    score.parts.append(part)
+
+    chunks = build_chunks(score, "piano")
+
+    assert [c.context.bars.target for c in chunks] == [
+        (1, 4),
+        (5, 8),
+        (9, 12),
+        (13, 16),
+    ]
+
+
+def test_dense_notes_shrink_target_scales_with_bars_per_chunk() -> None:
+    """密集時の自動縮小先は`bars_per_chunk // 2`に比例する(#68: 8小節指定時は
+
+    4小節に縮小する。既定4小節時の2小節縮小(`test_dense_notes_shrinks_chunk_to_two_bars`)
+    と同じ閾値ロジックを、`bars_per_chunk`に対して相対的に検証する。
+    """
+    score = _score()
+    part = _part()
+    # `bars_per_chunk=8`時のtentative_size(密度判定の母数)は8小節。
+    # 8小節換算でDENSE_NOTES_PER_BAR_THRESHOLDを超える密度にする。
+    for bar in range(1, 9):
+        for _ in range(DENSE_NOTES_PER_BAR_THRESHOLD + 1):
+            part.notes.append(_note(score, bar=bar))
+    score.parts.append(part)
+
+    chunks = build_chunks(score, "piano", bars_per_chunk=8)
+
+    assert chunks[0].context.bars.target == (1, 4)
+
+
 def test_notes_in_target_bars_are_editable_context_notes_are_not() -> None:
     score = _score()
     part = _part()
