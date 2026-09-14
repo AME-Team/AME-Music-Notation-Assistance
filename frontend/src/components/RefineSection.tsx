@@ -11,9 +11,11 @@ interface RefineSectionProps {
 }
 
 /**
- * #40: L1 構造化出力整音 (Batch / Sync) とコスト可視化コンポーネント (NFR-07/R-9)。
+ * #40/#104: L1 構造化出力整音 (Batch / Sync) とコスト可視化コンポーネント (NFR-07)。
  *
- * - HTTPリクエストの長時間ブロッキングを防ぐため、既定で同期・逐次実行 ("sync") を選択。Batch API (50% 割引) も選択可能。
+ * - HTTPリクエストの長時間ブロッキングを防ぐため、既定で同期・逐次実行 ("sync") を選択。
+ *   複数チャンクの並列実行 ("batch") も選択可能 (#104: `claude` CLI呼び出し方式には
+ *   Anthropic Batches APIの割引に相当する仕組みが無いため、体感速度向上のみを提供する)。
  * - 実行前の想定コスト事前見積もり表示 (§7.5)。
  * - 実行後の消費トークン数・実測コスト・承認/棄却内訳の可視化 (NFR-07)。
  * - 生成された run_id を `onRefineComplete` で親コンポーネントへ通知し、DiffPanel (#41) に引き継ぐ。
@@ -95,7 +97,7 @@ export function RefineSection({
         <div>
           <h3 className="text-lg font-semibold text-gray-700">L1 整音 (AI構造化注釈)</h3>
           <p className="text-xs text-gray-500">
-            Anthropic Messages API による小節単位の記譜注釈・声部・異名同音の最適化 (設計書§7.3)
+            claude CLI による小節単位の記譜注釈・声部・異名同音の最適化 (設計書§7.3)
           </p>
         </div>
         <span className="rounded bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700 border border-indigo-200">
@@ -129,7 +131,7 @@ export function RefineSection({
             className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
             <option value="sync">同期・逐次実行 (即時・既定)</option>
-            <option value="batch">Batch API (50%割引・非同期ポーリング)</option>
+            <option value="batch">並列実行 (複数チャンク同時処理・高速)</option>
           </select>
         </label>
 
@@ -152,11 +154,7 @@ export function RefineSection({
           disabled={isRunning || !isQuantizeReady || parts.length === 0}
           className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-50"
         >
-          {isRunning
-            ? mode === "batch"
-              ? "Batch 実行中 (ポーリング中)..."
-              : "逐次実行中..."
-            : "L1 整音を実行"}
+          {isRunning ? (mode === "batch" ? "並列実行中..." : "逐次実行中...") : "L1 整音を実行"}
         </button>
       </div>
 
@@ -181,7 +179,11 @@ export function RefineSection({
               </span>
               <span className="text-indigo-700 font-semibold">
                 想定コスト: 約 ${estimate.estimated_cost_usd.toFixed(4)}
-                {mode === "batch" && <span className="ml-1 text-emerald-600">(50%割引適用)</span>}
+                {mode === "batch" && (
+                  <span className="ml-1 text-amber-600">
+                    (並列実行はキャッシュ再利用が効きにくく、逐次実行より高くなる場合があります)
+                  </span>
+                )}
               </span>
             </div>
           ) : (

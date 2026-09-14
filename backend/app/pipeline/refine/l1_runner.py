@@ -32,8 +32,6 @@ from app.pipeline.refine.l1_prompt import build_song_context_message, build_syst
 from app.pipeline.time_signature import bar_start_ticks, tick_to_bar_beat, time_signature_at_bar
 
 if TYPE_CHECKING:
-    import anthropic
-
     from app.domain.score import ScoreIR
 
 _MIN_DURATION_SEC = 1e-6
@@ -61,6 +59,10 @@ class L1RunResult:
             "cache_creation_input_tokens": 0,
         }
     )
+    # #104: `claude` CLI経由の呼び出しはチャンクごとに実測コスト
+    # (`total_cost_usd`)を返すため、モデル単価表からの概算(`cost.py`)ではなく
+    # 実際に課金された金額の合計をそのまま持ち回る。
+    cost_usd: float = 0.0
 
 
 def validation_notes_for_chunk(
@@ -293,7 +295,6 @@ def run_l1_sequential(
     score: ScoreIR,
     part_id: str,
     *,
-    client: anthropic.Anthropic,
     run_id: str,
     beat_anchors: list[tuple[float, float]],
     model: str,
@@ -328,12 +329,12 @@ def run_l1_sequential(
         "cache_read_input_tokens": 0,
         "cache_creation_input_tokens": 0,
     }
+    cost_usd = 0.0
 
     for chunk in chunks:
         try:
             result = call_l1_chunk(
                 chunk,
-                client=client,
                 system_prompt=system_prompt,
                 song_context=song_context,
                 model=model,
@@ -346,6 +347,7 @@ def run_l1_sequential(
 
         for key in result.usage:
             usage[key] = usage.get(key, 0) + result.usage[key]
+        cost_usd += result.cost_usd
 
         ok, rejection_reason = verify_and_apply_chunk_decisions(
             chunk=chunk,
@@ -372,6 +374,7 @@ def run_l1_sequential(
             "chunks_ok": chunks_ok,
             "chunks_rejected": chunks_rejected,
             "usage": usage,
+            "cost_usd": cost_usd,
         },
     }
 
@@ -382,4 +385,5 @@ def run_l1_sequential(
         rejected_reasons=rejected_reasons,
         skipped_decisions=skipped_decisions,
         usage=usage,
+        cost_usd=cost_usd,
     )

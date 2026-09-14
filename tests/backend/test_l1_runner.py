@@ -79,9 +79,11 @@ def _staged_notes(result, part_id: str = "piano") -> list[Note]:
     return part.notes
 
 
-def _mock_call(decisions: list[Decision], usage: dict | None = None):
+def _mock_call(
+    decisions: list[Decision], usage: dict | None = None, cost_usd: float = 0.01
+):
     result = L1ChunkCallResult(
-        output=L1ChunkResponse(bar_range=(1, 1), decisions=decisions),
+        output=L1ChunkResponse(bar_range=[1, 1], decisions=decisions),
         usage=usage
         or {
             "input_tokens": 10,
@@ -89,6 +91,7 @@ def _mock_call(decisions: list[Decision], usage: dict | None = None):
             "cache_read_input_tokens": 0,
             "cache_creation_input_tokens": 0,
         },
+        cost_usd=cost_usd,
     )
     return patch("app.pipeline.refine.l1_runner.call_l1_chunk", return_value=result)
 
@@ -113,7 +116,6 @@ def test_chunk_rejected_on_validation_violation_leaves_note_unchanged() -> None:
         result = run_l1_sequential(
             score,
             "piano",
-            client=object(),
             run_id="run_test",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
@@ -148,7 +150,6 @@ def test_original_score_is_not_mutated() -> None:
         run_l1_sequential(
             score,
             "piano",
-            client=object(),
             run_id="run_test",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
@@ -183,7 +184,6 @@ def test_keep_decision_updates_spelling_voice_staff_and_provenance() -> None:
         result = run_l1_sequential(
             score,
             "piano",
-            client=object(),
             run_id="run_abc",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
@@ -221,7 +221,6 @@ def test_delete_decision_sets_status_and_provenance() -> None:
         result = run_l1_sequential(
             score,
             "piano",
-            client=object(),
             run_id="run_abc",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
@@ -257,7 +256,6 @@ def test_split_tie_creates_new_note_with_correct_tie_flags() -> None:
         result = run_l1_sequential(
             score,
             "piano",
-            client=object(),
             run_id="run_abc",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
@@ -308,7 +306,6 @@ def test_voice_reassignment_causing_post_apply_overlap_is_rejected() -> None:
         result = run_l1_sequential(
             score,
             "piano",
-            client=object(),
             run_id="run_abc",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
@@ -337,7 +334,6 @@ def test_merge_with_previous_is_skipped_and_logged() -> None:
         result = run_l1_sequential(
             score,
             "piano",
-            client=object(),
             run_id="run_abc",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
@@ -371,7 +367,6 @@ def test_usage_accumulates_and_is_recorded_in_meta() -> None:
         result = run_l1_sequential(
             score,
             "piano",
-            client=object(),
             run_id="run_abc",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
@@ -397,7 +392,6 @@ def test_unknown_part_id_raises_value_error() -> None:
         run_l1_sequential(
             score,
             "nonexistent",
-            client=object(),
             run_id="run_abc",
             beat_anchors=_BEAT_ANCHORS,
             model="claude-opus-5",
