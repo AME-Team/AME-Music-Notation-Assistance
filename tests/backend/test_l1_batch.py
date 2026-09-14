@@ -1,15 +1,15 @@
-"""#40: L1 Batchオーケストレーション(`app.pipeline.refine.l1_batch`)のテスト。
+"""#104: L1 Batch(並列claude CLI呼び出し)オーケストレーション(`app.pipeline.refine.l1_batch`)のテスト。
 
-Anthropic Batch APIをモックし、リクエスト形状、ポーリング待機、結果回収、
-検証層連携、ステージングへの適用、エラー処理を網羅的に検証する。
+`call_l1_chunk`(実際のCLI呼び出しを行う関数)は常にモックし、実プロセスは一切
+起動しない。並列実行後の検証層連携・ステージングへの適用・エラー処理を検証する。
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
+from app.domain.invariants import Decision
 from app.domain.score import (
     Clef,
     Note,
@@ -22,7 +22,11 @@ from app.domain.score import (
     TimeSignatureEntry,
 )
 from app.pipeline.refine.l1_batch import run_l1_batch
-from app.pipeline.refine.l1_client import L1ClientError
+from app.pipeline.refine.l1_client import (
+    L1ChunkCallResult,
+    L1ChunkResponse,
+    L1ClientError,
+)
 
 
 def _make_test_score() -> ScoreIR:
@@ -67,53 +71,53 @@ def _make_beat_anchors() -> list[tuple[float, float]]:
     return [(i * 0.5, float(i * 480)) for i in range(16)]
 
 
+def _mock_calls(*results):
+    """`call_l1_chunk`を`side_effect`でチャンク順に差し替える(#104)。
+
+    `L1ClientError`インスタンスを渡すとそのチャンクは棄却扱いになる
+    (`_call_chunk`が例外を握り潰さず値として返す設計、`l1_batch.py`参照)。
+    """
+
+    def _side_effect(chunk, **kwargs):
+        result = results[_side_effect.calls]
+        _side_effect.calls += 1
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    _side_effect.calls = 0
+    return patch("app.pipeline.refine.l1_batch.call_l1_chunk", side_effect=_side_effect)
+
+
 def test_run_l1_batch_success():
     score = _make_test_score()
-    client = MagicMock()
-
-    # create
-    batch_mock = SimpleNamespace(id="msgbatch_123")
-    client.messages.batches.create.return_value = batch_mock
-
-    # retrieve (in_progress -> ended)
-    client.messages.batches.retrieve.side_effect = [
-        SimpleNamespace(processing_status="in_progress"),
-        SimpleNamespace(processing_status="ended"),
-    ]
-
-    # results
-    mock_item = SimpleNamespace(
-        custom_id="chunk_0",
-        result=SimpleNamespace(
-            type="succeeded",
-            message=SimpleNamespace(
-                stop_reason="end_turn",
-                content=[
-                    SimpleNamespace(
-                        type="text",
-                        text='{"bar_range": [1, 1], "decisions": [{"note_id": 101, "action": "keep", "snap": "a", "spelling": {"step": "C", "alter": 0, "octave": 4}, "voice": 1, "staff": 1, "tie": {"start": false, "stop": false}, "reason": "tonic"}], "bar_annotations": []}',
-                    )
-                ],
-                usage=SimpleNamespace(
-                    input_tokens=1000,
-                    output_tokens=500,
-                    cache_read_input_tokens=200,
-                    cache_creation_input_tokens=100,
-                ),
-            ),
-        ),
+    decision = Decision(
+        note_id=101,
+        action="keep",
+        snap="a",
+        spelling=Spelling(step="C", alter=0, octave=4),
+        voice=1,
+        staff=1,
+        reason="tonic",
     )
-    client.messages.batches.results.return_value = [mock_item]
-
-    result = run_l1_batch(
-        score,
-        "piano",
-        client=client,
-        run_id="run_batch_001",
-        beat_anchors=_make_beat_anchors(),
-        poll_interval_sec=0.01,
-        max_poll_time_sec=2.0,
+    call_result = L1ChunkCallResult(
+        output=L1ChunkResponse(bar_range=[1, 1], decisions=[decision]),
+        usage={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "cache_read_input_tokens": 200,
+            "cache_creation_input_tokens": 100,
+        },
+        cost_usd=0.042,
     )
+
+    with _mock_calls(call_result):
+        result = run_l1_batch(
+            score,
+            "piano",
+            run_id="run_batch_001",
+            beat_anchors=_make_beat_anchors(),
+        )
 
     assert result.chunks_ok == 1
     assert result.chunks_rejected == 0
@@ -121,6 +125,7 @@ def test_run_l1_batch_success():
     assert result.usage["output_tokens"] == 500
     assert result.usage["cache_read_input_tokens"] == 200
     assert result.usage["cache_creation_input_tokens"] == 100
+    assert result.cost_usd == 0.042
 
     # ステージングScoreIRの確認
     part = result.staged_score.find_part("piano")
@@ -134,100 +139,56 @@ def test_run_l1_batch_success():
     refine_meta = result.staged_score.meta.stages["refine"]
     assert refine_meta["l1"]["mode"] == "batch"
     assert refine_meta["l1"]["chunks_ok"] == 1
-    assert refine_meta["l1"]["cost_usd"] > 0
-
-
-def test_run_l1_batch_timeout():
-    score = _make_test_score()
-    client = MagicMock()
-    client.messages.batches.create.return_value = SimpleNamespace(id="msgbatch_timeout")
-    client.messages.batches.retrieve.return_value = SimpleNamespace(
-        processing_status="in_progress"
-    )
-
-    with pytest.raises(L1ClientError, match="timed out"):
-        run_l1_batch(
-            score,
-            "piano",
-            client=client,
-            run_id="run_batch_timeout",
-            beat_anchors=_make_beat_anchors(),
-            poll_interval_sec=0.01,
-            max_poll_time_sec=0.05,
-        )
+    assert refine_meta["l1"]["cost_usd"] == 0.042
 
 
 def test_run_l1_batch_chunk_error():
     score = _make_test_score()
-    client = MagicMock()
-    client.messages.batches.create.return_value = SimpleNamespace(id="msgbatch_err")
-    client.messages.batches.retrieve.return_value = SimpleNamespace(
-        processing_status="ended"
-    )
 
-    mock_err_item = SimpleNamespace(
-        custom_id="chunk_0",
-        result=SimpleNamespace(
-            type="errored",
-            error=SimpleNamespace(message="Rate limit exceeded"),
-        ),
-    )
-    client.messages.batches.results.return_value = [mock_err_item]
-
-    result = run_l1_batch(
-        score,
-        "piano",
-        client=client,
-        run_id="run_batch_err",
-        beat_anchors=_make_beat_anchors(),
-        poll_interval_sec=0.01,
-    )
+    with _mock_calls(L1ClientError("rate limited")):
+        result = run_l1_batch(
+            score,
+            "piano",
+            run_id="run_batch_err",
+            beat_anchors=_make_beat_anchors(),
+        )
 
     assert result.chunks_ok == 0
     assert result.chunks_rejected == 1
     assert len(result.rejected_reasons) == 1
-    assert "batch error" in result.rejected_reasons[0]
+    assert "rate limited" in result.rejected_reasons[0]
 
 
 def test_run_l1_batch_invariant_violation():
     score = _make_test_score()
-    client = MagicMock()
-    client.messages.batches.create.return_value = SimpleNamespace(id="msgbatch_inv")
-    client.messages.batches.retrieve.return_value = SimpleNamespace(
-        processing_status="ended"
+    # snap='nonexistent' はV-3(snap候補チェック)に違反する。
+    bad_decision = Decision(
+        note_id=101,
+        action="keep",
+        snap="nonexistent",
+        spelling=Spelling(step="C", alter=0, octave=4),
+        voice=1,
+        staff=1,
+        reason="bad snap",
+    )
+    call_result = L1ChunkCallResult(
+        output=L1ChunkResponse(bar_range=[1, 1], decisions=[bad_decision]),
+        usage={
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
+        cost_usd=0.01,
     )
 
-    # snap='nonexistent' violates V-3
-    mock_item = SimpleNamespace(
-        custom_id="chunk_0",
-        result=SimpleNamespace(
-            type="succeeded",
-            message=SimpleNamespace(
-                stop_reason="end_turn",
-                content=[
-                    SimpleNamespace(
-                        type="text",
-                        text='{"bar_range": [1, 1], "decisions": [{"note_id": 101, "action": "keep", "snap": "nonexistent", "spelling": {"step": "C", "alter": 0, "octave": 4}, "voice": 1, "staff": 1, "tie": {"start": false, "stop": false}, "reason": "bad snap"}], "bar_annotations": []}',
-                    )
-                ],
-                usage=SimpleNamespace(
-                    input_tokens=1000,
-                    output_tokens=500,
-                    cache_read_input_tokens=0,
-                ),
-            ),
-        ),
-    )
-    client.messages.batches.results.return_value = [mock_item]
-
-    result = run_l1_batch(
-        score,
-        "piano",
-        client=client,
-        run_id="run_batch_inv",
-        beat_anchors=_make_beat_anchors(),
-        poll_interval_sec=0.01,
-    )
+    with _mock_calls(call_result):
+        result = run_l1_batch(
+            score,
+            "piano",
+            run_id="run_batch_inv",
+            beat_anchors=_make_beat_anchors(),
+        )
 
     assert result.chunks_ok == 0
     assert result.chunks_rejected == 1
@@ -237,13 +198,32 @@ def test_run_l1_batch_invariant_violation():
 
 def test_run_l1_batch_unknown_part():
     score = _make_test_score()
-    client = MagicMock()
 
     with pytest.raises(ValueError, match="part 'guitar' not found"):
         run_l1_batch(
             score,
             "guitar",
-            client=client,
             run_id="run_001",
             beat_anchors=_make_beat_anchors(),
         )
+
+
+def test_run_l1_batch_no_chunks_returns_empty_result():
+    """パートにノートが無い(=チャンクが0件)場合、CLI呼び出し無しで即座に返る。"""
+    score = ScoreIR(
+        project_id="prj_empty",
+        source=SourceInfo(filename="empty.wav", duration_sec=1.0, sample_rate=8000),
+        divisions=480,
+    )
+    score.parts.append(
+        Part(id="piano", name="Piano", midi_program=0, staves=1, clefs=[], notes=[])
+    )
+
+    with patch("app.pipeline.refine.l1_batch.call_l1_chunk") as mock_call:
+        result = run_l1_batch(
+            score, "piano", run_id="run_empty", beat_anchors=_make_beat_anchors()
+        )
+
+    mock_call.assert_not_called()
+    assert result.chunks_ok == 0
+    assert result.chunks_rejected == 0

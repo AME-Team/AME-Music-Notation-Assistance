@@ -1,14 +1,18 @@
-"""Stage 6手前: L1構造化出力による注釈API(#39/#40, 設計書§7.3/§7.5/§11.3)。
+"""Stage 6手前: L1構造化出力による注釈API(#39/#40/#104, 設計書§7.3/§7.5/§11.3)。
 
 `POST /refine`は`current.json`を一切書き換えない。L1の提案は
-`score/staging/{run_id}.json`へ保存し、ユーザーがDiffPanel(#41、未実装)で
-採否を決めて初めて`current.json`に反映される設計とする(設計書§10.3、M4完了
-条件「L0とL1の差分を確認し小節単位で採否を決める」)。
+`score/staging/{run_id}.json`へ保存し、ユーザーがDiffPanel(#41)で採否を決めて
+初めて`current.json`に反映される設計とする(設計書§10.3、M4完了条件「L0とL1の
+差分を確認し小節単位で採否を決める」)。
 
-`mode`は`Literal["sync", "batch"]`をサポート(#40):
-- `"sync"`: チャンクごとの逐次同期呼び出し(既定値)。
-- `"batch"`: Anthropic Messages Batches APIを使用(R-9: コスト50%割引)。
-- NFR-07: レスポンスにトークン使用量(`usage`)と実測コスト(`cost_usd`)を含める。
+`mode`は`Literal["sync", "batch"]`をサポート(#40、#104で意味が変わった):
+- `"sync"`: チャンクごとの逐次`claude` CLI呼び出し(既定値)。
+- `"batch"`: 複数チャンクを並列に`claude` CLI呼び出し(#104: 元はAnthropic
+  Messages Batches APIによるコスト50%割引だったが、CLI呼び出し方式には
+  Batches API相当の割引機構が無いため、並列実行による体感速度向上のみを
+  提供するモードへ再定義した)。
+- NFR-07: レスポンスにトークン使用量(`usage`)と実測コスト(`cost_usd`、各
+  チャンクの`claude` CLIが返す`total_cost_usd`の合計)を含める。
 - `GET /refine/estimate`: 実行前の事前見積もりエンドポイントを提供(§7.5)。
 """
 
@@ -16,7 +20,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-import anthropic
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
@@ -26,13 +29,18 @@ from app.api.deps import (
     get_settings,
     read_score_or_404,
 )
-from app.config import Settings, resolve_api_key
+from app.config import Settings
 from app.infra import ids, storage
 from app.pipeline.quantize import beat_tick_anchors
-from app.pipeline.refine.cost import calculate_usage_cost_usd, estimate_refine_cost
+from app.pipeline.refine.cost import estimate_refine_cost
 from app.pipeline.refine.l1_batch import run_l1_batch
 from app.pipeline.refine.l1_chunker import build_chunks
-from app.pipeline.refine.l1_client import DEFAULT_EFFORT, DEFAULT_MODEL, L1ClientError
+from app.pipeline.refine.l1_client import (
+    DEFAULT_EFFORT,
+    DEFAULT_MODEL,
+    L1ClientError,
+    is_claude_cli_available,
+)
 from app.pipeline.refine.l1_runner import run_l1_sequential
 from app.services.project_service import ProjectService
 
@@ -112,7 +120,7 @@ def estimate_refine(
         raise HTTPException(status_code=422, detail=f"part {part_id!r} not found in score")
 
     chunks = build_chunks(score, part_id)
-    estimate = estimate_refine_cost(len(chunks), model=model, mode=mode)
+    estimate = estimate_refine_cost(len(chunks), model=model)
 
     return RefineEstimateResponse(
         part_id=part_id,
@@ -135,25 +143,27 @@ def refine_score(
 ) -> RefineResponse:
     """量子化(#25)+L0(#26)実行済みが前提。未実行なら404を返す。
 
-    `async def`にしない(`api/export.py`と同じ理由): `anthropic`のPython SDKは
-    同期クライアントであり、`async def`のままだと待機中にイベントループを
-    直接ブロックし、SSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。
+    `async def`にしない(`api/export.py`と同じ理由): `claude` CLIの呼び出しは
+    `subprocess.run`によるブロッキング処理であり、`async def`のままだと
+    待機中にイベントループを直接ブロックし、SSEでのジョブ進捗配信など他の
+    同時リクエストを止めてしまう。
     """
     ensure_project_exists(project_id, service)
     score = read_score_or_404(project_id, settings)
 
-    api_key = resolve_api_key("anthropic")
-    if api_key is None:
+    if not is_claude_cli_available():
         # NFR-12: AIが使えない状況でも成果物(L0まで)は必ず出る。L1が使えない
         # ことはL0の結果自体を無効化しない、という設計意図をメッセージにも反映する。
+        # #104: 生のAnthropic APIキーではなく`claude` CLI(Claude Code)の有無を
+        # ゲート条件にする(ユーザー環境で既にCLIが認証済みであれば別途APIキーの
+        # 発行・課金設定が不要になる)。
         raise HTTPException(
             status_code=503,
-            detail="Anthropic API key is not configured; L0 results remain available",
+            detail="claude CLI is not available on PATH; L0 results remain available",
         )
 
     beat_anchors = _read_beat_anchors_or_422(project_id, settings, score.divisions)
 
-    client = anthropic.Anthropic(api_key=api_key)
     run_id = ids.new_id("run")
 
     try:
@@ -161,7 +171,6 @@ def refine_score(
             result = run_l1_batch(
                 score,
                 body.part_id,
-                client=client,
                 run_id=run_id,
                 beat_anchors=beat_anchors,
                 model=body.model,
@@ -171,7 +180,6 @@ def refine_score(
             result = run_l1_sequential(
                 score,
                 body.part_id,
-                client=client,
                 run_id=run_id,
                 beat_anchors=beat_anchors,
                 model=body.model,
@@ -181,8 +189,6 @@ def refine_score(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except L1ClientError as exc:
         raise HTTPException(status_code=502, detail=f"L1 refine execution failed: {exc}") from exc
-
-    cost_usd = calculate_usage_cost_usd(result.usage, body.model, mode=body.mode)
 
     # `ensure_project_layout`(プロジェクト作成時)で"score/staging"ディレクトリは
     # 既に作成済みのため、ここで改めてmkdirする必要はない(`api/export.py`と同じ判断)。
@@ -196,5 +202,5 @@ def refine_score(
         rejected_reasons=result.rejected_reasons,
         skipped_decisions=result.skipped_decisions,
         usage=result.usage,
-        cost_usd=cost_usd,
+        cost_usd=result.cost_usd,
     )
