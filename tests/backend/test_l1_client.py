@@ -77,16 +77,9 @@ def _mock_run(*, stdout: str, returncode: int = 0, stderr: str = ""):
     )
 
 
-def _patch_cli_available():
-    return patch(
-        "app.pipeline.refine.l1_client.is_claude_cli_available", return_value=True
-    )
-
-
 def test_call_l1_chunk_returns_parsed_output_and_usage() -> None:
     structured = {"bar_range": [1, 4], "decisions": [], "bar_annotations": []}
     with (
-        _patch_cli_available(),
         _mock_run(stdout=_cli_payload(structured_output=structured)) as mock_run,
     ):
         result = call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
@@ -115,7 +108,6 @@ def test_call_l1_chunk_returns_parsed_output_and_usage() -> None:
 def test_call_l1_chunk_passes_model_and_effort() -> None:
     structured = {"bar_range": [1, 4], "decisions": [], "bar_annotations": []}
     with (
-        _patch_cli_available(),
         _mock_run(stdout=_cli_payload(structured_output=structured)) as mock_run,
     ):
         call_l1_chunk(
@@ -132,10 +124,19 @@ def test_call_l1_chunk_passes_model_and_effort() -> None:
     assert cmd[cmd.index("--append-system-prompt") + 1] == "system"
 
 
-def test_call_l1_chunk_raises_when_cli_unavailable() -> None:
+def test_call_l1_chunk_raises_when_binary_missing() -> None:
+    """`call_l1_chunk`自体は`is_claude_cli_available()`を呼ばない(#104 Gate2
+
+    レビュー指摘、2巡目: 呼び出し元(`api/refine.py`)がrun開始前に一度だけ
+    ゲートするため、チャンクごとに`claude auth status`を再実行する
+    オーバーヘッドを避ける)。CLIが実際に見つからない場合は`subprocess.run`
+    自体が`FileNotFoundError`(`OSError`のサブクラス)を送出し、既存の
+    `except (OSError, subprocess.TimeoutExpired)`で`L1ClientError`に変換される。
+    """
     with (
         patch(
-            "app.pipeline.refine.l1_client.is_claude_cli_available", return_value=False
+            "app.pipeline.refine.l1_client.subprocess.run",
+            side_effect=FileNotFoundError("claude"),
         ),
         pytest.raises(L1ClientError),
     ):
@@ -144,7 +145,6 @@ def test_call_l1_chunk_raises_when_cli_unavailable() -> None:
 
 def test_call_l1_chunk_raises_on_nonzero_exit() -> None:
     with (
-        _patch_cli_available(),
         _mock_run(stdout="", returncode=1, stderr="boom"),
         pytest.raises(L1ClientError),
     ):
@@ -153,7 +153,6 @@ def test_call_l1_chunk_raises_on_nonzero_exit() -> None:
 
 def test_call_l1_chunk_raises_on_non_json_stdout() -> None:
     with (
-        _patch_cli_available(),
         _mock_run(stdout="not json"),
         pytest.raises(L1ClientError),
     ):
@@ -162,7 +161,6 @@ def test_call_l1_chunk_raises_on_non_json_stdout() -> None:
 
 def test_call_l1_chunk_raises_when_is_error() -> None:
     with (
-        _patch_cli_available(),
         _mock_run(
             stdout=_cli_payload(structured_output=None, is_error=True, result="refused")
         ),
@@ -173,7 +171,6 @@ def test_call_l1_chunk_raises_when_is_error() -> None:
 
 def test_call_l1_chunk_raises_when_structured_output_missing() -> None:
     with (
-        _patch_cli_available(),
         _mock_run(stdout=_cli_payload(structured_output=None)),
         pytest.raises(L1ClientError),
     ):
@@ -188,7 +185,6 @@ def test_call_l1_chunk_raises_on_schema_validation_failure() -> None:
         "bar_annotations": [],
     }
     with (
-        _patch_cli_available(),
         _mock_run(stdout=_cli_payload(structured_output=structured)),
         pytest.raises(L1ClientError),
     ):
@@ -206,7 +202,6 @@ def test_call_l1_chunk_raises_on_malformed_usage_field() -> None:
     payload = json.loads(_cli_payload(structured_output=structured))
     payload["usage"] = "not-an-object"
     with (
-        _patch_cli_available(),
         _mock_run(stdout=json.dumps(payload)),
         pytest.raises(L1ClientError),
     ):
@@ -218,8 +213,20 @@ def test_call_l1_chunk_raises_on_malformed_cost_field() -> None:
     payload = json.loads(_cli_payload(structured_output=structured))
     payload["total_cost_usd"] = "not-a-number"
     with (
-        _patch_cli_available(),
         _mock_run(stdout=json.dumps(payload)),
+        pytest.raises(L1ClientError),
+    ):
+        call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
+
+
+def test_call_l1_chunk_raises_when_top_level_json_is_not_an_object() -> None:
+    """`stdout`が有効なJSONだがオブジェクトでない(#104 Gate2レビュー指摘、2巡目:
+
+    `payload.get(...)`が`AttributeError`を送出し`L1ClientError`を経由せず
+    伝播していた実バグ)。
+    """
+    with (
+        _mock_run(stdout=json.dumps(None)),
         pytest.raises(L1ClientError),
     ):
         call_l1_chunk(_chunk(), system_prompt="system", song_context="context")
@@ -227,7 +234,6 @@ def test_call_l1_chunk_raises_on_malformed_cost_field() -> None:
 
 def test_call_l1_chunk_raises_on_subprocess_timeout() -> None:
     with (
-        _patch_cli_available(),
         patch(
             "app.pipeline.refine.l1_client.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["claude"], timeout=180),
@@ -265,6 +271,21 @@ def test_is_claude_cli_available_true_when_logged_in() -> None:
         _mock_run(stdout=json.dumps({"loggedIn": True})),
     ):
         assert is_claude_cli_available() is True
+
+
+def test_is_claude_cli_available_false_when_auth_status_is_not_an_object() -> None:
+    """`claude auth status --json`が有効なJSONだがオブジェクトでない場合
+
+    (#104 Gate2レビュー指摘、2巡目: `.get("loggedIn")`が`AttributeError`を
+    送出しゲート関数自体が例外で落ちていた実バグ)。
+    """
+    with (
+        patch(
+            "app.pipeline.refine.l1_client.shutil.which", return_value="/usr/bin/claude"
+        ),
+        _mock_run(stdout=json.dumps(None)),
+    ):
+        assert is_claude_cli_available() is False
 
 
 def test_is_claude_cli_available_false_when_auth_check_errors() -> None:

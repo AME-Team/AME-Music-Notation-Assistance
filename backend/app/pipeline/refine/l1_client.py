@@ -123,9 +123,15 @@ def is_claude_cli_available() -> bool:
     if proc.returncode != 0:
         return False
     try:
-        return bool(json.loads(proc.stdout).get("loggedIn"))
+        data = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return False
+    # #104 Gate2レビュー指摘(2巡目): `claude auth status --json`が有効なJSON
+    # だがオブジェクトでない(`null`等)場合、`.get`が`AttributeError`を送出し
+    # このゲート関数自体が例外で落ちる。dict以外は未認証扱いにする。
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("loggedIn"))
 
 
 # `L1ChunkResponse`のJSON Schema。モジュールimport時に一度だけ計算する
@@ -159,10 +165,14 @@ def call_l1_chunk(
     チャンクでは引数長がこれを超えうる。`--append-system-prompt`のシステム
     プロンプトと`--json-schema`は固定サイズ(それぞれ約1,000字/約3,100字)で
     上限に達する現実的なリスクが無いため引数のまま残す)。
-    """
-    if not is_claude_cli_available():
-        raise L1ClientError(f"{_CLAUDE_CLI_BIN!r} CLI not found or not authenticated")
 
+    `is_claude_cli_available()`はここでは呼ばない(#104 Gate2レビュー指摘、
+    2巡目): 呼び出し元(`api/refine.py`)がrun開始前に一度だけゲートしており、
+    チャンクごとに`claude auth status`サブプロセス(最大10秒)を追加で起動する
+    のは無駄なオーバーヘッドになる。CLI自体が見つからない/認証切れの場合は
+    後続の`subprocess.run`が`OSError`または非0終了として自然に失敗し、
+    `L1ClientError`へ変換される。
+    """
     prompt = f"{song_context}\n\n{build_chunk_message(chunk)}"
     cmd = [
         _CLAUDE_CLI_BIN,
@@ -208,6 +218,18 @@ def call_l1_chunk(
         raise L1ClientError(
             f"claude CLI returned non-JSON output for chunk {chunk.context.bars.target}: {exc}"
         ) from exc
+
+    # #104 Gate2レビュー指摘(2巡目、HIGH): `stdout`が有効なJSONだがオブジェクト
+    # でない(`null`/配列/数値等)場合、以降の`payload.get(...)`が
+    # `AttributeError`を送出する。これは`L1ClientError`ではないため
+    # `l1_batch.py`の`_call_chunk`(`L1ClientError`しか捕捉しない)を素通りし、
+    # `executor.map`のイテレーションが他チャンクの結果ごと失われる
+    # (`api/refine.py`の`except L1ClientError`にも掛からず500になる)。
+    if not isinstance(payload, dict):
+        raise L1ClientError(
+            f"claude CLI returned unexpected JSON (not an object) for chunk "
+            f"{chunk.context.bars.target}: {payload!r}"
+        )
 
     if payload.get("is_error"):
         raise L1ClientError(
