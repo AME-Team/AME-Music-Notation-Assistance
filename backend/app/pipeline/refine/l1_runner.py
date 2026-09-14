@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from app.domain.invariants import Decision, ValidationNote, validate_decisions
 from app.domain.score import Note, Tie
@@ -41,7 +41,8 @@ _MIN_DURATION_SEC = 1e-6
 # 設計書のDecisionスキーマには#39時点でのmerge_with_previousの対象
 # (どの前ノートに統合するか)を指定するフィールドが無く、仕様が未確定のため
 # 実装しない(V-2「該当decisionを無視」と同種の扱い、チャンク自体は棄却しない)。
-_UNSUPPORTED_ACTIONS = frozenset({"merge_with_previous"})
+UNSUPPORTED_ACTIONS: Final[frozenset[str]] = frozenset({"merge_with_previous"})
+_UNSUPPORTED_ACTIONS = UNSUPPORTED_ACTIONS
 
 
 @dataclass(frozen=True)
@@ -57,11 +58,12 @@ class L1RunResult:
             "input_tokens": 0,
             "output_tokens": 0,
             "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
         }
     )
 
 
-def _validation_notes_for_chunk(
+def validation_notes_for_chunk(
     chunk: ChunkInput, notes_by_id: dict[int, Note], decisions: list[Decision]
 ) -> list[ValidationNote]:
     """`ChunkInput.notes`(L1入力)から検証層向けの`ValidationNote`を組み立てる。
@@ -105,6 +107,10 @@ def _validation_notes_for_chunk(
             )
         )
     return result
+
+
+# 後方互換エイリアス
+_validation_notes_for_chunk = validation_notes_for_chunk
 
 
 def _resolve_split_at_tick(
@@ -206,6 +212,83 @@ def _apply_split_tie(
     part.notes.append(new_note)
 
 
+def apply_chunk_decisions(
+    decisions: list[Decision],
+    *,
+    staged: ScoreIR,
+    notes_by_id: dict[int, Note],
+    run_id: str,
+    beat_anchors: list[tuple[float, float]],
+    time_signatures_raw: list[dict],
+    skipped_decisions: list[str],
+) -> None:
+    """検証済みの決定リストを対象ノートへ適用する。"""
+    for decision in decisions:
+        note = notes_by_id.get(decision.note_id)
+        if note is None:
+            continue  # V-1で棄却対象だが、ここまで来た時点で違反は無い
+        if decision.action in UNSUPPORTED_ACTIONS:
+            skipped_decisions.append(
+                f"note {decision.note_id}: unsupported action {decision.action!r}"
+            )
+            continue
+        note_bar, _ = tick_to_bar_beat(
+            note.onset_tick or 0,
+            time_signatures=time_signatures_raw,
+            divisions=staged.divisions,
+        )
+        if decision.action == "keep":
+            _apply_keep(note, decision, run_id=run_id, beat_anchors=beat_anchors)
+        elif decision.action == "delete":
+            _apply_delete(note, decision, run_id=run_id)
+        elif decision.action == "split_tie":
+            _apply_split_tie(
+                staged,
+                note,
+                decision,
+                note_bar=note_bar,
+                run_id=run_id,
+                time_signatures=time_signatures_raw,
+                divisions=staged.divisions,
+                beat_anchors=beat_anchors,
+            )
+
+
+def verify_and_apply_chunk_decisions(
+    *,
+    chunk: ChunkInput,
+    decisions: list[Decision],
+    staged: ScoreIR,
+    part_staves: int,
+    notes_by_id: dict[int, Note],
+    run_id: str,
+    beat_anchors: list[tuple[float, float]],
+    time_signatures_raw: list[dict],
+    skipped_decisions: list[str],
+) -> tuple[bool, str | None]:
+    """チャンクの決定群を検証(V-1〜V-9)し、合格した場合はstagedへ適用する。
+
+    Returns:
+        (ok, rejection_reason): 検証合格時は (True, None)。不合格時は (False, "bars X-Y: reasons")。
+    """
+    validation_notes = validation_notes_for_chunk(chunk, notes_by_id, decisions)
+    violations = validate_decisions(decisions, notes=validation_notes, part_staves=part_staves)
+    if violations:
+        reasons = "; ".join(f"{v.rule}(note {v.note_id}): {v.message}" for v in violations)
+        return False, f"bars {chunk.context.bars.target}: {reasons}"
+
+    apply_chunk_decisions(
+        decisions,
+        staged=staged,
+        notes_by_id=notes_by_id,
+        run_id=run_id,
+        beat_anchors=beat_anchors,
+        time_signatures_raw=time_signatures_raw,
+        skipped_decisions=skipped_decisions,
+    )
+    return True, None
+
+
 def run_l1_sequential(
     score: ScoreIR,
     part_id: str,
@@ -239,7 +322,12 @@ def run_l1_sequential(
     chunks_rejected = 0
     rejected_reasons: list[str] = []
     skipped_decisions: list[str] = []
-    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
 
     for chunk in chunks:
         try:
@@ -256,49 +344,26 @@ def run_l1_sequential(
             rejected_reasons.append(f"bars {chunk.context.bars.target}: {exc}")
             continue
 
-        for key in usage:
-            usage[key] += result.usage[key]
+        for key in result.usage:
+            usage[key] = usage.get(key, 0) + result.usage[key]
 
-        validation_notes = _validation_notes_for_chunk(chunk, notes_by_id, result.output.decisions)
-        violations = validate_decisions(
-            result.output.decisions, notes=validation_notes, part_staves=part.staves
+        ok, rejection_reason = verify_and_apply_chunk_decisions(
+            chunk=chunk,
+            decisions=result.output.decisions,
+            staged=staged,
+            part_staves=part.staves,
+            notes_by_id=notes_by_id,
+            run_id=run_id,
+            beat_anchors=beat_anchors,
+            time_signatures_raw=time_signatures_raw,
+            skipped_decisions=skipped_decisions,
         )
-        if violations:
+        if ok:
+            chunks_ok += 1
+        else:
             chunks_rejected += 1
-            reasons = "; ".join(f"{v.rule}(note {v.note_id}): {v.message}" for v in violations)
-            rejected_reasons.append(f"bars {chunk.context.bars.target}: {reasons}")
-            continue
-
-        chunks_ok += 1
-        for decision in result.output.decisions:
-            note = notes_by_id.get(decision.note_id)
-            if note is None:
-                continue  # V-1で棄却対象だが、ここまで来た時点で違反は無い
-            if decision.action in _UNSUPPORTED_ACTIONS:
-                skipped_decisions.append(
-                    f"note {decision.note_id}: unsupported action {decision.action!r}"
-                )
-                continue
-            note_bar, _ = tick_to_bar_beat(
-                note.onset_tick or 0,
-                time_signatures=time_signatures_raw,
-                divisions=staged.divisions,
-            )
-            if decision.action == "keep":
-                _apply_keep(note, decision, run_id=run_id, beat_anchors=beat_anchors)
-            elif decision.action == "delete":
-                _apply_delete(note, decision, run_id=run_id)
-            elif decision.action == "split_tie":
-                _apply_split_tie(
-                    staged,
-                    note,
-                    decision,
-                    note_bar=note_bar,
-                    run_id=run_id,
-                    time_signatures=time_signatures_raw,
-                    divisions=staged.divisions,
-                    beat_anchors=beat_anchors,
-                )
+            if rejection_reason:
+                rejected_reasons.append(rejection_reason)
 
     staged.meta.stages["refine"] = {
         "lanes_applied": ["L0", "L1"],

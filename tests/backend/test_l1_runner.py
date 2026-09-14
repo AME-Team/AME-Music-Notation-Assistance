@@ -83,7 +83,12 @@ def _mock_call(decisions: list[Decision], usage: dict | None = None):
     result = L1ChunkCallResult(
         output=L1ChunkResponse(bar_range=(1, 1), decisions=decisions),
         usage=usage
-        or {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 0},
+        or {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
     )
     return patch("app.pipeline.refine.l1_runner.call_l1_chunk", return_value=result)
 
@@ -356,7 +361,12 @@ def test_usage_accumulates_and_is_recorded_in_meta() -> None:
 
     with _mock_call(
         [decision],
-        usage={"input_tokens": 111, "output_tokens": 22, "cache_read_input_tokens": 3},
+        usage={
+            "input_tokens": 111,
+            "output_tokens": 22,
+            "cache_read_input_tokens": 3,
+            "cache_creation_input_tokens": 1,
+        },
     ):
         result = run_l1_sequential(
             score,
@@ -372,6 +382,7 @@ def test_usage_accumulates_and_is_recorded_in_meta() -> None:
         "input_tokens": 111,
         "output_tokens": 22,
         "cache_read_input_tokens": 3,
+        "cache_creation_input_tokens": 1,
     }
     assert result.staged_score.meta.stages["refine"]["l1"]["usage"] == result.usage
     assert result.staged_score.meta.stages["refine"]["lanes_applied"] == ["L0", "L1"]
