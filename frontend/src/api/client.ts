@@ -401,3 +401,53 @@ export async function runRefine(
   });
   return (await resp.json()) as RefineResponse;
 }
+
+export type DiffResponse = components["schemas"]["DiffResponse"];
+export type NoteChangeResponse = components["schemas"]["NoteChangeResponse"];
+export type ScopeRequest = components["schemas"]["ScopeRequest"];
+export type RejectResponse = components["schemas"]["RejectResponse"];
+
+/**
+ * #41: `AcceptResponse`。`GET /score`と同じ理由(コンポーネント名衝突回避)で
+ * `score`フィールドはOpenAPI上`Record<string, unknown>`になるため、ここで
+ * `ScoreIR`として手書きする(`UndoRedoResult`と同じ意図的な例外)。
+ */
+export interface AcceptResponse {
+  score: ScoreIR;
+  applied_note_ids: number[];
+  remaining_diff: DiffResponse;
+}
+
+/** #41: `run_id`が変更したノートの一覧(L0 vs L1提案、FR-10)。 */
+export async function getDiff(projectId: string, runId: string): Promise<DiffResponse> {
+  const resp = await apiFetch(`/api/projects/${projectId}/refine/runs/${runId}/diff`);
+  return (await resp.json()) as DiffResponse;
+}
+
+/** #41: スコープ内の変更を承認し`current.json`へ反映する(省略時は全体承認)。 */
+export async function acceptDiff(
+  projectId: string,
+  runId: string,
+  scope: ScopeRequest = {},
+): Promise<AcceptResponse> {
+  const resp = await apiFetch(`/api/projects/${projectId}/refine/runs/${runId}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(scope),
+  });
+  return (await resp.json()) as AcceptResponse;
+}
+
+/** #41: スコープ内の変更を却下する(`current.json`は変更しない、省略時は全体却下)。 */
+export async function rejectDiff(
+  projectId: string,
+  runId: string,
+  scope: ScopeRequest = {},
+): Promise<RejectResponse> {
+  const resp = await apiFetch(`/api/projects/${projectId}/refine/runs/${runId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(scope),
+  });
+  return (await resp.json()) as RejectResponse;
+}

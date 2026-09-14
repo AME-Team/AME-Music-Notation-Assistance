@@ -4,7 +4,8 @@ import type { NoteOp, ScoreIR, UndoRedoResult } from "../api/client";
 import { applyScoreOps, getScore, redoScoreOps, undoScoreOps } from "../api/client";
 import { applyOpsOptimistically } from "../lib/scoreOps";
 
-function scoreKey(projectId: string) {
+/** #41: `useDiff`が承認後にScore IRキャッシュを更新するため、キー生成をexportする。 */
+export function scoreKey(projectId: string) {
   return ["score", projectId] as const;
 }
 
