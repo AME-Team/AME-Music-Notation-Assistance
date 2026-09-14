@@ -1139,10 +1139,212 @@
           }
         }
       }
+    },
+    "/api/projects/{project_id}/refine/runs/{run_id}/diff": {
+      "get": {
+        "tags": [
+          "diff"
+        ],
+        "summary": "Get Diff",
+        "description": "#41: `run_id`が変更したノートの一覧(FR-10)。",
+        "operationId": "get_diff_api_projects__project_id__refine_runs__run_id__diff_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiffResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/refine/runs/{run_id}/accept": {
+      "post": {
+        "tags": [
+          "diff"
+        ],
+        "summary": "Accept Diff",
+        "description": "#41: スコープ内の変更を`current.json`へ適用する(省略時は全体承認)。\n\n楽観的並行性制御(`api/score.py`の`apply_score_ops`と同じパターン):\nリクエスト開始時に読んだ生JSON(`raw_before`)を保持し、書き込み直前に\n再読込して一致するか確認する。",
+        "operationId": "accept_diff_api_projects__project_id__refine_runs__run_id__accept_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/refine/runs/{run_id}/reject": {
+      "post": {
+        "tags": [
+          "diff"
+        ],
+        "summary": "Reject Diff",
+        "description": "#41: スコープ内の変更を却下する(省略時は全体却下)。`current.json`は変更しない。",
+        "operationId": "reject_diff_api_projects__project_id__refine_runs__run_id__reject_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AcceptResponse": {
+        "properties": {
+          "score": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Score"
+          },
+          "applied_note_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Applied Note Ids"
+          },
+          "remaining_diff": {
+            "$ref": "#/components/schemas/DiffResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "score",
+          "applied_note_ids",
+          "remaining_diff"
+        ],
+        "title": "AcceptResponse"
+      },
       "BeatEntry": {
         "properties": {
           "time_sec": {
@@ -1273,6 +1475,27 @@
           "file"
         ],
         "title": "Body_create_project_api_projects_post"
+      },
+      "DiffResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/NoteChangeResponse"
+            },
+            "type": "array",
+            "title": "Changes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "changes"
+        ],
+        "title": "DiffResponse"
       },
       "ErrorResponse": {
         "properties": {
@@ -1457,6 +1680,79 @@
         ],
         "title": "NoteAddOp",
         "description": "新規ノートを追加する(FR-09)。\n\n`onset_tick`/`duration_tick`を指定する(ピアノロールはtick空間で操作する\nため)。`onset_sec`/`duration_sec`は`services/score_ops.py`が現在のbeatmap\nから逆算する。"
+      },
+      "NoteChangeResponse": {
+        "properties": {
+          "change_type": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "delete",
+              "split_tie"
+            ],
+            "title": "Change Type"
+          },
+          "part_id": {
+            "type": "string",
+            "title": "Part Id"
+          },
+          "bar": {
+            "type": "integer",
+            "title": "Bar"
+          },
+          "note_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Note Ids"
+          },
+          "changed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changed Fields"
+          },
+          "midi": {
+            "type": "integer",
+            "title": "Midi"
+          },
+          "before": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Before"
+          },
+          "after": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "After"
+          },
+          "ai_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "change_type",
+          "part_id",
+          "bar",
+          "note_ids",
+          "changed_fields",
+          "midi",
+          "before",
+          "after",
+          "ai_reason"
+        ],
+        "title": "NoteChangeResponse"
       },
       "NoteDeleteOp": {
         "properties": {
@@ -1911,6 +2207,26 @@
         ],
         "title": "RefineResponse"
       },
+      "RejectResponse": {
+        "properties": {
+          "reverted_note_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Reverted Note Ids"
+          },
+          "remaining_diff": {
+            "$ref": "#/components/schemas/DiffResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reverted_note_ids",
+          "remaining_diff"
+        ],
+        "title": "RejectResponse"
+      },
       "RunStageRequest": {
         "properties": {
           "params": {
@@ -1940,6 +2256,41 @@
           "job_id"
         ],
         "title": "RunStageResponse"
+      },
+      "ScopeRequest": {
+        "properties": {
+          "part_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Part Id"
+          },
+          "bar_range": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bar Range"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ScopeRequest",
+        "description": "`accept`/`reject`共通のスコープ指定。両方省略時はrun全体が対象(#41)。"
       },
       "ScoreOpsRequest": {
         "properties": {

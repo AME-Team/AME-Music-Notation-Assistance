@@ -6,6 +6,8 @@ import { useScore } from "../hooks/useScore";
 interface RefineSectionProps {
   projectId: string;
   isQuantizeReady: boolean;
+  /** #41: 整音成功時にrun_idを親へ通知する(DiffPanel表示用)。 */
+  onRefineComplete?: (runId: string) => void;
 }
 
 /**
@@ -14,9 +16,13 @@ interface RefineSectionProps {
  * - HTTPリクエストの長時間ブロッキングを防ぐため、既定で同期・逐次実行 ("sync") を選択。Batch API (50% 割引) も選択可能。
  * - 実行前の想定コスト事前見積もり表示 (§7.5)。
  * - 実行後の消費トークン数・実測コスト・承認/棄却内訳の可視化 (NFR-07)。
- * - 生成された run_id を保持し、将来の DiffPanel (#41) に引き継ぐ。
+ * - 生成された run_id を `onRefineComplete` で親コンポーネントへ通知し、DiffPanel (#41) に引き継ぐ。
  */
-export function RefineSection({ projectId, isQuantizeReady }: RefineSectionProps) {
+export function RefineSection({
+  projectId,
+  isQuantizeReady,
+  onRefineComplete,
+}: RefineSectionProps) {
   const { data: score } = useScore(projectId);
 
   const parts = score?.parts ?? [];
@@ -75,6 +81,7 @@ export function RefineSection({ projectId, isQuantizeReady }: RefineSectionProps
         effort,
       });
       setRefineResult(resp);
+      onRefineComplete?.(resp.run_id);
     } catch (err) {
       setRefineError((err as Error).message);
     } finally {
@@ -244,7 +251,7 @@ export function RefineSection({ projectId, isQuantizeReady }: RefineSectionProps
 
           <p className="text-xs text-emerald-700 pt-1">
             ※ 整音結果は <code>score/staging/{refineResult.run_id}.json</code> に保存されています。
-            DiffPanel (#41) にて差分を確認し、小節単位で承認/却下できます。
+            下記のDiffPanelで差分を確認し、小節単位で承認/却下してください。
           </p>
         </div>
       )}

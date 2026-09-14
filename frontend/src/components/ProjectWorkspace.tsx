@@ -15,6 +15,7 @@ import { useJobStore } from "../stores/jobStore";
 import { AudioPlayer } from "./AudioPlayer";
 import { BeatGridEditor } from "./BeatGridEditor";
 import { BeatGridOverlay } from "./BeatGridOverlay";
+import { DiffPanel } from "./DiffPanel";
 import { PianoRollEditor } from "./PianoRollEditor";
 import { RefineSection } from "./RefineSection";
 import { TrackList } from "./TrackList";
@@ -56,6 +57,8 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   // 「アクションごとに個別のローディング状態を持つ」既存パターンに合わせる)。
   const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
   const isExporting = exportingFormat !== null;
+  // #41: 直近のL1整音run_id。DiffPanelはこれが設定されている間だけ表示する。
+  const [activeRefineRunId, setActiveRefineRunId] = useState<string | null>(null);
 
   const {
     data: peaks,
@@ -321,7 +324,16 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
       <RefineSection
         projectId={projectId}
         isQuantizeReady={Boolean(quantizeStage?.status === "completed" && !quantizeStage?.stale)}
+        onRefineComplete={setActiveRefineRunId}
       />
+
+      {activeRefineRunId && (
+        <DiffPanel
+          projectId={projectId}
+          runId={activeRefineRunId}
+          onDismiss={() => setActiveRefineRunId(null)}
+        />
+      )}
 
       <section className="space-y-2 rounded-lg border border-gray-200 p-4">
         <h3 className="text-lg font-semibold text-gray-700">波形とビートグリッド</h3>

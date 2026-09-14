@@ -474,10 +474,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/refine/runs/{run_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Diff
+         * @description #41: `run_id`が変更したノートの一覧(FR-10)。
+         */
+        get: operations["get_diff_api_projects__project_id__refine_runs__run_id__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/refine/runs/{run_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Diff
+         * @description #41: スコープ内の変更を`current.json`へ適用する(省略時は全体承認)。
+         *
+         *     楽観的並行性制御(`api/score.py`の`apply_score_ops`と同じパターン):
+         *     リクエスト開始時に読んだ生JSON(`raw_before`)を保持し、書き込み直前に
+         *     再読込して一致するか確認する。
+         */
+        post: operations["accept_diff_api_projects__project_id__refine_runs__run_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/refine/runs/{run_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Diff
+         * @description #41: スコープ内の変更を却下する(省略時は全体却下)。`current.json`は変更しない。
+         */
+        post: operations["reject_diff_api_projects__project_id__refine_runs__run_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AcceptResponse */
+        AcceptResponse: {
+            /** Score */
+            score: {
+                [key: string]: unknown;
+            };
+            /** Applied Note Ids */
+            applied_note_ids: number[];
+            remaining_diff: components["schemas"]["DiffResponse"];
+        };
         /** BeatEntry */
         BeatEntry: {
             /** Time Sec */
@@ -525,6 +599,13 @@ export interface components {
         Body_create_project_api_projects_post: {
             /** File */
             file: string;
+        };
+        /** DiffResponse */
+        DiffResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Changes */
+            changes: components["schemas"]["NoteChangeResponse"][];
         };
         /** ErrorResponse */
         ErrorResponse: {
@@ -618,6 +699,34 @@ export interface components {
              * @default 1
              */
             staff: number;
+        };
+        /** NoteChangeResponse */
+        NoteChangeResponse: {
+            /**
+             * Change Type
+             * @enum {string}
+             */
+            change_type: "keep" | "delete" | "split_tie";
+            /** Part Id */
+            part_id: string;
+            /** Bar */
+            bar: number;
+            /** Note Ids */
+            note_ids: number[];
+            /** Changed Fields */
+            changed_fields: string[];
+            /** Midi */
+            midi: number;
+            /** Before */
+            before: {
+                [key: string]: unknown;
+            };
+            /** After */
+            after: {
+                [key: string]: unknown;
+            };
+            /** Ai Reason */
+            ai_reason: string | null;
         };
         /**
          * NoteDeleteOp
@@ -821,6 +930,12 @@ export interface components {
             /** Cost Usd */
             cost_usd: number;
         };
+        /** RejectResponse */
+        RejectResponse: {
+            /** Reverted Note Ids */
+            reverted_note_ids: number[];
+            remaining_diff: components["schemas"]["DiffResponse"];
+        };
         /** RunStageRequest */
         RunStageRequest: {
             /**
@@ -840,6 +955,16 @@ export interface components {
         RunStageResponse: {
             /** Job Id */
             job_id: string;
+        };
+        /**
+         * ScopeRequest
+         * @description `accept`/`reject`共通のスコープ指定。両方省略時はrun全体が対象(#41)。
+         */
+        ScopeRequest: {
+            /** Part Id */
+            part_id?: string | null;
+            /** Bar Range */
+            bar_range?: number[] | null;
         };
         /**
          * ScoreOpsRequest
@@ -1704,6 +1829,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RefineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_diff_api_projects__project_id__refine_runs__run_id__diff_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiffResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_diff_api_projects__project_id__refine_runs__run_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_diff_api_projects__project_id__refine_runs__run_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RejectResponse"];
                 };
             };
             /** @description Validation Error */
