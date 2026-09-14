@@ -463,9 +463,10 @@ export interface paths {
          * Refine Score
          * @description 量子化(#25)+L0(#26)実行済みが前提。未実行なら404を返す。
          *
-         *     `async def`にしない(`api/export.py`と同じ理由): `anthropic`のPython SDKは
-         *     同期クライアントであり、`async def`のままだと待機中にイベントループを
-         *     直接ブロックし、SSEでのジョブ進捗配信など他の同時リクエストを止めてしまう。
+         *     `async def`にしない(`api/export.py`と同じ理由): `claude` CLIの呼び出しは
+         *     `subprocess.run`によるブロッキング処理であり、`async def`のままだと
+         *     待機中にイベントループを直接ブロックし、SSEでのジョブ進捗配信など他の
+         *     同時リクエストを止めてしまう。
          */
         post: operations["refine_score_api_projects__project_id__refine_post"];
         delete?: never;
