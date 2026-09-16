@@ -1315,6 +1315,32 @@
           }
         }
       }
+    },
+    "/api/agent/providers": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "List Providers",
+        "description": "#48/#52でプロバイダが増えるたびにここへ追記する想定の静的レジストリ。\n\n`dummy`は外部依存が無く常に実行可能なため`configured=True`固定。",
+        "operationId": "list_providers_api_agent_providers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentProviderInfo"
+                  },
+                  "type": "array",
+                  "title": "Response List Providers Api Agent Providers Get"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1344,6 +1370,24 @@
           "remaining_diff"
         ],
         "title": "AcceptResponse"
+      },
+      "AgentProviderInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "configured"
+        ],
+        "title": "AgentProviderInfo"
       },
       "BeatEntry": {
         "properties": {
