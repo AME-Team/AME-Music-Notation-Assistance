@@ -80,6 +80,13 @@ def validation_notes_for_chunk(
     `voice`自体はL1入力スキーマに含まれない(L1が決定する側のフィールドの
     ため)が、V-8には現在のvoiceが必要なため、decisionが無ければ元の`Note`
     から補う(#37 Gate2レビュー指摘: 暗黙keepもV-8の対象に含める)。
+
+    `bar`は`ChunkNote.bar`(小節番号)をそのまま渡す(#67/#68の実測実験で発覚した
+    実バグの修正: `ValidationNote.onset_beat`は小節内相対値のため、`bar`が
+    無いとV-8が異なる小節のノート同士を誤って重複判定する)。`decision.snap`
+    による候補選択がまれに元の小節を跨ぐケース(#38の`_snap_candidates_for_note`
+    参照、候補の`beat`は候補自身が属する小節内の値であり得る)は、この関数の
+    対象外の既知の限定的な制約として扱う(発生頻度・影響とも小さいと判断)。
     """
     decision_by_id = {d.note_id: d for d in decisions}
     result = []
@@ -101,6 +108,7 @@ def validation_notes_for_chunk(
                 id=chunk_note.id,
                 editable=chunk_note.editable,
                 midi=chunk_note.midi,
+                bar=chunk_note.bar,
                 onset_beat=onset_beat,
                 duration_beat=chunk_note.raw_duration_beat,
                 voice=voice,

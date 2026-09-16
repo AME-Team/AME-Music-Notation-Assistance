@@ -58,11 +58,20 @@ class ValidationNote(BaseModel):
     `onset_beat`/`duration_beat`は`raw_beat`/`raw_duration_beat`と同じ単位
     (1拍=四分音符)。ticksではなくbeatを使うのは、`split_at_beat`との比較に
     そのまま使え、`divisions`(ticks/beat)をdomain層に持ち込まずに済むため。
+
+    `onset_beat`は小節頭で1.0にリセットされる小節内相対値(`tick_to_bar_beat`
+    参照)であり、曲頭からの通し拍数ではない。そのため`bar`(既定1、単一小節の
+    テスト等では省略可)が無いとチャンク内の異なる小節にある2ノートの
+    `onset_beat`が数値上たまたま重なるだけでV-8(同一voice内の時間重複)が
+    誤検知する(#67/#68の実測実験で実データを使って初めて発覚した実バグ、
+    後継Issue参照: 既存のV-8単体テストは全て単一小節のみを扱っており、
+    複数小節にまたがるチャンクでのこの偽陽性を検出できていなかった)。
     """
 
     id: int
     editable: bool
     midi: int
+    bar: int = 1
     onset_beat: float
     duration_beat: float
     # L0/現在のvoice割り当て(`domain.score.Note.voice`と同じ既定値1)。L1入力
@@ -130,7 +139,7 @@ def _delete_rate_violations(
 def _overlap_violations(
     decisions: list[Decision], notes_by_id: dict[int, ValidationNote]
 ) -> list[Violation]:
-    """V-8: 同一voice内でノートが時間的に重複しない。
+    """V-8: 同一voice内・同一小節内でノートが時間的に重複しない。
 
     delete/merge_with_previousは占有区間から除外する(それ自体は時間を占有
     しなくなるため、#37設計判断)。同一voice内で区間が重なるペアを検出する。
@@ -141,9 +150,19 @@ def _overlap_violations(
     「L0由来の未変更ノートと明示decisionノートの重複」を検出できない偽陰性が
     生じる)。voiceは明示decisionが指定していればそれを、無ければノート自身の
     (L0由来の)voiceを使う。
+
+    `(voice, bar)`単位でグルーピングする(#67/#68の実測実験で発覚した実バグの
+    修正: `onset_beat`は小節内相対値のため、`bar`を無視して`voice`だけで
+    グルーピングすると、異なる小節にある無関係な2ノートが数値上の`onset_beat`
+    の近さだけで誤って重複判定されていた)。この方式は小節線をまたいで
+    タイで繋がっていない音価のノート(小節境界を越えて発音が続くノート)を
+    次の小節のノートとの重複判定の対象外にする副作用があるが、記譜ルール上
+    小節線をまたぐノートは`split_tie`で分割される前提(モジュールdocstring・
+    設計書§7.4「小節線をまたぐノートは、小節線上でタイに分割する」)のため、
+    現実的な運用では影響が限定的と判断する。
     """
     decision_by_note_id = {d.note_id: d for d in decisions}
-    by_voice: dict[int, list[tuple[float, float, int]]] = {}
+    by_voice_bar: dict[tuple[int, int], list[tuple[float, float, int]]] = {}
     for note in notes_by_id.values():
         if not note.editable:
             continue
@@ -154,12 +173,12 @@ def _overlap_violations(
             voice = decision.voice if decision.voice is not None else note.voice
         else:
             continue
-        by_voice.setdefault(voice, []).append(
+        by_voice_bar.setdefault((voice, note.bar), []).append(
             (note.onset_beat, note.onset_beat + note.duration_beat, note.id)
         )
 
     violations: list[Violation] = []
-    for intervals in by_voice.values():
+    for intervals in by_voice_bar.values():
         ordered = sorted(intervals, key=lambda item: item[0])
         for (_, end, _), (next_start, _, next_id) in zip(ordered, ordered[1:], strict=False):
             if next_start < end:

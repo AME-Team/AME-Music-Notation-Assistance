@@ -319,6 +319,61 @@ def test_voice_reassignment_causing_post_apply_overlap_is_rejected() -> None:
     assert staged_note_b.voice == 2  # 棄却されたため変更されていない
 
 
+def test_notes_in_different_bars_with_same_relative_beat_are_not_rejected() -> None:
+    """回帰(#67/#68実測実験で発覚した実バグ): `ValidationNote.onset_beat`は
+
+    小節内相対値(小節頭で1.0にリセット)のため、`bar`を渡さずに`voice`だけで
+    グルーピングすると、異なる小節にある2ノートが同じ`onset_beat`を持つ
+    だけでV-8の偽陽性になっていた。1小節目と2小節目それぞれの拍1に同じ長さの
+    ノートを置き(実時間では重複しない)、両方をvoice 1として`keep`しても
+    チャンクが棄却されないことを確認する(`validation_notes_for_chunk`が
+    `ChunkNote.bar`を`ValidationNote.bar`へ正しく引き継ぐことの統合確認)。
+    """
+    score = _score()
+    part = _part()
+    note_bar1 = _note(score, onset_tick=0, duration_tick=960, voice=1)  # 小節1、拍1〜2
+    note_bar2 = _note(
+        score, onset_tick=1920, duration_tick=960, voice=1
+    )  # 小節2、拍1〜2
+    part.notes.append(note_bar1)
+    part.notes.append(note_bar2)
+    score.parts.append(part)
+
+    decisions = [
+        Decision(
+            note_id=note_bar1.id,
+            action="keep",
+            snap="a",
+            spelling=note_bar1.spelling,
+            voice=1,
+            staff=1,
+            reason="x",
+        ),
+        Decision(
+            note_id=note_bar2.id,
+            action="keep",
+            snap="a",
+            spelling=note_bar2.spelling,
+            voice=1,
+            staff=1,
+            reason="x",
+        ),
+    ]
+
+    with _mock_call(decisions):
+        result = run_l1_sequential(
+            score,
+            "piano",
+            run_id="run_abc",
+            beat_anchors=_BEAT_ANCHORS,
+            model="claude-opus-5",
+            effort="high",
+        )
+
+    assert result.chunks_ok == 1
+    assert result.chunks_rejected == 0
+
+
 def test_merge_with_previous_is_skipped_and_logged() -> None:
     score = _score()
     part = _part()
