@@ -76,14 +76,20 @@ def _load_working_score(ctx: ToolContext) -> ScoreIR:
     毎回ディスクから新規にパースするため、戻り値は他のどこからも参照されて
     いない独立したオブジェクトであることが保証される(呼び出し元がそのまま
     ミューテートしてよい、deep copy不要)。
+
+    stagingファイル破損時(不正なJSON/スキーマ不一致)を含め、失敗は全て
+    `ToolError`へ変換する(#43 Gate2レビュー指摘・2巡目: 以前はcurrent.json
+    読み込み側のみ`try`で包んでおり、stagingファイル側の`read_json`/
+    `migrate_to_current`/`ScoreIR.model_validate`の失敗が生の例外として
+    伝播していた)。
     """
     staging_path = storage.score_staging_path(ctx.workspace_dir, ctx.project_id, ctx.run_id)
-    if staging_path.exists():
-        raw = storage.read_json(staging_path)
-        return ScoreIR.model_validate(migrate_to_current(raw))
     try:
+        if staging_path.exists():
+            raw = storage.read_json(staging_path)
+            return ScoreIR.model_validate(migrate_to_current(raw))
         return ScoreService(workspace_dir=ctx.workspace_dir).read_score(ctx.project_id)
-    except Exception as exc:  # noqa: BLE001 - ScoreNotFoundError等をToolErrorへ一元変換
+    except Exception as exc:  # noqa: BLE001 - あらゆる読み込み失敗をToolErrorへ一元変換
         raise ToolError(f"failed to read score for project {ctx.project_id!r}: {exc}") from exc
 
 
@@ -98,14 +104,19 @@ def _load_beat_anchors(ctx: ToolContext, divisions: int) -> list[tuple[float, fl
     """`api/score.py::apply_score_ops`と同じfail-closedパターン。
 
     beatmap欠落/ビート情報が空の場合、無言でtick→秒変換を続けず`ToolError`とする。
+    beatmap.json自体が破損している場合(不正なJSON等)も同様に`ToolError`へ
+    変換する(#43 Gate2レビュー指摘・2巡目)。
     """
     beatmap_file = storage.beatmap_path(ctx.workspace_dir, ctx.project_id)
     if not beatmap_file.exists():
         raise ToolError("beatmap not found; run the beat stage first")
-    beatmap = storage.read_json(beatmap_file)
-    anchors = beat_tick_anchors(
-        beatmap.get("beats", []), beatmap.get("time_signatures", []), divisions
-    )
+    try:
+        beatmap = storage.read_json(beatmap_file)
+        anchors = beat_tick_anchors(
+            beatmap.get("beats", []), beatmap.get("time_signatures", []), divisions
+        )
+    except Exception as exc:  # noqa: BLE001 - JSONDecodeError等をToolErrorへ一元変換
+        raise ToolError(f"failed to read beatmap for project {ctx.project_id!r}: {exc}") from exc
     if not anchors:
         raise ToolError("beatmap has no beats; cannot convert tick positions to seconds")
     return anchors
@@ -426,6 +437,8 @@ def score_note_history(ctx: ToolContext, *, note_id: int) -> list[dict[str, Any]
                 if not line:
                     continue
                 entry = json.loads(line)
+                if not isinstance(entry, dict):
+                    continue
                 changes = entry.get("changes")
                 if not isinstance(changes, dict):
                     continue

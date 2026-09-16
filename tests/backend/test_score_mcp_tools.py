@@ -271,6 +271,23 @@ class TestScoreNoteHistory:
 
         assert tools.score_note_history(_ctx(workspace_dir), note_id=1) == []
 
+    def test_non_dict_top_level_entry_is_skipped_not_raised(
+        self, workspace_dir: Path
+    ) -> None:
+        """#43 Gate2レビュー指摘・2巡目: 行自体が有効なJSONでもdictでない
+
+        (配列/スカラー等)場合、`entry.get(...)`がAttributeErrorを送出して
+        いた。非dict行は安全にスキップする。
+        """
+        _seed_project(workspace_dir, _make_score())
+        ops_log = storage.score_ops_log_path(workspace_dir, _PROJECT_ID)
+        ops_log.parent.mkdir(parents=True, exist_ok=True)
+        with ops_log.open("a", encoding="utf-8") as f:
+            f.write("[1, 2, 3]\n")
+            f.write('"just a string"\n')
+
+        assert tools.score_note_history(_ctx(workspace_dir), note_id=1) == []
+
 
 class TestScoreValidate:
     def test_no_violations_on_clean_score(self, workspace_dir: Path) -> None:
@@ -531,3 +548,66 @@ class TestScoreApplyOps:
             for v in result["violations"]
         )
         assert not _staging_path(workspace_dir).exists()
+
+    def test_merge_does_not_spuriously_trigger_v8_for_the_merged_away_note(
+        self, workspace_dir: Path
+    ) -> None:
+        """#43 Gate2レビュー指摘・2巡目: `note.merge`はprimaryノートを全区間へ
+
+        伸ばしつつsecondaryを`status=deleted`にする。事後lintの`notes`には
+        secondary(このrunが削除)も含まれるが、`decisions`に`action="delete"`
+        を明示的に合成しているため`domain/invariants.py::_overlap_violations`
+        の「delete/merge_with_previousは占有区間から除外する」分岐により
+        V-8としては計上されない(このテストでそれを直接確認する)。
+
+        V-6(delete率)を誤って誘発しないよう、他に十分な数の無関係なノートを
+        additional_notes(voice=2、bar違い)として加えて分母を大きくしておく
+        (2ノートだけのスコープだとmerge1件で delete率50%となりV-6自体が
+        (正当に)発火してしまい、検証したいV-8の非計上を隔離できないため)。
+        """
+        score = _make_score()
+        note_a = _add_note(score, onset_tick=0, duration_tick=240, midi=60, voice=1)
+        note_b = _add_note(score, onset_tick=240, duration_tick=240, midi=60, voice=1)
+        for i in range(8):
+            _add_note(
+                score, onset_tick=1920 * (i + 1), duration_tick=240, midi=62, voice=2
+            )
+        _seed_project(workspace_dir, score)
+
+        result = tools.score_apply_ops(
+            _ctx(workspace_dir),
+            ops=[{"type": "note.merge", "note_ids": [note_a.id, note_b.id]}],
+        )
+
+        assert result["ok"] is True
+        assert not any(v["rule"] == "V-8" for v in result["violations"])
+
+    def test_corrupted_staging_file_raises_tool_error(
+        self, workspace_dir: Path
+    ) -> None:
+        score = _make_score()
+        _add_note(score, onset_tick=0, midi=60)
+        _seed_project(workspace_dir, score)
+        staging_path = _staging_path(workspace_dir)
+        staging_path.parent.mkdir(parents=True, exist_ok=True)
+        staging_path.write_text("{not valid json", encoding="utf-8")
+
+        with pytest.raises(tools.ToolError, match="failed to read score"):
+            tools.score_apply_ops(
+                _ctx(workspace_dir),
+                ops=[{"type": "note.update", "note_ids": [1], "midi": 61}],
+            )
+
+    def test_corrupted_beatmap_raises_tool_error(self, workspace_dir: Path) -> None:
+        score = _make_score()
+        _add_note(score, onset_tick=0, midi=60)
+        _seed_project(workspace_dir, score)
+        storage.beatmap_path(workspace_dir, _PROJECT_ID).write_text(
+            "{not valid json", encoding="utf-8"
+        )
+
+        with pytest.raises(tools.ToolError, match="failed to read beatmap"):
+            tools.score_apply_ops(
+                _ctx(workspace_dir),
+                ops=[{"type": "note.update", "note_ids": [1], "midi": 61}],
+            )
