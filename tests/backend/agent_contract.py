@@ -15,7 +15,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.agent.provider import AgentEvent, AgentProvider, AgentTask
+import pytest
+from app.agent.provider import (
+    AgentEvent,
+    AgentProvider,
+    AgentRunNotFoundError,
+    AgentTask,
+)
 
 
 class ProviderContractTests:
@@ -79,3 +85,21 @@ class ProviderContractTests:
 
         result = await provider.result(handle.run_id)
         assert result.status == "cancelled"
+
+    async def test_unknown_run_id_raises_agent_run_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """未知の`run_id`に対する例外はプロバイダ実装によらず共通の型で送出される
+
+        (#42 Gate2レビュー指摘: `AgentRunNotFoundError`は`provider.py`に定義された
+        契約上の例外であり、どのプロバイダでもこれで統一されることを固定する)。
+        """
+        provider = self.provider()
+
+        with pytest.raises(AgentRunNotFoundError):
+            async for _ in provider.stream("does-not-exist"):
+                pass
+        with pytest.raises(AgentRunNotFoundError):
+            await provider.cancel("does-not-exist")
+        with pytest.raises(AgentRunNotFoundError):
+            await provider.result("does-not-exist")

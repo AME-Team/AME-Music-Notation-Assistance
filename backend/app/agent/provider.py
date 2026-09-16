@@ -21,8 +21,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
 
-AgentEventKind = Literal["thinking", "text", "tool_use", "tool_result", "error", "done"]
+AgentEventKind = Literal[
+    "thinking", "text", "tool_use", "tool_result", "error", "cancelled", "done"
+]
 AgentRunStatus = Literal["running", "completed", "failed", "cancelled"]
+
+
+class AgentRunNotFoundError(KeyError):
+    """未知の`run_id`が`stream`/`cancel`/`result`に渡された場合。
+
+    プロバイダ非依存の契約上の例外(どのプロバイダ実装でも同じ型で送出される)
+    のため、具象実装(`agent/providers/`配下)ではなくこのモジュールに置く
+    (#42 Gate2レビュー指摘: 以前は`providers/dummy.py`に定義しており、
+    #48/#52の実装者が`providers.dummy`からimportしたり独自例外を再定義したり
+    する誘因になっていた)。
+    """
 
 
 @dataclass(frozen=True)

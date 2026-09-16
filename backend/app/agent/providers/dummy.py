@@ -16,6 +16,7 @@ from app.agent.provider import (
     AgentEvent,
     AgentResult,
     AgentRunHandle,
+    AgentRunNotFoundError,
     AgentTask,
     TokenUsage,
 )
@@ -23,15 +24,16 @@ from app.agent.provider import (
 _DUMMY_USAGE = TokenUsage(input_tokens=120, output_tokens=40)
 
 
-class AgentRunNotFoundError(KeyError):
-    """未知の`run_id`が`stream`/`cancel`/`result`に渡された場合。"""
-
-
 class _DummyRun:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
         self.cancelled = False
         self.status: str = "running"
+        # seqはstream再開位置(#49)を示す用途を想定しているため、runごとに
+        # 独立させる(#42 Gate2レビュー指摘: 以前はプロバイダ全体で共有する
+        # カウンタを使っており、seqがrun内の順序ではなくプロセス全体での
+        # 発行順になっていた)。
+        self.seq = itertools.count()
 
 
 class DummyAgentProvider:
@@ -44,7 +46,6 @@ class DummyAgentProvider:
 
     def __init__(self) -> None:
         self._runs: dict[str, _DummyRun] = {}
-        self._seq = itertools.count()
 
     async def start(self, task: AgentTask) -> AgentRunHandle:
         run_id = str(uuid.uuid4())
@@ -67,14 +68,14 @@ class DummyAgentProvider:
                 run.status = "cancelled"
                 yield AgentEvent(
                     run_id=run_id,
-                    seq=next(self._seq),
-                    kind="error",
+                    seq=next(run.seq),
+                    kind="cancelled",
                     payload={"message": "cancelled"},
                 )
                 return
             yield AgentEvent(
                 run_id=run_id,
-                seq=next(self._seq),
+                seq=next(run.seq),
                 kind=kind,  # type: ignore[arg-type]
                 payload=payload,
                 tool_name=tool_name,

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agent_contract import ProviderContractTests
 from app.agent.provider import AgentTask
-from app.agent.providers.dummy import AgentRunNotFoundError, DummyAgentProvider
+from app.agent.providers.dummy import DummyAgentProvider
 
 
 class TestDummyProviderContract(ProviderContractTests):
@@ -31,26 +31,3 @@ async def test_full_run_produces_expected_event_sequence(tmp_path: Path) -> None
     result = await provider.result(handle.run_id)
     assert result.status == "completed"
     assert result.run_id == handle.run_id
-
-
-async def test_unknown_run_id_raises(tmp_path: Path) -> None:
-    provider = DummyAgentProvider()
-
-    try:
-        async for _ in provider.stream("does-not-exist"):
-            pass
-        raise AssertionError("expected AgentRunNotFoundError")
-    except AgentRunNotFoundError:
-        pass
-
-    try:
-        await provider.cancel("does-not-exist")
-        raise AssertionError("expected AgentRunNotFoundError")
-    except AgentRunNotFoundError:
-        pass
-
-    try:
-        await provider.result("does-not-exist")
-        raise AssertionError("expected AgentRunNotFoundError")
-    except AgentRunNotFoundError:
-        pass
