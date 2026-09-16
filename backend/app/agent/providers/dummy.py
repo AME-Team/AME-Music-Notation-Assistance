@@ -85,7 +85,13 @@ class DummyAgentProvider:
                 run_id=run_id,
                 seq=seq,
                 kind=kind,
-                payload=payload,
+                # `_STEPS`はモジュールロード時に一度だけ生成されるため、その
+                # payload dictをそのまま使うと全run・全イベントで同一
+                # オブジェクトが共有される(#42 Gate2レビュー指摘・3巡目
+                # MIDDLE: 呼び出し側がevent.payloadを破壊的に更新すると、
+                # 他runやキャッシュ済みrun.eventsの再生結果まで汚染される)。
+                # run/イベントごとに独立したコピーを渡す。
+                payload=dict(payload),
                 tool_name=tool_name,
                 usage=_DUMMY_USAGE if kind == "done" else None,
             )
