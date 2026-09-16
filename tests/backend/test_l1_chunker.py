@@ -300,6 +300,23 @@ def test_unknown_part_id_raises_value_error() -> None:
         pass
 
 
+def test_bars_per_chunk_below_one_raises_value_error() -> None:
+    """回帰(#106 Gate2レビュー指摘): `bars_per_chunk<1`だと`bar`が単調増加
+
+    しなくなり無限ループに陥る。呼び出し側の設定ミスとして早期に拒否する。
+    """
+    score = _score()
+    part = _part()
+    part.notes.append(_note(score, bar=1))
+    score.parts.append(part)
+    for invalid in (0, -1):
+        try:
+            build_chunks(score, "piano", bars_per_chunk=invalid)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+
 def test_instrument_uses_part_name_not_id() -> None:
     score = _score()
     part = _part()

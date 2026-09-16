@@ -176,7 +176,14 @@ def build_chunks(
     `bars_per_chunk`(#68 Q-6: チャンクサイズの実測比較用)は既定4小節。密集/
     高速テンポ時の自動縮小先(`_should_shrink`)は`bars_per_chunk`に比例させ、
     `bars_per_chunk // 2`(最小1小節)とする。
+
+    `bars_per_chunk`が1未満だと`tentative_end = min(bar + bars_per_chunk - 1,
+    max_bar)`が`bar`より小さくなり、`bar`が単調増加しなくなって無限ループに
+    陥る(#106 Gate2レビュー指摘)。呼び出し側の設定ミスを早期に検出するため
+    明示的に拒否する。
     """
+    if bars_per_chunk < 1:
+        raise ValueError(f"bars_per_chunk must be >= 1, got {bars_per_chunk}")
     if score.find_part(part_id) is None:
         # `build_song_context_message`(l1_prompt.py)と同じエラー契約に揃える
         # (#38 Gate2レビュー指摘: 以前は`next(...)`が素のStopIterationを
