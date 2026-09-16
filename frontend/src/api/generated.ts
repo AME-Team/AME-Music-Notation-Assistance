@@ -539,6 +539,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agent/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Providers
+         * @description #48/#52でプロバイダが増えるたびにここへ追記する想定の静的レジストリ。
+         *
+         *     `name`は各プロバイダクラスの`name`属性を参照する(#42 Gate2レビュー指摘・
+         *     2巡目 LOW: 文字列リテラルをここへ直書きすると`DummyAgentProvider.name`との
+         *     二重管理になり、片方だけ更新漏れが起こりうる)。`dummy`は外部依存が無く
+         *     常に実行可能なため`configured=True`固定。
+         */
+        get: operations["list_providers_api_agent_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -552,6 +577,13 @@ export interface components {
             /** Applied Note Ids */
             applied_note_ids: number[];
             remaining_diff: components["schemas"]["DiffResponse"];
+        };
+        /** AgentProviderInfo */
+        AgentProviderInfo: {
+            /** Name */
+            name: string;
+            /** Configured */
+            configured: boolean;
         };
         /** BeatEntry */
         BeatEntry: {
@@ -1943,6 +1975,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_providers_api_agent_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentProviderInfo"][];
                 };
             };
         };
