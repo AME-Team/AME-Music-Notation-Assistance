@@ -530,6 +530,23 @@ class TestApplyOpsProvenance:
         assert note.provenance == "user"
         assert note.provenance_run_id is None
 
+    def test_default_call_preserves_existing_provenance_run_id(self) -> None:
+        """#43 Gate2レビュー指摘: `provenance_run_id`省略時(既存HTTPエンドポイント
+
+        経由)は、既にノートへ設定済みの`provenance_run_id`をNoneへクリアしては
+        いけない(L1差分承認フロー(`pipeline/refine/l1_diff.py`)がこの値を
+        手掛かりにするため)。`provenance`(出自の種別)自体は従来通りユーザー
+        編集で上書きしてよいが、`provenance_run_id`は明示指定時のみ更新する。
+        """
+        score = _make_score()
+        note = _add_note(score, midi=60, provenance="llm")
+        note.provenance_run_id = "run_prior"
+
+        apply_ops(score, [NoteUpdateOp(note_ids=[note.id], velocity=100)], _ANCHORS)
+
+        assert note.provenance == "user"
+        assert note.provenance_run_id == "run_prior"
+
     def test_note_add_tags_agent_provenance(self) -> None:
         score = _make_score()
         apply_ops(

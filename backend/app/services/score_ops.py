@@ -48,6 +48,22 @@ class ScoreOpError(ValueError):
     """opの適用に失敗した(不正なnote_id/範囲外の値等)。API層で422に変換する。"""
 
 
+def _set_provenance(note: Note, provenance: NoteProvenance, provenance_run_id: str | None) -> None:
+    """既存ノートへ出自を記録する。`provenance`は常に上書きするが、
+
+    `provenance_run_id`は`None`のときは既存値を温存する(#43 Gate2レビュー指摘:
+    既定引数(HTTPの`POST /score/ops`、`provenance_run_id=None`)経由でも
+    既存ノートに設定済みの`provenance_run_id`が無条件にNoneへクリアされて
+    しまい、`pipeline/refine/l1_diff.py`等がprovenance_run_idを手掛かりに
+    する既存のL1差分承認フローの挙動を変えてしまっていた)。score-mcpの
+    `score_apply_ops`のように呼び出し元が明示的にrun_idを渡した場合のみ
+    更新する。
+    """
+    note.provenance = provenance
+    if provenance_run_id is not None:
+        note.provenance_run_id = provenance_run_id
+
+
 def apply_ops(
     score: ScoreIR,
     ops: list[NoteOp],
@@ -202,8 +218,7 @@ def _apply_update(
             note.voice = op.voice
         if op.staff is not None:
             note.staff = op.staff
-        note.provenance = provenance
-        note.provenance_run_id = provenance_run_id
+        _set_provenance(note, provenance, provenance_run_id)
 
 
 def _apply_delete(
@@ -212,8 +227,7 @@ def _apply_delete(
     for note_id in op.note_ids:
         _, note = _find_note(score, note_id)
         note.status = "deleted"
-        note.provenance = provenance
-        note.provenance_run_id = provenance_run_id
+        _set_provenance(note, provenance, provenance_run_id)
 
 
 def _apply_restore(
@@ -233,8 +247,7 @@ def _apply_restore(
         if note.status != "deleted":
             continue
         note.status = "active"
-        note.provenance = provenance
-        note.provenance_run_id = provenance_run_id
+        _set_provenance(note, provenance, provenance_run_id)
 
 
 def _apply_split(
@@ -270,8 +283,7 @@ def _apply_split(
     )
     _resync_timing(new_note, op.at_tick, end_tick, anchors)
     _resync_timing(note, onset_tick, op.at_tick, anchors)
-    note.provenance = provenance
-    note.provenance_run_id = provenance_run_id
+    _set_provenance(note, provenance, provenance_run_id)
     part.notes.append(new_note)
 
 
@@ -311,13 +323,11 @@ def _apply_merge(
     primary_index = min(range(len(notes)), key=lambda i: (bounds[i][0], notes[i].id))
     primary = notes[primary_index]
     _resync_timing(primary, start_tick, end_tick, anchors)
-    primary.provenance = provenance
-    primary.provenance_run_id = provenance_run_id
+    _set_provenance(primary, provenance, provenance_run_id)
     for note in notes:
         if note is not primary:
             note.status = "deleted"
-            note.provenance = provenance
-            note.provenance_run_id = provenance_run_id
+            _set_provenance(note, provenance, provenance_run_id)
 
 
 def _apply_transpose_octave(
@@ -346,5 +356,4 @@ def _apply_transpose_octave(
         # ずらすため、fifths=0前提の再計算による異名同音のズレを避けられる。
         note.spelling = _spelling_for_new_midi(note, new_midi)
         note.midi = new_midi
-        note.provenance = provenance
-        note.provenance_run_id = provenance_run_id
+        _set_provenance(note, provenance, provenance_run_id)

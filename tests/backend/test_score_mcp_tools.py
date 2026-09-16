@@ -248,6 +248,29 @@ class TestScoreNoteHistory:
         assert len(history) == 1
         assert history[0]["change"]["after"]["midi"] == 62
 
+    def test_malformed_json_line_raises_tool_error(self, workspace_dir: Path) -> None:
+        _seed_project(workspace_dir, _make_score())
+        ops_log = storage.score_ops_log_path(workspace_dir, _PROJECT_ID)
+        ops_log.parent.mkdir(parents=True, exist_ok=True)
+        ops_log.write_text("{not valid json\n", encoding="utf-8")
+
+        with pytest.raises(tools.ToolError, match="malformed JSON"):
+            tools.score_note_history(_ctx(workspace_dir), note_id=1)
+
+    def test_non_dict_changes_field_is_skipped_not_raised(
+        self, workspace_dir: Path
+    ) -> None:
+        _seed_project(workspace_dir, _make_score())
+        ops_log = storage.score_ops_log_path(workspace_dir, _PROJECT_ID)
+        ops_log.parent.mkdir(parents=True, exist_ok=True)
+        with ops_log.open("a", encoding="utf-8") as f:
+            f.write(
+                '{"ops": [{"op": "ai.reject"}], "actor": "user", '
+                '"ts": "2026-01-01T00:00:00Z", "changes": null}\n'
+            )
+
+        assert tools.score_note_history(_ctx(workspace_dir), note_id=1) == []
+
 
 class TestScoreValidate:
     def test_no_violations_on_clean_score(self, workspace_dir: Path) -> None:
@@ -446,3 +469,65 @@ class TestScoreApplyOps:
                 _ctx(workspace_dir),
                 ops=[{"type": "note.update", "note_ids": [1], "midi": 61}],
             )
+
+    def test_preexisting_unrelated_violation_does_not_block_unrelated_edit(
+        self, workspace_dir: Path
+    ) -> None:
+        """#43 Gate2レビュー指摘: AMT/quantize由来の、このrunと無関係な既存V-8
+
+        違反(同一voice内重複)が1つでもあると、それを直さない限りエージェントの
+        一切の編集が通らなくなる問題を修正した(pre/postの違反差分のみを見る)。
+        既存の重複とは無関係な小節へのノート追加は成功しなければならない。
+        """
+        score = _make_score()
+        # bar 1に、このrunとは無関係な既存のV-8重複(voice=1)を意図的に作る。
+        _add_note(score, onset_tick=0, duration_tick=480, voice=1, provenance="amt")
+        _add_note(score, onset_tick=240, duration_tick=480, voice=1, provenance="amt")
+        _seed_project(workspace_dir, score)
+
+        # bar 2への無関係なノート追加は、既存の重複を解消しなくても成功するべき。
+        result = tools.score_apply_ops(
+            _ctx(workspace_dir),
+            ops=[
+                {
+                    "type": "note.add",
+                    "part_id": "piano",
+                    "onset_tick": 1920,
+                    "duration_tick": 240,
+                    "midi": 67,
+                }
+            ],
+        )
+
+        assert result["ok"] is True
+        staged = storage.read_json(_staging_path(workspace_dir))
+        staged_part = next(p for p in staged["parts"] if p["id"] == "piano")
+        assert len(staged_part["notes"]) == 3
+
+    def test_edit_that_worsens_preexisting_violation_is_still_rejected(
+        self, workspace_dir: Path
+    ) -> None:
+        """既存の重複を許容するのは「無関係」な場合のみ。この`apply_ops`自体が
+
+        (別の)新たなV-8重複を作る場合は、既存の重複の有無に関わらず拒否する。
+        """
+        score = _make_score()
+        _add_note(score, onset_tick=0, duration_tick=480, voice=1, provenance="amt")
+        _add_note(score, onset_tick=240, duration_tick=480, voice=1, provenance="amt")
+        other_note = _add_note(
+            score, onset_tick=0, duration_tick=480, voice=2, provenance="amt"
+        )
+        _seed_project(workspace_dir, score)
+
+        # voice=2のノートをvoice=1(既存の重複ペアと同じ小節)へ動かし、新規の重複を作る。
+        result = tools.score_apply_ops(
+            _ctx(workspace_dir),
+            ops=[{"type": "note.update", "note_ids": [other_note.id], "voice": 1}],
+        )
+
+        assert result["ok"] is False
+        assert any(
+            v["rule"] == "V-8" and v["note_id"] == other_note.id
+            for v in result["violations"]
+        )
+        assert not _staging_path(workspace_dir).exists()

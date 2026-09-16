@@ -408,23 +408,34 @@ def score_note_history(ctx: ToolContext, *, note_id: int) -> list[dict[str, Any]
     `changes`に対象note_idを含む行だけ抽出して返す。`storage.py`はjsonlの
     追記(`append_jsonl`)のみを提供し読み取りヘルパが無いため、この関数専用に
     軽量な読み取りをここへ実装する。
+
+    壊れた行(不正なJSON、`changes`が非dict等)に遭遇しても例外を伝播させず
+    `ToolError`へ変換する(#43 Gate2レビュー指摘: 読み取り専用ツールが
+    `score/ops.jsonl`の1行の破損だけで丸ごと落ちるのは、このモジュールの
+    「環境側の失敗はToolErrorで伝える」という契約に反する)。
     """
     ops_log_path = storage.score_ops_log_path(ctx.workspace_dir, ctx.project_id)
     if not ops_log_path.exists():
         return []
     key = str(note_id)
     history: list[dict[str, Any]] = []
-    with ops_log_path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            entry = json.loads(line)
-            change = entry.get("changes", {}).get(key)
-            if change is not None:
-                history.append(
-                    {"actor": entry.get("actor"), "ts": entry.get("ts"), "change": change}
-                )
+    try:
+        with ops_log_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                entry = json.loads(line)
+                changes = entry.get("changes")
+                if not isinstance(changes, dict):
+                    continue
+                change = changes.get(key)
+                if change is not None:
+                    history.append(
+                        {"actor": entry.get("actor"), "ts": entry.get("ts"), "change": change}
+                    )
+    except json.JSONDecodeError as exc:
+        raise ToolError(f"score/ops.jsonl contains malformed JSON: {exc}") from exc
     return history
 
 
@@ -439,14 +450,21 @@ def score_apply_ops(ctx: ToolContext, *, ops: list[dict[str, Any]]) -> dict[str,
     1. `ops`(生dict配列、MCP呼び出し経由でJSONとして届く想定)を`NoteOp`へ
        parseする。不正な形の場合は書き込まず構造化した違反として返す。
     2. working score(このrunのstaging、無ければcurrent.jsonから初期化)へ
-       `services.score_ops.apply_ops`を`provenance="agent"`,
+       opsを適用する前の状態で`_lint_score`を実行し、既存の(このopsとは無関係な)
+       違反を`pre_violations`として記録しておく。AMT/quantize直後の
+       `current.json`には、このrunが一切関与していないV-8違反(同一voice内
+       重複)が既に残っている場合があり、それを理由に無関係な編集まで
+       ブロックしてしまうと、エージェントが一切の編集をできなくなる
+       (#43 Gate2レビュー指摘)。
+    3. working scoreへ`services.score_ops.apply_ops`を`provenance="agent"`,
        `provenance_run_id=ctx.run_id`で適用する。`ScoreOpError`(不正な
        note_id/範囲外の値等)は捕捉し、何も書かずに構造化した違反を返す
        (FR-23のトランザクション性: 1つでも失敗すれば全体を適用しない)。
-    3. 成功したら`_lint_score`で事後検証する(V-6: このrunの累積delete率、
-       V-8: 同一voice内の時間重複)。新たな違反があれば、やはり何も書かず
-       違反を返す。
-    4. 違反ゼロなら`score/staging/{run_id}.json`へ書き込み、成功を返す。
+    4. 成功したら`_lint_score`で事後検証し、`pre_violations`に無かった
+       **新規の**違反(V-6: このrunの累積delete率、V-8: 同一voice内の時間
+       重複)だけを見る。新たな違反があれば、何も書かず違反を返す。
+    5. 新規違反ゼロなら`score/staging/{run_id}.json`へ書き込み、成功を返す
+       (既存の無関係な違反が残っていても、このopsが悪化させていなければ許可する)。
 
     `_load_working_score`/`_load_beat_anchors`起因の`ToolError`(beatmap未実行
     等、opsを直しても解決しない前提条件エラー)はここでは捕捉せずそのまま
@@ -464,6 +482,7 @@ def score_apply_ops(ctx: ToolContext, *, ops: list[dict[str, Any]]) -> dict[str,
 
     working = _load_working_score(ctx)
     anchors = _load_beat_anchors(ctx, working.divisions)
+    pre_violations = set(_lint_score(working, run_id=ctx.run_id))
 
     try:
         _apply_ops(working, parsed_ops, anchors, provenance="agent", provenance_run_id=ctx.run_id)
@@ -473,9 +492,10 @@ def score_apply_ops(ctx: ToolContext, *, ops: list[dict[str, Any]]) -> dict[str,
             "violations": [{"rule": "SCORE_OP_ERROR", "note_id": None, "message": str(exc)}],
         }
 
-    violations = _lint_score(working, run_id=ctx.run_id)
-    if violations:
-        return {"ok": False, "violations": _violations_to_dicts(violations)}
+    post_violations = _lint_score(working, run_id=ctx.run_id)
+    new_violations = [v for v in post_violations if v not in pre_violations]
+    if new_violations:
+        return {"ok": False, "violations": _violations_to_dicts(new_violations)}
 
     _write_staging(ctx, working)
     return {"ok": True, "violations": [], "run_id": ctx.run_id}
