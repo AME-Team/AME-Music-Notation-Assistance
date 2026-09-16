@@ -25,6 +25,7 @@ def _note(
     *,
     editable: bool = True,
     midi: int = 60,
+    bar: int = 1,
     onset_beat: float = 0.0,
     duration_beat: float = 1.0,
     snap_ids: tuple[str, ...] = ("a", "b"),
@@ -34,6 +35,7 @@ def _note(
         id=id,
         editable=editable,
         midi=midi,
+        bar=bar,
         onset_beat=onset_beat,
         duration_beat=duration_beat,
         snap_candidate_ids=list(snap_ids),
@@ -291,6 +293,35 @@ class TestV8VoiceOverlap:
         decisions = [_decision(1, action="delete"), _decision(2, voice=1)]
         violations = validate_decisions(decisions, notes=notes, part_staves=2)
         assert "V-8" not in _rules(violations)
+
+    def test_same_onset_beat_in_different_bars_is_not_violation(self) -> None:
+        """回帰(#67/#68実測実験で発覚した実バグ): `onset_beat`は小節内相対値
+
+        (小節頭で1.0にリセット、`tick_to_bar_beat`参照)であり、曲頭からの
+        通し拍数ではない。異なる小節にある2ノートがたまたま同じ`onset_beat`
+        (かつ重なるduration)を持っていても、実時間では重複していない。
+        以前は`bar`を無視して`voice`だけでグルーピングしていたため、これが
+        V-8の誤検知(偽陽性)になっていた。実データ(かえるのピアノ、こおろぎ、
+        dova-s.jp)でL1を実行したところ、複数小節にまたがるチャンクの
+        ほぼ全ての決定がこの偽陽性でV-8違反になっていることが判明した。
+        """
+        notes = [
+            _note(1, bar=1, onset_beat=1.0, duration_beat=2.0),
+            _note(2, bar=2, onset_beat=1.0, duration_beat=2.0),
+        ]
+        decisions = [_decision(1, voice=1), _decision(2, voice=1)]
+        violations = validate_decisions(decisions, notes=notes, part_staves=2)
+        assert "V-8" not in _rules(violations)
+
+    def test_overlapping_notes_in_same_bar_and_voice_is_still_violation(self) -> None:
+        """`bar`を導入した修正が、同一小節内の本物の重複検出まで壊していないことの確認。"""
+        notes = [
+            _note(1, bar=3, onset_beat=1.0, duration_beat=2.0),
+            _note(2, bar=3, onset_beat=2.0, duration_beat=1.0),
+        ]
+        decisions = [_decision(1, voice=1), _decision(2, voice=1)]
+        violations = validate_decisions(decisions, notes=notes, part_staves=2)
+        assert _rules(violations) == ["V-8"]
 
     @given(
         st.lists(
