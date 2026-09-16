@@ -12,6 +12,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.agent.providers.dummy import DummyAgentProvider
+
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
@@ -24,6 +26,9 @@ class AgentProviderInfo(BaseModel):
 def list_providers() -> list[AgentProviderInfo]:
     """#48/#52でプロバイダが増えるたびにここへ追記する想定の静的レジストリ。
 
-    `dummy`は外部依存が無く常に実行可能なため`configured=True`固定。
+    `name`は各プロバイダクラスの`name`属性を参照する(#42 Gate2レビュー指摘・
+    2巡目 LOW: 文字列リテラルをここへ直書きすると`DummyAgentProvider.name`との
+    二重管理になり、片方だけ更新漏れが起こりうる)。`dummy`は外部依存が無く
+    常に実行可能なため`configured=True`固定。
     """
-    return [AgentProviderInfo(name="dummy", configured=True)]
+    return [AgentProviderInfo(name=DummyAgentProvider.name, configured=True)]

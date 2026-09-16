@@ -49,7 +49,7 @@ class ProviderContractTests:
         events: list[AgentEvent] = [e async for e in provider.stream(handle.run_id)]
 
         assert events, "stream must yield at least one event"
-        assert events[-1].kind in ("done", "error")
+        assert events[-1].kind in ("done", "error", "cancelled")
         for event in events:
             assert event.run_id == handle.run_id
 
@@ -82,6 +82,20 @@ class ProviderContractTests:
         await provider.cancel(handle.run_id)
         async for _ in provider.stream(handle.run_id):
             pass
+
+        result = await provider.result(handle.run_id)
+        assert result.status == "cancelled"
+
+    async def test_cancel_without_consuming_stream_is_reflected_in_result(
+        self, tmp_path: Path
+    ) -> None:
+        """`stream()`を一度も消費していなくても、`cancel()`直後に`result()`が
+
+        `cancelled`を返すことを固定する(#42 Gate2レビュー指摘・2巡目 MIDDLE)。
+        """
+        provider = self.provider()
+        handle = await provider.start(self._make_task(tmp_path))
+        await provider.cancel(handle.run_id)
 
         result = await provider.result(handle.run_id)
         assert result.status == "cancelled"

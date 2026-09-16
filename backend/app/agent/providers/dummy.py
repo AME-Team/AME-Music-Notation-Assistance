@@ -8,12 +8,13 @@
 
 from __future__ import annotations
 
-import itertools
 import uuid
 from collections.abc import AsyncIterator
+from typing import Final
 
 from app.agent.provider import (
     AgentEvent,
+    AgentEventKind,
     AgentResult,
     AgentRunHandle,
     AgentRunNotFoundError,
@@ -23,17 +24,24 @@ from app.agent.provider import (
 
 _DUMMY_USAGE = TokenUsage(input_tokens=120, output_tokens=40)
 
+_STEPS: Final[list[tuple[AgentEventKind, dict[str, object], str | None]]] = [
+    ("thinking", {"text": "タスクを分析しています"}, None),
+    ("tool_use", {"input": {}}, "score_read"),
+    ("tool_result", {"output": "ok"}, "score_read"),
+    ("done", {}, None),
+]
+
 
 class _DummyRun:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
         self.cancelled = False
         self.status: str = "running"
-        # seqはstream再開位置(#49)を示す用途を想定しているため、runごとに
-        # 独立させる(#42 Gate2レビュー指摘: 以前はプロバイダ全体で共有する
-        # カウンタを使っており、seqがrun内の順序ではなくプロセス全体での
-        # 発行順になっていた)。
-        self.seq = itertools.count()
+        # `stream()`を複数回呼んでも(再接続・再開用途)同じイベント列/seqを
+        # 再現できるよう、初回生成時にここへキャッシュする(#42 Gate2レビュー
+        # 指摘・2巡目: 以前は`stream()`の呼び出しごとにイベント列を生成し直して
+        # おり、2回目以降の呼び出しでseqが4,5,6,7...と継続してしまっていた)。
+        self.events: list[AgentEvent] | None = None
 
 
 class DummyAgentProvider:
@@ -57,37 +65,47 @@ class DummyAgentProvider:
         if run is None:
             raise AgentRunNotFoundError(run_id)
 
-        steps: list[tuple[str, dict[str, object], str | None]] = [
-            ("thinking", {"text": "タスクを分析しています"}, None),
-            ("tool_use", {"input": {}}, "score_read"),
-            ("tool_result", {"output": "ok"}, "score_read"),
-            ("done", {}, None),
-        ]
-        for kind, payload, tool_name in steps:
+        if run.events is not None:
+            for event in run.events:
+                yield event
+            return
+
+        events: list[AgentEvent] = []
+        for seq, (kind, payload, tool_name) in enumerate(_STEPS):
             if run.cancelled:
                 run.status = "cancelled"
-                yield AgentEvent(
-                    run_id=run_id,
-                    seq=next(run.seq),
-                    kind="cancelled",
-                    payload={"message": "cancelled"},
+                event = AgentEvent(
+                    run_id=run_id, seq=seq, kind="cancelled", payload={"message": "cancelled"}
                 )
+                events.append(event)
+                run.events = events
+                yield event
                 return
-            yield AgentEvent(
+            event = AgentEvent(
                 run_id=run_id,
-                seq=next(run.seq),
-                kind=kind,  # type: ignore[arg-type]
+                seq=seq,
+                kind=kind,
                 payload=payload,
                 tool_name=tool_name,
                 usage=_DUMMY_USAGE if kind == "done" else None,
             )
+            events.append(event)
+            yield event
         run.status = "completed"
+        run.events = events
 
     async def cancel(self, run_id: str) -> None:
         run = self._runs.get(run_id)
         if run is None:
             raise AgentRunNotFoundError(run_id)
         run.cancelled = True
+        # `stream()`を一度も(最後まで)消費していないrunでも`result()`が直ちに
+        # `cancelled`を返せるよう、ここでも遷移させる(#42 Gate2レビュー指摘・
+        # 2巡目 MIDDLE: 以前は`run.cancelled`フラグを立てるだけで、`stream()`側が
+        # 消費されるまで`run.status`が"running"のままだった)。完了済みrunの
+        # ステータスは上書きしない。
+        if run.status == "running":
+            run.status = "cancelled"
 
     async def result(self, run_id: str) -> AgentResult:
         run = self._runs.get(run_id)
