@@ -550,7 +550,10 @@ export interface paths {
          * List Providers
          * @description #48/#52でプロバイダが増えるたびにここへ追記する想定の静的レジストリ。
          *
-         *     `dummy`は外部依存が無く常に実行可能なため`configured=True`固定。
+         *     `name`は各プロバイダクラスの`name`属性を参照する(#42 Gate2レビュー指摘・
+         *     2巡目 LOW: 文字列リテラルをここへ直書きすると`DummyAgentProvider.name`との
+         *     二重管理になり、片方だけ更新漏れが起こりうる)。`dummy`は外部依存が無く
+         *     常に実行可能なため`configured=True`固定。
          */
         get: operations["list_providers_api_agent_providers_get"];
         put?: never;
