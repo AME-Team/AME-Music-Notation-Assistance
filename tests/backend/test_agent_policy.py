@@ -115,6 +115,50 @@ class TestIsAllowedCommand:
 
         assert policy.is_allowed_command(f"cat {target}", workspace) is True
 
+    def test_denies_quoted_absolute_path_outside_workspace(
+        self, tmp_path: Path
+    ) -> None:
+        """#45 Gate2レビュー指摘・3巡目 HIGH: `shlex.split(..., posix=False)`は
+
+        クォートをトークンに残すため、クォートを剥がさずに`within_workspace`
+        へ渡すと`"/etc/passwd"`が相対パス扱いになりcwd(=workspace)配下と
+        誤判定されていた。
+        """
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command('cat "/etc/passwd"', workspace) is False
+        assert policy.is_allowed_command("cat '/etc/passwd'", workspace) is False
+
+    def test_denies_windows_style_path_outside_workspace(self, tmp_path: Path) -> None:
+        """#45 Gate2レビュー指摘・3巡目 HIGH: `_looks_like_path`が`/`しか
+
+        見ていなかったため、バックスラッシュ区切り・ドライブレター付きの
+        Windowsパス(本プロジェクトはWindows専用、NFR-08′)が「裸のトークン」
+        とみなされworkspace境界チェックを素通りしていた。
+        """
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command(r"cat C:\Windows\win.ini", workspace) is False
+        assert policy.is_allowed_command(r"ls C:\Users", workspace) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat ~/.ssh/id_rsa",
+            "cat $HOME/.ssh/id_rsa",
+            "cat %USERPROFILE%\\.ssh\\id_rsa",
+            "cat *.txt",
+        ],
+    )
+    def test_denies_shell_expansion_in_arguments(
+        self, tmp_path: Path, command: str
+    ) -> None:
+        """#45 Gate2レビュー指摘・3巡目 HIGH: `~`/`$`/`%`/グロブ文字は
+
+        リテラル文字列としてはworkspace相対に見えても、シェル展開後は
+        workspace外を指しうるため、`_SHELL_METACHARACTERS`に追加した。
+        """
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command(command, workspace) is False
+
 
 class TestWithinWorkspace:
     def test_allows_path_inside_workspace(self, tmp_path: Path) -> None:
@@ -231,7 +275,78 @@ class TestGuardWrite:
         assert entries[0]["tool_input"]["file_path"] == score_path
 
 
+class TestRecordToolStart:
+    async def test_returns_empty_dict_and_records_start_time(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        ctx = _ctx(workspace)
+
+        result = await policy.record_tool_start(
+            {"tool_name": "score_context"}, "tu1", {"ctx": ctx}
+        )
+
+        assert result == {}
+        assert "tu1" in ctx.pending_tool_starts
+
+    async def test_ignores_missing_tool_use_id(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        ctx = _ctx(workspace)
+
+        result = await policy.record_tool_start(
+            {"tool_name": "score_context"}, None, {"ctx": ctx}
+        )
+
+        assert result == {}
+        assert ctx.pending_tool_starts == {}
+
+
 class TestAuditPostToolUse:
+    async def test_computes_elapsed_ms_from_recorded_start(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        ctx = _ctx(workspace)
+        await policy.record_tool_start(
+            {"tool_name": "score_context"}, "tu1", {"ctx": ctx}
+        )
+
+        await policy.audit_post_tool_use(
+            {"tool_name": "score_context", "tool_input": {}, "tool_response": {}},
+            "tu1",
+            {"ctx": ctx},
+        )
+
+        entries = [
+            json.loads(line)
+            for line in audit_log_path(workspace)
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert entries[0]["elapsed_ms"] is not None
+        assert entries[0]["elapsed_ms"] >= 0
+        assert "tu1" not in ctx.pending_tool_starts
+
+    async def test_elapsed_ms_is_none_when_start_was_not_recorded(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        ctx = _ctx(workspace)
+
+        await policy.audit_post_tool_use(
+            {"tool_name": "score_context", "tool_input": {}, "tool_response": {}},
+            "tu_unrecorded",
+            {"ctx": ctx},
+        )
+
+        entries = [
+            json.loads(line)
+            for line in audit_log_path(workspace)
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert entries[0]["elapsed_ms"] is None
+
     async def test_records_result_for_every_tool_call(self, tmp_path: Path) -> None:
         workspace = tmp_path / "agent_workspace" / "run1"
         ctx = _ctx(workspace)
@@ -328,14 +443,15 @@ class TestBuildClaudeHooks:
 
         assert set(hooks.keys()) == {"PreToolUse", "PostToolUse"}
         pre_matchers = {m.matcher for m in hooks["PreToolUse"]}
-        assert pre_matchers == {"Bash", "Write", "Edit"}
+        assert pre_matchers == {None, "Bash", "Write", "Edit"}
         assert hooks["PostToolUse"][0].matcher is None
 
     async def test_wired_hook_closures_delegate_to_ctx(self, tmp_path: Path) -> None:
         workspace = tmp_path / "agent_workspace" / "run1"
         ctx = _ctx(workspace)
         hooks = policy.build_claude_hooks(ctx)
-        bash_hook = hooks["PreToolUse"][0].hooks[0]
+        bash_matcher = next(m for m in hooks["PreToolUse"] if m.matcher == "Bash")
+        bash_hook = bash_matcher.hooks[0]
 
         result = await bash_hook(
             {"tool_input": {"command": "curl http://evil.example"}}, "tu1", {}
@@ -343,6 +459,31 @@ class TestBuildClaudeHooks:
 
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert audit_log_path(workspace).exists()
+
+    async def test_elapsed_ms_recorded_via_pre_and_post_hooks(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        ctx = _ctx(workspace)
+        hooks = policy.build_claude_hooks(ctx)
+        start_matcher = next(m for m in hooks["PreToolUse"] if m.matcher is None)
+        post_matcher = hooks["PostToolUse"][0]
+
+        await start_matcher.hooks[0]({"tool_name": "score_context"}, "tu1", {})
+        await post_matcher.hooks[0](
+            {"tool_name": "score_context", "tool_input": {}, "tool_response": {}},
+            "tu1",
+            {},
+        )
+
+        entries = [
+            json.loads(line)
+            for line in audit_log_path(workspace)
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert entries[0]["elapsed_ms"] is not None
+        assert entries[0]["elapsed_ms"] >= 0
 
 
 class TestBuildOpencodeToolsConfig:

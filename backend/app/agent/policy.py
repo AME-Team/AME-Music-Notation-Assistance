@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import contextlib
 import shlex
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
 
@@ -48,13 +49,36 @@ MAX_CONSECUTIVE_SCORE_APPLY_OPS_FAILURES: Final = 3
 
 _SCORE_APPLY_OPS_TOOL_NAME = "mcp__score__score_apply_ops"
 
-# NFR-14: 複数コマンドの連結・置換に使われうるシェルメタ文字。ホワイトリストの
-# 判定は「先頭コマンド名だけ見る」のではなく、これらの文字が1つでも含まれて
-# いれば無条件に拒否する(パースして安全性を判断するより、保守的に全拒否する
-# 方がセキュリティ境界として安全なため)。改行/復帰(`\n`/`\r`)もシェルにとっては
-# コマンド区切りとして働く(#45 Gate2レビュー指摘・1巡目 HIGH: これが無いと
-# "ls\ncurl ..."のような改行区切りでの連結を素通ししてしまっていた)。
-_SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<", "&", "\n", "\r")
+# NFR-14: 複数コマンドの連結・展開・グロブに使われうるシェルメタ文字。
+# ホワイトリストの判定は「先頭コマンド名だけ見る」のではなく、これらの文字が
+# 1つでも含まれていれば無条件に拒否する(パースして安全性を判断するより、
+# 保守的に全拒否する方がセキュリティ境界として安全なため)。改行/復帰
+# (`\n`/`\r`)もシェルにとってはコマンド区切りとして働く(#45 Gate2レビュー
+# 指摘・1巡目 HIGH: これが無いと"ls\ncurl ..."のような改行区切りでの連結を
+# 素通ししてしまっていた)。`~`(ホームディレクトリ展開)・`$`(変数展開、
+# `$(`だけでなく`$HOME`等の単体`$`も)・`%`(Windows環境変数展開)・
+# `*`/`?`/`[`(グロブ)も、リテラル文字列としてはworkspace配下に見える引数を
+# シェル展開後にworkspace外へ差し替えられてしまうため拒否対象に加える
+# (#45 Gate2レビュー指摘・2巡目 HIGH: `cat ~/.ssh/id_rsa`/`cat $HOME/...`が
+# 引数の文字列検証だけでは検出できず素通りしていた)。
+_SHELL_METACHARACTERS = (
+    ";",
+    "&&",
+    "||",
+    "|",
+    "`",
+    "$",
+    ">",
+    "<",
+    "&",
+    "\n",
+    "\r",
+    "~",
+    "%",
+    "*",
+    "?",
+    "[",
+)
 
 # NFR-14: cat/grep/lsは引数(読み取り対象パス)を検証しないと、workspace外の
 # 任意ファイル読み取り(例: `cat /etc/passwd`)に使われてしまう(#45 Gate2
@@ -71,23 +95,51 @@ _PATH_SENSITIVE_EXECUTABLES = frozenset({"cat", "grep", "ls"})
 class PolicyContext:
     """1エージェントrunにつき1つ。#48/#52がプロバイダ構築時に作る。
 
-    `consecutive_score_apply_ops_failures`はrun中に変化する唯一の状態のため
-    frozenにしない(#42の`AgentTask`等、他のデータクラスは全てfrozen)。
+    `consecutive_score_apply_ops_failures`/`pending_tool_starts`はrun中に
+    変化する状態のためfrozenにしない(#42の`AgentTask`等、他のデータクラスは
+    全てfrozen)。
     """
 
     workspace: Path
     run_id: str
     project_id: str
     consecutive_score_apply_ops_failures: int = 0
+    # 所要時間計測用: tool_use_id→PreToolUse時点の開始時刻(time.monotonic())。
+    # `record_tool_start`(PreToolUse)が書き込み、`audit_post_tool_use`
+    # (PostToolUse)がpopして経過時間を計算する(#45 Gate2レビュー指摘・
+    # 3巡目 MIDDLE: audit.pyの監査項目に「所要時間」を掲げていながら
+    # elapsed_msを一度も設定していなかった)。
+    pending_tool_starts: dict[str, float] = field(default_factory=dict)
+
+
+def _strip_quotes(arg: str) -> str:
+    """`shlex.split(..., posix=False)`はクォートをトークンに残したまま返す
+
+    ため、パス判定・`within_workspace`比較の前に取り除く(#45 Gate2レビュー
+    指摘・3巡目 HIGH: クォート込みの文字列`'"/etc/passwd"'`を`Path`へ渡すと
+    先頭の`"`を含む相対パスとして解決され、cwd(=workspace)配下と誤判定
+    されてしまい、実際のシェルがクォートを外して絶対パスとして実行する
+    のとズレが生じていた)。
+    """
+    if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in ("'", '"'):
+        return arg[1:-1]
+    return arg
 
 
 def _looks_like_path(arg: str) -> bool:
     """引数がファイル/ディレクトリパスらしいかを判定する(フラグ・裸の
 
-    トークンとの区別用)。`/`を含む(絶対パス・相対ディレクトリ指定)、または
-    `.`/`..`そのものであればパスとみなす。
+    トークンとの区別用)。`/`(POSIXスタイル)だけでなく、本プロジェクトが
+    対象とするWindows(NFR-08′)特有のパス表記も検出する(#45 Gate2レビュー
+    指摘・3巡目 HIGH: `/`のみの判定だと`C:\\Windows\\win.ini`のような
+    バックスラッシュ区切り・ドライブレター付きパスが「裸のトークン」と
+    誤判定されworkspace境界チェックを素通りしていた): バックスラッシュ
+    (`\\`)を含む、ドライブレター(`C:`等)で始まる、`~`(ホーム展開、通常は
+    `_SHELL_METACHARACTERS`で弾かれるが二重の防御として)、`.`/`..`そのもの。
     """
-    return "/" in arg or arg in (".", "..")
+    if "/" in arg or "\\" in arg or arg in (".", "..", "~"):
+        return True
+    return len(arg) >= 2 and arg[1] == ":" and arg[0].isalpha()
 
 
 def is_allowed_command(command: str, workspace: Path) -> bool:
@@ -122,7 +174,7 @@ def is_allowed_command(command: str, workspace: Path) -> bool:
     if executable not in SHELL_COMMAND_WHITELIST:
         return False
 
-    args = tokens[1:]
+    args = [_strip_quotes(arg) for arg in tokens[1:]]
     if executable in _PATH_SENSITIVE_EXECUTABLES:
         return all(not _looks_like_path(arg) or within_workspace(arg, workspace) for arg in args)
     return True
@@ -166,6 +218,21 @@ def _record_pretooluse_decision(
                 reason=reason,
             ),
         )
+
+
+async def record_tool_start(
+    input_data: dict[str, Any], tool_use_id: str | None, context: dict[str, Any]
+) -> dict[str, Any]:
+    """PreToolUseフック(matcher=None、全ツール対象)。所要時間計測用に
+
+    開始時刻だけを記録する。許可/拒否の判断はguard_bash/guard_write等の
+    専用フックが別途行うため、このフック自体は常に許可(`{}`)のみ返す
+    (複数のPreToolUseマッチャは並行で呼ばれる、SDKドキュメント参照)。
+    """
+    ctx: PolicyContext = context["ctx"]
+    if tool_use_id is not None:
+        ctx.pending_tool_starts[tool_use_id] = time.monotonic()
+    return {}
 
 
 async def guard_bash(
@@ -235,8 +302,9 @@ async def audit_post_tool_use(
 ) -> dict[str, Any]:
     """PostToolUseフック(matcher=None、全ツール対象)。
 
-    全ツール呼び出しの結果を監査ログに記録する(NFR-15/FR-22)。加えて
-    `score_apply_ops`の結果が`{"ok": false, ...}`の場合のみ
+    全ツール呼び出しの結果を監査ログに記録する(NFR-15/FR-22)。所要時間は
+    `record_tool_start`(PreToolUse)が記録した開始時刻との差分として計算する。
+    加えて`score_apply_ops`の結果が`{"ok": false, ...}`の場合のみ
     `PolicyContext.consecutive_score_apply_ops_failures`をインクリメントし、
     `MAX_CONSECUTIVE_SCORE_APPLY_OPS_FAILURES`に達したら`{"continue": False,
     "stopReason": ...}`を返してセッションを強制終了する(R-10)。`ok: true`
@@ -245,6 +313,9 @@ async def audit_post_tool_use(
     ctx: PolicyContext = context["ctx"]
     tool_name = input_data.get("tool_name", "")
     tool_response = input_data.get("tool_response")
+
+    started_at = ctx.pending_tool_starts.pop(tool_use_id, None) if tool_use_id else None
+    elapsed_ms = (time.monotonic() - started_at) * 1000 if started_at is not None else None
 
     with contextlib.suppress(OSError):
         append_audit_entry(
@@ -256,6 +327,7 @@ async def audit_post_tool_use(
                 tool_input=input_data.get("tool_input", {}),
                 decision="allow",
                 result=tool_response,
+                elapsed_ms=elapsed_ms,
             ),
         )
 
@@ -287,6 +359,9 @@ def build_claude_hooks(ctx: PolicyContext) -> dict[str, list[HookMatcher]]:
     ため、`context`引数に`{"ctx": ctx}`を混ぜて渡すクロージャでラップする)。
     """
 
+    async def _record_tool_start(input_data, tool_use_id, context):
+        return await record_tool_start(input_data, tool_use_id, {**context, "ctx": ctx})
+
     async def _guard_bash(input_data, tool_use_id, context):
         return await guard_bash(input_data, tool_use_id, {**context, "ctx": ctx})
 
@@ -298,6 +373,7 @@ def build_claude_hooks(ctx: PolicyContext) -> dict[str, list[HookMatcher]]:
 
     return {
         "PreToolUse": [
+            HookMatcher(matcher=None, hooks=[_record_tool_start]),
             HookMatcher(matcher="Bash", hooks=[_guard_bash]),
             HookMatcher(matcher="Write", hooks=[_guard_write]),
             HookMatcher(matcher="Edit", hooks=[_guard_write]),
