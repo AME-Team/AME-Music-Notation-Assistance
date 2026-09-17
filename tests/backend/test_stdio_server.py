@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -153,7 +154,7 @@ class TestOpencodeMcpConfig:
         assert config == {
             "score": {
                 "type": "local",
-                "command": ["python", "-m", "app.agent.mcp.stdio_server"],
+                "command": [sys.executable, "-m", "app.agent.mcp.stdio_server"],
                 "environment": {
                     "AME_WORKSPACE_DIR": str(workspace_dir),
                     "AME_PROJECT_ID": "prj_01H",

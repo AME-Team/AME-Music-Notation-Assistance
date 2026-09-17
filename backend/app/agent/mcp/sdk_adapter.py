@@ -19,6 +19,7 @@ from typing import Any, NotRequired, TypedDict
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server, tool
 
 from app.agent.mcp import tools
+from app.agent.mcp._schema import as_bar_range
 from app.agent.mcp.tools import ToolContext
 
 SERVER_NAME = "score"
@@ -84,16 +85,6 @@ def _to_content(result: Any) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}]}
 
 
-def _as_bar_range(bars: list[int]) -> tuple[int, int]:
-    """JSONでは`[lo, hi]`(list)で届く小節範囲を、tools.pyが要求する
-
-    `tuple[int, int]`へ変換する(`tuple(list)`は`tuple[int, ...]`型になり
-    mypyの2要素タプル要求を満たせないため、明示的に2要素へ展開する)。
-    """
-    lo, hi = bars
-    return lo, hi
-
-
 def build_tools(ctx: ToolContext) -> list[SdkMcpTool[Any]]:
     """`ctx`を束縛した8個の`SdkMcpTool`を返す。
 
@@ -110,7 +101,7 @@ def build_tools(ctx: ToolContext) -> list[SdkMcpTool[Any]]:
         result = tools.score_query(
             ctx,
             part=args["part"],
-            bars=_as_bar_range(args["bars"]),
+            bars=as_bar_range(args["bars"]),
             filter=args.get("filter"),
         )
         return _to_content(result)
@@ -130,7 +121,7 @@ def build_tools(ctx: ToolContext) -> list[SdkMcpTool[Any]]:
             ctx,
             part=args["part"],
             metric=args["metric"],  # type: ignore[arg-type]
-            bars=_as_bar_range(bars) if bars is not None else None,
+            bars=as_bar_range(bars) if bars is not None else None,
         )
         return _to_content(result)
 

@@ -17,12 +17,14 @@ TypedDictを要するのはClaude Agent SDK固有の制約であり、こちら�
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from app.agent.mcp import tools
+from app.agent.mcp._schema import as_bar_range
 from app.agent.mcp.tools import ToolContext
 
 _ENV_WORKSPACE_DIR = "AME_WORKSPACE_DIR"
@@ -45,16 +47,6 @@ def context_from_env() -> ToolContext:
     )
 
 
-def _as_bar_range(bars: list[int]) -> tuple[int, int]:
-    """JSONでは`[lo, hi]`(list)で届く小節範囲を、tools.pyが要求する
-
-    `tuple[int, int]`へ変換する(`tuple(list)`は`tuple[int, ...]`型になり
-    mypyの2要素タプル要求を満たせないため、明示的に2要素へ展開する)。
-    """
-    lo, hi = bars
-    return lo, hi
-
-
 def build_server(ctx: ToolContext) -> FastMCP:
     """`ctx`を束縛した8個のツールを登録済みの`FastMCP`インスタンスを返す。
 
@@ -69,7 +61,7 @@ def build_server(ctx: ToolContext) -> FastMCP:
         bars: list[int],
         filter: dict[str, Any] | None = None,  # noqa: A002
     ) -> list[dict[str, Any]]:
-        return tools.score_query(ctx, part=part, bars=_as_bar_range(bars), filter=filter)
+        return tools.score_query(ctx, part=part, bars=as_bar_range(bars), filter=filter)
 
     mcp.add_tool(
         score_query, name="score_query", description="指定part・小節範囲のノート配列を返す"
@@ -87,7 +79,7 @@ def build_server(ctx: ToolContext) -> FastMCP:
             ctx,
             part=part,
             metric=metric,  # type: ignore[arg-type]
-            bars=_as_bar_range(bars) if bars is not None else None,
+            bars=as_bar_range(bars) if bars is not None else None,
         )
 
     mcp.add_tool(
@@ -145,11 +137,18 @@ def opencode_mcp_config(*, project_id: str, run_id: str, workspace_dir: Path) ->
 
     チェックリスト項目「run ごとの opencode.json 生成」)。実際にrun全体の
     `opencode.json`へマージして起動するのは#52の担当。
+
+    `command`は`sys.executable`(このプロセスを起動したPythonインタプリタの
+    絶対パス)を使う(#44 Gate2レビュー指摘: 固定文字列`"python"`だと
+    `python3`しか無い環境や別の仮想環境が`PATH`優先になる環境で解決に
+    失敗しうる)。`-m app.agent.mcp.stdio_server`の実行には`cwd`/`PYTHONPATH`
+    が`backend/`を指している必要があるが、プロセスの起動自体(cwd指定含む)は
+    #52の担当のためここでは踏み込まない。
     """
     return {
         "score": {
             "type": "local",
-            "command": ["python", "-m", "app.agent.mcp.stdio_server"],
+            "command": [sys.executable, "-m", "app.agent.mcp.stdio_server"],
             "environment": {
                 _ENV_WORKSPACE_DIR: str(workspace_dir),
                 _ENV_PROJECT_ID: project_id,
