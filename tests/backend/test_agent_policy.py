@@ -66,39 +66,35 @@ class TestIsAllowedCommand:
         workspace = tmp_path / "agent_workspace" / "run1"
         assert policy.is_allowed_command("ls 'unterminated", workspace) is False
 
-    def test_allows_python_script_inside_workspace(self, tmp_path: Path) -> None:
-        workspace = tmp_path / "agent_workspace" / "run1"
-        workspace.mkdir(parents=True)
-        script = workspace / "scratch" / "run.py"
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "python script.py",
+            'python -c "import os"',
+            "python -i",
+            "python -m http.server",
+            "python",
+            'python -c"import os" /abs/path',
+            "python -mhttp.server",
+            "python3 script.py",
+        ],
+    )
+    def test_denies_python_entirely(self, tmp_path: Path, command: str) -> None:
+        """#45 Gate2レビュー指摘・2巡目 HIGH: 引数検証(`-c`/`-i`/`-m`拒否+
 
-        assert policy.is_allowed_command(f"python {script}", workspace) is True
-
-    def test_denies_python_inline_code_execution(self, tmp_path: Path) -> None:
-        """#45 Gate2レビュー指摘・1巡目 HIGH: `-c`は実行ファイル名の
-
-        ホワイトリスト判定だけでは検出できず、事実上任意コード実行の抜け道
-        になっていた。
+        workspace配下スクリプトのみ許可)を行っても、`-c"..."`のような
+        フラグ連結表記でshlexの1トークン化により完全一致チェックを回避
+        できてしまうこと、また許可した.py自体がopen('/etc/passwd')等の
+        任意I/Oを行えることの2点から、名前ベースの引数検証では構造的な
+        安全性を担保できないと判断し、pythonをホワイトリストから完全に
+        除外した。
         """
         workspace = tmp_path / "agent_workspace" / "run1"
-        assert policy.is_allowed_command('python -c "import os"', workspace) is False
+        assert policy.is_allowed_command(command, workspace) is False
 
-    def test_denies_python_interactive_mode(self, tmp_path: Path) -> None:
-        workspace = tmp_path / "agent_workspace" / "run1"
-        assert policy.is_allowed_command("python -i", workspace) is False
-
-    def test_denies_python_module_flag(self, tmp_path: Path) -> None:
-        workspace = tmp_path / "agent_workspace" / "run1"
-        assert policy.is_allowed_command("python -m http.server", workspace) is False
-
-    def test_denies_bare_python_repl(self, tmp_path: Path) -> None:
-        workspace = tmp_path / "agent_workspace" / "run1"
-        assert policy.is_allowed_command("python", workspace) is False
-
-    def test_denies_python_script_outside_workspace(self, tmp_path: Path) -> None:
-        workspace = tmp_path / "agent_workspace" / "run1"
-        outside_script = tmp_path / "elsewhere" / "run.py"
-
-        assert policy.is_allowed_command(f"python {outside_script}", workspace) is False
+    def test_python_is_not_in_whitelist(self) -> None:
+        assert "python" not in policy.SHELL_COMMAND_WHITELIST
+        assert "python3" not in policy.SHELL_COMMAND_WHITELIST
 
     def test_denies_cat_reading_outside_workspace(self, tmp_path: Path) -> None:
         """#45 Gate2レビュー指摘・1巡目 HIGH: 引数を検証しないと

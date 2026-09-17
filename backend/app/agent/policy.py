@@ -27,7 +27,17 @@ from app.agent.audit import AuditEntry, append_audit_entry
 
 # NFR-14: シェルコマンドのホワイトリスト(設計書§8.5)。`rm -rf`/`curl`/`git`/
 # パッケージインストール等は不許可。
-SHELL_COMMAND_WHITELIST: frozenset[str] = frozenset({"python", "python3", "ls", "cat", "grep"})
+#
+# 設計書は例として`python`も挙げているが、意図的に含めない(#45 Gate2レビュー
+# 指摘・2巡目 HIGH): pythonは汎用インタプリタであり、フラグ(`-c`/`-i`/`-m`)を
+# 拒否しスクリプトパスをworkspace配下に限定しても、その連結表記
+# (`-c"..."`/`-mモジュール名`、shlexの1トークン化により完全一致の拒否判定を
+# 素通りする)による回避や、workspace配下の許可された.pyファイル自身が
+# `open('/etc/passwd')`のような任意のファイルI/O・ネットワークアクセスを
+# 行うことまでは防げない。引数検証という名前ベースの制約では、汎用言語の
+# 実行そのものを構造的に安全にはできないと判断し、ホワイトリストから外す
+# (OSレベルのプロセスサンドボックス等、別の強制力が無い限り復活させない)。
+SHELL_COMMAND_WHITELIST: frozenset[str] = frozenset({"ls", "cat", "grep"})
 
 # ネットワーク系ツールは静的に無効化する(hookではなくClaudeAgentOptions.
 # disallowed_toolsへそのまま渡す、設計書§8.5のpseudocode通り)。
@@ -46,13 +56,6 @@ _SCORE_APPLY_OPS_TOOL_NAME = "mcp__score__score_apply_ops"
 # "ls\ncurl ..."のような改行区切りでの連結を素通ししてしまっていた)。
 _SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<", "&", "\n", "\r")
 
-# NFR-14: python/python3はインタプリタであり、実行ファイル名だけを許可すると
-# 事実上あらゆるコード実行が可能になってしまう(#45 Gate2レビュー指摘・1巡目
-# HIGH)。`-c`(インラインコード実行)・`-i`(対話モード)・`-m`(任意インストール
-# 済みモジュールの実行)は無条件に拒否し、実行対象のスクリプトパスは
-# workspace配下のもののみ許可する。
-_PYTHON_EXECUTABLES = frozenset({"python", "python3"})
-_PYTHON_DANGEROUS_FLAGS = frozenset({"-c", "-i", "-m"})
 # NFR-14: cat/grep/lsは引数(読み取り対象パス)を検証しないと、workspace外の
 # 任意ファイル読み取り(例: `cat /etc/passwd`)に使われてしまう(#45 Gate2
 # レビュー指摘・1巡目 HIGH)。パスらしき引数(`/`を含む、または`.`/`..`)は
@@ -102,12 +105,9 @@ def is_allowed_command(command: str, workspace: Path) -> bool:
     後段のworkspace境界チェックが正しいパスを見られなくなる(#45 Gate2
     レビュー指摘・2巡目、Windows実行のCIで発覚)。
 
-    実行ファイル名の一致だけでは不十分な2種のコマンドについて、追加で引数を
-    検証する(#45 Gate2レビュー指摘・1巡目 HIGH、`_PYTHON_EXECUTABLES`/
-    `_PATH_SENSITIVE_EXECUTABLES`のコメント参照):
-    - python/python3: 危険フラグ(`-c`/`-i`/`-m`)を拒否し、スクリプトパスは
-      workspace配下のみ許可する。
-    - cat/grep/ls: `/`を含む引数(パスらしきもの)はworkspace配下のみ許可する。
+    実行ファイル名の一致だけでは不十分なコマンド(`_PATH_SENSITIVE_EXECUTABLES`
+    参照)について、追加で引数を検証する(#45 Gate2レビュー指摘・1巡目 HIGH):
+    cat/grep/lsは`/`を含む引数(パスらしきもの)をworkspace配下のみ許可する。
     """
     if any(meta in command for meta in _SHELL_METACHARACTERS):
         return False
@@ -123,15 +123,6 @@ def is_allowed_command(command: str, workspace: Path) -> bool:
         return False
 
     args = tokens[1:]
-    if executable in _PYTHON_EXECUTABLES:
-        if any(arg in _PYTHON_DANGEROUS_FLAGS for arg in args):
-            return False
-        non_flag_args = [arg for arg in args if not arg.startswith("-")]
-        if not non_flag_args:
-            # スクリプト指定なしのpython呼び出しは対話モード(REPL)相当のため拒否する。
-            return False
-        script_path = non_flag_args[0]
-        return within_workspace(script_path, workspace)
     if executable in _PATH_SENSITIVE_EXECUTABLES:
         return all(not _looks_like_path(arg) or within_workspace(arg, workspace) for arg in args)
     return True
