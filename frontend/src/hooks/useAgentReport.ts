@@ -18,11 +18,15 @@ export function useAgentReport(runId: string | null) {
     queryFn: () => getAgentReport(runId as string),
     enabled: runId !== null && runId.length > 0,
     retry: false,
+    // report.md が未生成(404等)の間は2秒間隔で再試行し、生成完了次第自動取得する。
+    // 一度取得できればポーリングを停止する(#47 Gate2レビュー指摘対応)。
+    refetchInterval: (q) => (q.state.data ? false : 2000),
   });
 
   return {
     report: query.data as AgentReportResponse | undefined,
     isLoading: query.isLoading,
     error: query.error as Error | null,
+    refetch: query.refetch,
   };
 }

@@ -96,7 +96,11 @@ class AgentRunService:
         return dict(row)
 
     def update_status(self, run_id: str, status: AgentRunStatus) -> dict[str, Any]:
-        """run_id のステータスを更新する。"""
+        """run_id のステータスを更新する。
+
+        終了ステータス(completed/failed/truncated/cancelled)確定時は
+        保持/削除ポリシーを適用し、一時領域(scratch/)を自動クリーンアップする(#47)。
+        """
         conn = self._conn()
         cursor = conn.execute(
             "UPDATE agent_runs SET status = ? WHERE id = ?",
@@ -105,7 +109,13 @@ class AgentRunService:
         if cursor.rowcount == 0:
             raise AgentRunNotFoundError(f"agent run not found: {run_id!r}")
         conn.commit()
-        return self.get_run(run_id)
+
+        run = self.get_run(run_id)
+        if status in ("completed", "failed", "truncated", "cancelled"):
+            workspace = storage.agent_workspace_dir(self.workspace_dir, run["project_id"], run_id)
+            clean_workspace(workspace, keep_artifacts=True)
+
+        return run
 
     def list_runs(self, project_id: str | None = None) -> list[dict[str, Any]]:
         conn = self._conn()
@@ -339,12 +349,7 @@ class AgentRunService:
         staging_path = storage.score_staging_path(self.workspace_dir, project_id, run_id)
         staging_path.unlink(missing_ok=True)
 
-        # ワークスペースの保持/削除ポリシー適用(#47):
-        # 監査ログ(audit.jsonl)は保持し、一時領域(scratch/)のみを破棄する
-        workspace = storage.agent_workspace_dir(self.workspace_dir, project_id, run_id)
-        clean_workspace(workspace, keep_artifacts=True)
-
-        # ステータスを cancelled に更新
+        # ステータスを cancelled に更新(update_status内で保持/削除ポリシー適用)
         self.update_status(run_id, "cancelled")
 
         # 監査ログにキャンセルを記録

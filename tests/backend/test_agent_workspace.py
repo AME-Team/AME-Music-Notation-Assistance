@@ -248,6 +248,41 @@ class TestWorkspaceRetentionPolicy:
         clean_workspace(workspace, keep_artifacts=False)
         assert not workspace.exists()
 
+    def test_setup_agent_workspace_clears_stale_files_on_recreation(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = tmp_path / "workspace_recreate"
+        score = _dummy_score("prj_recreate")
+
+        # 1回目の構築
+        setup_agent_workspace(
+            workspace,
+            task_type="refine-part",
+            project_id="prj_recreate",
+            run_id="run_recreate",
+            prompt="first run",
+            score=score,
+        )
+        # report.md や scratch/ に古いファイルを作成
+        write_report(workspace, "old report")
+        (workspace / "scratch" / "old_file.txt").write_text("old", encoding="utf-8")
+
+        # 同一ワークスペースで再構築
+        setup_agent_workspace(
+            workspace,
+            task_type="refine-part",
+            project_id="prj_recreate",
+            run_id="run_recreate",
+            prompt="second run",
+            score=score,
+        )
+
+        # 古い report.md や scratch/old_file.txt は消去されていること
+        assert not (workspace / "report.md").exists()
+        assert not (workspace / "scratch" / "old_file.txt").exists()
+        # 新しい TASK.md は存在
+        assert "second run" in (workspace / "TASK.md").read_text(encoding="utf-8")
+
 
 def _create_project_record(workspace_dir: Path, project_id: str) -> None:
     storage.ensure_project_layout(workspace_dir, project_id)
@@ -300,6 +335,38 @@ class TestAgentRunServiceWorkspaceIntegration:
         assert not scratch_file.exists()
         # report.md はキャンセル後も参照可能
         assert agent_service.get_report(run_id) == "# 完了報告\n全タスク完了"
+
+    @pytest.mark.parametrize("terminal_status", ["completed", "failed", "truncated"])
+    def test_terminal_statuses_clean_scratch_workspace(
+        self, settings: Settings, terminal_status: str
+    ) -> None:
+        """run 終了ステータス(completed, failed, truncated)確定時に scratch/ が掃除されることを確認。"""
+        project_id = f"proj_term_{terminal_status}"
+        run_id = f"run_term_{terminal_status}"
+
+        _create_project_record(settings.workspace_dir, project_id)
+        score_service = ScoreService(settings.workspace_dir)
+        score_service.write_score(project_id, _dummy_score(project_id))
+
+        agent_service = AgentRunService(settings.workspace_dir)
+        agent_service.create_run(run_id=run_id, project_id=project_id)
+
+        workspace = agent_service.create_workspace(
+            run_id, task_type="refine-part", prompt="cleanup on end test"
+        )
+        agent_service.write_report(run_id, "# Done")
+
+        scratch_file = workspace / "scratch" / "data.tmp"
+        scratch_file.write_text("intermediate data", encoding="utf-8")
+        assert scratch_file.exists()
+
+        # 終了ステータスへ更新
+        agent_service.update_status(run_id, terminal_status)  # type: ignore[arg-type]
+
+        # scratch/ の中身は消去され、report.md は保持される
+        assert not scratch_file.exists()
+        assert (workspace / "report.md").exists()
+        assert agent_service.get_report(run_id) == "# Done"
 
 
 class TestAgentReportApi:

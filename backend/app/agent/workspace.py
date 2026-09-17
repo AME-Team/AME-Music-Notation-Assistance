@@ -214,6 +214,10 @@ def setup_agent_workspace(
       - notation_rules.md (記譜ルール集、l1_prompt.NOTATION_RULES_MARKDOWN と同一)
       - scratch/ (自由領域)
     """
+    # 再実行時の残留ファイル(前回のreport.mdやscratch/等)の混入を防ぐため、
+    # 既存ディレクトリが存在する場合は完全にクリアして再生成する
+    if workspace.exists():
+        shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True, exist_ok=True)
 
     # 1. TASK.md
