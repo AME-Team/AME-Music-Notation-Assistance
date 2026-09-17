@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.agent.provider import AgentRunNotFoundError, AgentRunStatus
+from app.agent.workspace import (
+    clean_workspace,
+    read_report,
+    setup_agent_workspace,
+    write_report,
+)
 from app.domain.migrations import migrate_to_current
 from app.domain.score import ScoreIR
 from app.infra import db, storage
@@ -90,7 +96,11 @@ class AgentRunService:
         return dict(row)
 
     def update_status(self, run_id: str, status: AgentRunStatus) -> dict[str, Any]:
-        """run_id のステータスを更新する。"""
+        """run_id のステータスを更新する。
+
+        終了ステータス(completed/failed/truncated/cancelled)確定時は
+        保持/削除ポリシーを適用し、一時領域(scratch/)を自動クリーンアップする(#47)。
+        """
         conn = self._conn()
         cursor = conn.execute(
             "UPDATE agent_runs SET status = ? WHERE id = ?",
@@ -99,7 +109,13 @@ class AgentRunService:
         if cursor.rowcount == 0:
             raise AgentRunNotFoundError(f"agent run not found: {run_id!r}")
         conn.commit()
-        return self.get_run(run_id)
+
+        run = self.get_run(run_id)
+        if status in ("completed", "failed", "truncated", "cancelled"):
+            workspace = storage.agent_workspace_dir(self.workspace_dir, run["project_id"], run_id)
+            clean_workspace(workspace, keep_artifacts=True)
+
+        return run
 
     def list_runs(self, project_id: str | None = None) -> list[dict[str, Any]]:
         conn = self._conn()
@@ -333,7 +349,7 @@ class AgentRunService:
         staging_path = storage.score_staging_path(self.workspace_dir, project_id, run_id)
         staging_path.unlink(missing_ok=True)
 
-        # ステータスを cancelled に更新
+        # ステータスを cancelled に更新(update_status内で保持/削除ポリシー適用)
         self.update_status(run_id, "cancelled")
 
         # 監査ログにキャンセルを記録
@@ -349,3 +365,46 @@ class AgentRunService:
             "status": "cancelled",
             "project_id": project_id,
         }
+
+    def create_workspace(
+        self,
+        run_id: str,
+        *,
+        task_type: str,
+        prompt: str,
+        scope: dict[str, Any] | None = None,
+        allowed_tools: list[str] | None = None,
+        model: str | None = None,
+        max_turns: int | None = None,
+    ) -> Path:
+        """#47: run_id に対応するエージェントワークスペースを構築する(設計書§8.6)。"""
+        run = self.get_run(run_id)
+        project_id = run["project_id"]
+        score = ScoreService(self.workspace_dir).read_score(project_id)
+        workspace = storage.agent_workspace_dir(self.workspace_dir, project_id, run_id)
+        return setup_agent_workspace(
+            workspace,
+            task_type=task_type,
+            project_id=project_id,
+            run_id=run_id,
+            prompt=prompt,
+            score=score,
+            scope=scope,
+            allowed_tools=allowed_tools,
+            model=model,
+            max_turns=max_turns,
+        )
+
+    def get_report(self, run_id: str) -> str:
+        """#47: run_id のワークスペースから report.md を取得する(設計書§8.6, §11.3)。"""
+        run = self.get_run(run_id)
+        project_id = run["project_id"]
+        workspace = storage.agent_workspace_dir(self.workspace_dir, project_id, run_id)
+        return read_report(workspace)
+
+    def write_report(self, run_id: str, content: str) -> Path:
+        """#47: run_id のワークスペースに report.md を書き込む。"""
+        run = self.get_run(run_id)
+        project_id = run["project_id"]
+        workspace = storage.agent_workspace_dir(self.workspace_dir, project_id, run_id)
+        return write_report(workspace, content)

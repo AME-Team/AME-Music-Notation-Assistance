@@ -451,3 +451,11 @@ export async function rejectDiff(
   });
   return (await resp.json()) as RejectResponse;
 }
+
+export type AgentReportResponse = components["schemas"]["AgentReportResponse"];
+
+/** #47: エージェント run の成果報告 report.md を取得する(§8.6, §11.3)。 */
+export async function getAgentReport(runId: string): Promise<AgentReportResponse> {
+  const resp = await apiFetch(`/api/agent/runs/${runId}/report`);
+  return (await resp.json()) as AgentReportResponse;
+}

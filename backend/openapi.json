@@ -1533,6 +1533,49 @@
           }
         }
       }
+    },
+    "/api/agent/runs/{run_id}/report": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent Report",
+        "description": "#47: run_id のワークスペースから成果報告 report.md を取得する(設計書§8.6, §11.3)。",
+        "operationId": "get_agent_report_api_agent_runs__run_id__report_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentReportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1580,6 +1623,24 @@
           "configured"
         ],
         "title": "AgentProviderInfo"
+      },
+      "AgentReportResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "content"
+        ],
+        "title": "AgentReportResponse"
       },
       "BeatEntry": {
         "properties": {
