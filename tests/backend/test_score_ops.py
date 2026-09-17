@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from app.domain.score import Note, Part, ScoreIR, Spelling, SourceInfo
+from app.domain.score import Note, Part, ScoreIR, SourceInfo, Spelling
 from app.domain.score_ops import (
     NoteAddOp,
     NoteDeleteOp,
@@ -505,3 +505,146 @@ class TestApplyOpsSequencing:
             )
         # 1番目のopは適用されるが、2番目で失敗するため3番目は適用されない。
         assert note.midi == 61
+
+
+class TestApplyOpsProvenance:
+    """#43: `provenance`/`provenance_run_id`引数(score-mcpの`score_apply_ops`用に
+
+    追加)が、7種類あるop適用ヘルパの**全て**で正しく反映されることを確認する。
+    パラメタライズせず1関数ずつ書くと置き換え漏れ(既存の`note.provenance =
+    "user"`ハードコードの一部だけ直し忘れる)をテストで検出できないため、
+    opタイプごとに個別ケースを用意して全経路を機械的に網羅する。
+    """
+
+    def test_default_provenance_is_still_user(self) -> None:
+        """引数省略時は従来通り"user"/Noneのまま(既存HTTPエンドポイントの回帰確認)。"""
+        score = _make_score()
+        apply_ops(
+            score,
+            [NoteAddOp(part_id="piano", onset_tick=0, duration_tick=240, midi=64)],
+            _ANCHORS,
+        )
+        part = score.find_part("piano")
+        assert part is not None
+        note = part.notes[0]
+        assert note.provenance == "user"
+        assert note.provenance_run_id is None
+
+    def test_default_call_preserves_existing_provenance_run_id(self) -> None:
+        """#43 Gate2レビュー指摘: `provenance_run_id`省略時(既存HTTPエンドポイント
+
+        経由)は、既にノートへ設定済みの`provenance_run_id`をNoneへクリアしては
+        いけない(L1差分承認フロー(`pipeline/refine/l1_diff.py`)がこの値を
+        手掛かりにするため)。`provenance`(出自の種別)自体は従来通りユーザー
+        編集で上書きしてよいが、`provenance_run_id`は明示指定時のみ更新する。
+        """
+        score = _make_score()
+        note = _add_note(score, midi=60, provenance="llm")
+        note.provenance_run_id = "run_prior"
+
+        apply_ops(score, [NoteUpdateOp(note_ids=[note.id], velocity=100)], _ANCHORS)
+
+        assert note.provenance == "user"
+        assert note.provenance_run_id == "run_prior"
+
+    def test_note_add_tags_agent_provenance(self) -> None:
+        score = _make_score()
+        apply_ops(
+            score,
+            [NoteAddOp(part_id="piano", onset_tick=0, duration_tick=240, midi=64)],
+            _ANCHORS,
+            provenance="agent",
+            provenance_run_id="run_x",
+        )
+        part = score.find_part("piano")
+        assert part is not None
+        note = part.notes[0]
+        assert note.provenance == "agent"
+        assert note.provenance_run_id == "run_x"
+
+    def test_note_update_tags_agent_provenance(self) -> None:
+        score = _make_score()
+        note = _add_note(score, midi=60)
+        apply_ops(
+            score,
+            [NoteUpdateOp(note_ids=[note.id], midi=61)],
+            _ANCHORS,
+            provenance="agent",
+            provenance_run_id="run_x",
+        )
+        assert note.provenance == "agent"
+        assert note.provenance_run_id == "run_x"
+
+    def test_note_delete_tags_agent_provenance(self) -> None:
+        score = _make_score()
+        note = _add_note(score, midi=60)
+        apply_ops(
+            score,
+            [NoteDeleteOp(note_ids=[note.id])],
+            _ANCHORS,
+            provenance="agent",
+            provenance_run_id="run_x",
+        )
+        assert note.provenance == "agent"
+        assert note.provenance_run_id == "run_x"
+
+    def test_note_restore_tags_agent_provenance(self) -> None:
+        score = _make_score()
+        note = _add_note(score, midi=60, status="deleted")
+        apply_ops(
+            score,
+            [NoteRestoreOp(note_ids=[note.id])],
+            _ANCHORS,
+            provenance="agent",
+            provenance_run_id="run_x",
+        )
+        assert note.status == "active"
+        assert note.provenance == "agent"
+        assert note.provenance_run_id == "run_x"
+
+    def test_note_split_tags_agent_provenance_on_both_halves(self) -> None:
+        score = _make_score()
+        note = _add_note(score, midi=60, onset_tick=0, duration_tick=480)
+        apply_ops(
+            score,
+            [NoteSplitOp(note_id=note.id, at_tick=240)],
+            _ANCHORS,
+            provenance="agent",
+            provenance_run_id="run_x",
+        )
+        part = score.find_part("piano")
+        assert part is not None
+        assert len(part.notes) == 2
+        for split_note in part.notes:
+            assert split_note.provenance == "agent"
+            assert split_note.provenance_run_id == "run_x"
+
+    def test_note_merge_tags_agent_provenance_on_all_notes(self) -> None:
+        score = _make_score()
+        a = _add_note(score, midi=60, onset_tick=0, duration_tick=240)
+        b = _add_note(score, midi=60, onset_tick=240, duration_tick=240)
+        apply_ops(
+            score,
+            [NoteMergeOp(note_ids=[a.id, b.id])],
+            _ANCHORS,
+            provenance="agent",
+            provenance_run_id="run_x",
+        )
+        part = score.find_part("piano")
+        assert part is not None
+        for merged_note in part.notes:
+            assert merged_note.provenance == "agent"
+            assert merged_note.provenance_run_id == "run_x"
+
+    def test_part_transpose_octave_tags_agent_provenance(self) -> None:
+        score = _make_score()
+        note = _add_note(score, midi=60)
+        apply_ops(
+            score,
+            [PartTransposeOctaveOp(part_id="piano", direction="up")],
+            _ANCHORS,
+            provenance="agent",
+            provenance_run_id="run_x",
+        )
+        assert note.provenance == "agent"
+        assert note.provenance_run_id == "run_x"

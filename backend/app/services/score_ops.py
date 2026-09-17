@@ -6,14 +6,17 @@
 自身は「渡された対象をその場で変更する」だけである(`services/stage_invalidation.py`
 が呼び出し元の書き込み順序に責務を委ねているのと同じ設計思想)。
 
-各opは`Note.provenance = "user"`を付与する: AIは今後このノートを上書きしない
-(§10.4)。
+各opは既定で`Note.provenance = "user"`を付与する: AIは今後このノートを上書きしない
+(§10.4)。`apply_ops`の`provenance`/`provenance_run_id`引数(既定は従来通り
+`"user"`/`None`)は、score-mcpの`score_apply_ops`ツール(#43, 設計書§8.4)が
+`provenance="agent"`で呼べるようにするための拡張(#75 §10.4: エージェントの
+編集も同じop語彙・同じ出自記録の仕組みに乗せる)。
 """
 
 from __future__ import annotations
 
 from app.domain.pitch import midi_to_spelling
-from app.domain.score import Note, Part, ScoreIR, Spelling
+from app.domain.score import Note, NoteProvenance, Part, ScoreIR, Spelling
 from app.domain.score_ops import (
     NoteAddOp,
     NoteDeleteOp,
@@ -45,27 +48,64 @@ class ScoreOpError(ValueError):
     """opの適用に失敗した(不正なnote_id/範囲外の値等)。API層で422に変換する。"""
 
 
-def apply_ops(score: ScoreIR, ops: list[NoteOp], beat_anchors: list[tuple[float, float]]) -> None:
+def _set_provenance(note: Note, provenance: NoteProvenance, provenance_run_id: str | None) -> None:
+    """既存ノートへ出自を記録する。`provenance`は常に上書きするが、
+
+    `provenance_run_id`は`None`のときは既存値を温存する(#43 Gate2レビュー指摘:
+    既定引数(HTTPの`POST /score/ops`、`provenance_run_id=None`)経由でも
+    既存ノートに設定済みの`provenance_run_id`が無条件にNoneへクリアされて
+    しまい、`pipeline/refine/l1_diff.py`等がprovenance_run_idを手掛かりに
+    する既存のL1差分承認フローの挙動を変えてしまっていた)。score-mcpの
+    `score_apply_ops`のように呼び出し元が明示的にrun_idを渡した場合のみ
+    更新する。
+    """
+    note.provenance = provenance
+    if provenance_run_id is not None:
+        note.provenance_run_id = provenance_run_id
+
+
+def apply_ops(
+    score: ScoreIR,
+    ops: list[NoteOp],
+    beat_anchors: list[tuple[float, float]],
+    *,
+    provenance: NoteProvenance = "user",
+    provenance_run_id: str | None = None,
+) -> None:
     """`ops`を順番に`score`へ適用する。1つでも`ScoreOpError`が出たら即座に中断する
 
     (以降のopは適用されない)。呼び出し元は`score`のdeep copyに対して呼び、
     成功した場合のみ元のオブジェクトを差し替える/永続化すること。
+
+    `provenance`/`provenance_run_id`は省略時従来通り`"user"`/`None`
+    (`POST /score/ops`の既存挙動を変えない)。score-mcpの`score_apply_ops`は
+    `provenance="agent"`, `provenance_run_id=<run_id>`で呼ぶ。
     """
     for op in ops:
         if isinstance(op, NoteAddOp):
-            _apply_add(score, op, beat_anchors)
+            _apply_add(
+                score, op, beat_anchors, provenance=provenance, provenance_run_id=provenance_run_id
+            )
         elif isinstance(op, NoteUpdateOp):
-            _apply_update(score, op, beat_anchors)
+            _apply_update(
+                score, op, beat_anchors, provenance=provenance, provenance_run_id=provenance_run_id
+            )
         elif isinstance(op, NoteDeleteOp):
-            _apply_delete(score, op)
+            _apply_delete(score, op, provenance=provenance, provenance_run_id=provenance_run_id)
         elif isinstance(op, NoteRestoreOp):
-            _apply_restore(score, op)
+            _apply_restore(score, op, provenance=provenance, provenance_run_id=provenance_run_id)
         elif isinstance(op, NoteSplitOp):
-            _apply_split(score, op, beat_anchors)
+            _apply_split(
+                score, op, beat_anchors, provenance=provenance, provenance_run_id=provenance_run_id
+            )
         elif isinstance(op, NoteMergeOp):
-            _apply_merge(score, op, beat_anchors)
+            _apply_merge(
+                score, op, beat_anchors, provenance=provenance, provenance_run_id=provenance_run_id
+            )
         elif isinstance(op, PartTransposeOctaveOp):
-            _apply_transpose_octave(score, op)
+            _apply_transpose_octave(
+                score, op, provenance=provenance, provenance_run_id=provenance_run_id
+            )
         else:
             # NoteOpはdiscriminated unionで網羅済みのため実行時には到達しない想定。
             # 将来op種別が追加され本関数の更新を忘れた場合に、無言で無視せず
@@ -104,7 +144,14 @@ def _resync_timing(
     note.duration_sec = max(ticks_to_seconds(end_tick, anchors) - note.onset_sec, _MIN_DURATION_SEC)
 
 
-def _apply_add(score: ScoreIR, op: NoteAddOp, anchors: list[tuple[float, float]]) -> None:
+def _apply_add(
+    score: ScoreIR,
+    op: NoteAddOp,
+    anchors: list[tuple[float, float]],
+    *,
+    provenance: NoteProvenance,
+    provenance_run_id: str | None,
+) -> None:
     part = score.find_part(op.part_id)
     if part is None:
         raise ScoreOpError(f"part not found: {op.part_id!r}")
@@ -119,7 +166,8 @@ def _apply_add(score: ScoreIR, op: NoteAddOp, anchors: list[tuple[float, float]]
         velocity=op.velocity,
         voice=op.voice,
         staff=op.staff,
-        provenance="user",
+        provenance=provenance,
+        provenance_run_id=provenance_run_id,
         spelling=midi_to_spelling(op.midi),
     )
     _resync_timing(note, op.onset_tick, op.onset_tick + op.duration_tick, anchors)
@@ -142,7 +190,14 @@ def _spelling_for_new_midi(note: Note, new_midi: int) -> Spelling:
     return midi_to_spelling(new_midi)
 
 
-def _apply_update(score: ScoreIR, op: NoteUpdateOp, anchors: list[tuple[float, float]]) -> None:
+def _apply_update(
+    score: ScoreIR,
+    op: NoteUpdateOp,
+    anchors: list[tuple[float, float]],
+    *,
+    provenance: NoteProvenance,
+    provenance_run_id: str | None,
+) -> None:
     targets = [_find_note(score, note_id) for note_id in op.note_ids]
     for part, note in targets:
         onset_tick, duration_tick = _require_ticks(note)
@@ -163,24 +218,28 @@ def _apply_update(score: ScoreIR, op: NoteUpdateOp, anchors: list[tuple[float, f
             note.voice = op.voice
         if op.staff is not None:
             note.staff = op.staff
-        note.provenance = "user"
+        _set_provenance(note, provenance, provenance_run_id)
 
 
-def _apply_delete(score: ScoreIR, op: NoteDeleteOp) -> None:
+def _apply_delete(
+    score: ScoreIR, op: NoteDeleteOp, *, provenance: NoteProvenance, provenance_run_id: str | None
+) -> None:
     for note_id in op.note_ids:
         _, note = _find_note(score, note_id)
         note.status = "deleted"
-        note.provenance = "user"
+        _set_provenance(note, provenance, provenance_run_id)
 
 
-def _apply_restore(score: ScoreIR, op: NoteRestoreOp) -> None:
-    """`_apply_delete`の逆操作(#35)。復元自体もユーザー操作のため
+def _apply_restore(
+    score: ScoreIR, op: NoteRestoreOp, *, provenance: NoteProvenance, provenance_run_id: str | None
+) -> None:
+    """`_apply_delete`の逆操作(#35)。復元自体も編集操作のため
 
-    `provenance="user"`を付与する(削除時と同じ扱い)。
+    `provenance`を付与する(削除時と同じ扱い)。
 
     #35-M3レビュー指摘: 対象が実際に`"deleted"`である場合のみ書き換える。
     ガード無しだと、既に`"active"`なノートへ`note.restore`を送った場合(内容は
-    何も変えていない)でも出自が無条件に`"user"`へ上書きされ、AI変更のレビュー
+    何も変えていない)でも出自が無条件に上書きされ、AI変更のレビュー
     情報(`provenance_run_id`/`ai_reason`と整合する出自)が失われてしまう。
     """
     for note_id in op.note_ids:
@@ -188,10 +247,17 @@ def _apply_restore(score: ScoreIR, op: NoteRestoreOp) -> None:
         if note.status != "deleted":
             continue
         note.status = "active"
-        note.provenance = "user"
+        _set_provenance(note, provenance, provenance_run_id)
 
 
-def _apply_split(score: ScoreIR, op: NoteSplitOp, anchors: list[tuple[float, float]]) -> None:
+def _apply_split(
+    score: ScoreIR,
+    op: NoteSplitOp,
+    anchors: list[tuple[float, float]],
+    *,
+    provenance: NoteProvenance,
+    provenance_run_id: str | None,
+) -> None:
     part, note = _find_note(score, op.note_id)
     if note.status != "active":
         raise ScoreOpError(f"note {note.id} is not active; cannot split a deleted/muted note")
@@ -211,16 +277,24 @@ def _apply_split(score: ScoreIR, op: NoteSplitOp, anchors: list[tuple[float, flo
         velocity=note.velocity,
         voice=note.voice,
         staff=note.staff,
-        provenance="user",
+        provenance=provenance,
+        provenance_run_id=provenance_run_id,
         spelling=note.spelling if note.spelling is not None else midi_to_spelling(note.midi),
     )
     _resync_timing(new_note, op.at_tick, end_tick, anchors)
     _resync_timing(note, onset_tick, op.at_tick, anchors)
-    note.provenance = "user"
+    _set_provenance(note, provenance, provenance_run_id)
     part.notes.append(new_note)
 
 
-def _apply_merge(score: ScoreIR, op: NoteMergeOp, anchors: list[tuple[float, float]]) -> None:
+def _apply_merge(
+    score: ScoreIR,
+    op: NoteMergeOp,
+    anchors: list[tuple[float, float]],
+    *,
+    provenance: NoteProvenance,
+    provenance_run_id: str | None,
+) -> None:
     found = [_find_note(score, note_id) for note_id in op.note_ids]
     if len({part.id for part, _ in found}) > 1:
         raise ScoreOpError("cannot merge notes from different parts")
@@ -249,14 +323,20 @@ def _apply_merge(score: ScoreIR, op: NoteMergeOp, anchors: list[tuple[float, flo
     primary_index = min(range(len(notes)), key=lambda i: (bounds[i][0], notes[i].id))
     primary = notes[primary_index]
     _resync_timing(primary, start_tick, end_tick, anchors)
-    primary.provenance = "user"
+    _set_provenance(primary, provenance, provenance_run_id)
     for note in notes:
         if note is not primary:
             note.status = "deleted"
-            note.provenance = "user"
+            _set_provenance(note, provenance, provenance_run_id)
 
 
-def _apply_transpose_octave(score: ScoreIR, op: PartTransposeOctaveOp) -> None:
+def _apply_transpose_octave(
+    score: ScoreIR,
+    op: PartTransposeOctaveOp,
+    *,
+    provenance: NoteProvenance,
+    provenance_run_id: str | None,
+) -> None:
     part = score.find_part(op.part_id)
     if part is None:
         raise ScoreOpError(f"part not found: {op.part_id!r}")
@@ -276,4 +356,4 @@ def _apply_transpose_octave(score: ScoreIR, op: PartTransposeOctaveOp) -> None:
         # ずらすため、fifths=0前提の再計算による異名同音のズレを避けられる。
         note.spelling = _spelling_for_new_midi(note, new_midi)
         note.midi = new_midi
-        note.provenance = "user"
+        _set_provenance(note, provenance, provenance_run_id)
