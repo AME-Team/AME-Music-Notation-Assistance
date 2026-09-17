@@ -24,7 +24,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 AgentEventKind = Literal[
     "thinking", "text", "tool_use", "tool_result", "error", "cancelled", "done"
 ]
-AgentRunStatus = Literal["running", "completed", "failed", "cancelled"]
+AgentRunStatus = Literal["running", "completed", "failed", "cancelled", "truncated"]
 
 
 class AgentRunNotFoundError(KeyError):

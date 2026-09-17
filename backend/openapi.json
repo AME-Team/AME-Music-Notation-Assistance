@@ -1341,6 +1341,198 @@
           }
         }
       }
+    },
+    "/api/agent/runs/{run_id}/diff": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent Diff",
+        "description": "#46: エージェント run のステージング変更 vs current.json の差分を取得する(FR-23)。",
+        "operationId": "get_agent_diff_api_agent_runs__run_id__diff_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiffResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/runs/{run_id}/accept": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Accept Agent Diff",
+        "description": "#46: ステージング変更を current.json へ確定適用する(スコープ指定可能、FR-23)。",
+        "operationId": "accept_agent_diff_api_agent_runs__run_id__accept_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/runs/{run_id}/reject": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Reject Agent Diff",
+        "description": "#46: ステージング変更を却下し元に戻す。current.json は変更しない(FR-23)。",
+        "operationId": "reject_agent_diff_api_agent_runs__run_id__reject_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Cancel Agent Run",
+        "description": "#46: エージェント run をキャンセルし、ステージング領域を破棄する(FR-23)。\n\n重要: current.json は1バイトも変更されない。",
+        "operationId": "cancel_agent_run_api_agent_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1519,6 +1711,30 @@
           "file"
         ],
         "title": "Body_create_project_api_projects_post"
+      },
+      "CancelResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "status": {
+            "type": "string",
+            "const": "cancelled",
+            "title": "Status"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "status",
+          "project_id"
+        ],
+        "title": "CancelResponse"
       },
       "DiffResponse": {
         "properties": {
