@@ -112,18 +112,19 @@ class PolicyContext:
     pending_tool_starts: dict[str, float] = field(default_factory=dict)
 
 
-def _strip_quotes(arg: str) -> str:
-    """`shlex.split(..., posix=False)`はクォートをトークンに残したまま返す
+def _unquote(arg: str) -> str:
+    """`shlex.split(..., posix=False)`がトークンに残したクォートを取り除く。
 
-    ため、パス判定・`within_workspace`比較の前に取り除く(#45 Gate2レビュー
-    指摘・3巡目 HIGH: クォート込みの文字列`'"/etc/passwd"'`を`Path`へ渡すと
-    先頭の`"`を含む相対パスとして解決され、cwd(=workspace)配下と誤判定
-    されてしまい、実際のシェルがクォートを外して絶対パスとして実行する
-    のとズレが生じていた)。
+    posix=False では引用符がトークン内にそのまま残るため、`within_workspace`
+    へ渡すと先頭の`"`を含む相対パスとして誤認される脆弱性があった
+    (#45 Gate2レビュー指摘・3巡目 HIGH)。
+    `arg[0] == arg[-1]`の両端除去だけでは`cat "/etc/passw"d`や`cat '/etc/passw'd`
+    のように引用符が中間に挿入・連結されたケースが素通りし、先頭`"`の相対パスと
+    してcwd(=workspace)配下と誤判定されてしまう。そのため、トークン内に含まれる
+    引用符(`'`/`"`)をすべて除去し、実際のシェルが解釈する連結文字列
+    (`/etc/passwd`)へ正規化してからパス判定と境界チェックを行う。
     """
-    if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in ("'", '"'):
-        return arg[1:-1]
-    return arg
+    return arg.replace('"', "").replace("'", "")
 
 
 def _looks_like_path(arg: str) -> bool:
@@ -174,7 +175,7 @@ def is_allowed_command(command: str, workspace: Path) -> bool:
     if executable not in SHELL_COMMAND_WHITELIST:
         return False
 
-    args = [_strip_quotes(arg) for arg in tokens[1:]]
+    args = [_unquote(arg) for arg in tokens[1:]]
     if executable in _PATH_SENSITIVE_EXECUTABLES:
         return all(not _looks_like_path(arg) or within_workspace(arg, workspace) for arg in args)
     return True

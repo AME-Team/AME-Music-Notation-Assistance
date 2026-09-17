@@ -122,11 +122,22 @@ class TestIsAllowedCommand:
 
         クォートをトークンに残すため、クォートを剥がさずに`within_workspace`
         へ渡すと`"/etc/passwd"`が相対パス扱いになりcwd(=workspace)配下と
-        誤判定されていた。
+        誤判定されていた。さらに`cat "/etc/passw"d`や`cat '/etc/passw'd`のように
+        引用符が中間に挿入・連結された場合でも素通りしないよう、posix=True相当で
+        クォート除去した文字列で比較する。
         """
         workspace = tmp_path / "agent_workspace" / "run1"
         assert policy.is_allowed_command('cat "/etc/passwd"', workspace) is False
         assert policy.is_allowed_command("cat '/etc/passwd'", workspace) is False
+        assert policy.is_allowed_command('cat "/etc/passw"d', workspace) is False
+        assert policy.is_allowed_command("cat '/etc/passw'd", workspace) is False
+
+    def test_allows_quoted_path_inside_workspace(self, tmp_path: Path) -> None:
+        """クォート除去後もworkspace配下であれば正しく許可されることを確認する。"""
+        workspace = tmp_path / "agent_workspace" / "run1"
+        workspace.mkdir(parents=True)
+        target = workspace / "scratch" / "notes.txt"
+        assert policy.is_allowed_command(f'cat "{target}"', workspace) is True
 
     def test_denies_windows_style_path_outside_workspace(self, tmp_path: Path) -> None:
         """#45 Gate2レビュー指摘・3巡目 HIGH: `_looks_like_path`が`/`しか
