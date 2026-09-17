@@ -646,6 +646,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agent/runs/{run_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Report
+         * @description #47: run_id のワークスペースから成果報告 report.md を取得する(設計書§8.6, §11.3)。
+         */
+        get: operations["get_agent_report_api_agent_runs__run_id__report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -666,6 +686,13 @@ export interface components {
             name: string;
             /** Configured */
             configured: boolean;
+        };
+        /** AgentReportResponse */
+        AgentReportResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Content */
+            content: string;
         };
         /** BeatEntry */
         BeatEntry: {
@@ -2212,6 +2239,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CancelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_report_api_agent_runs__run_id__report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentReportResponse"];
                 };
             };
             /** @description Validation Error */

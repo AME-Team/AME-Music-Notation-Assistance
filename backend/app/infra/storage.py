@@ -102,6 +102,15 @@ def score_staging_path(workspace_dir: Path, project_id: str, run_id: str) -> Pat
     return project_dir(workspace_dir, project_id) / "score" / "staging" / f"{run_id}.json"
 
 
+def agent_workspace_dir(workspace_dir: Path, project_id: str, run_id: str) -> Path:
+    """#47: L2 Coding Agent 1回分の使い捨てワークスペースディレクトリ(設計書§8.6, §10.3)。
+
+    `workspace/{project_id}/agent/{run_id}/` に配置され、
+    TASK.md, context.md, notation_rules.md, scratch/, report.md, audit.jsonl が格納される。
+    """
+    return project_dir(workspace_dir, project_id) / "agent" / run_id
+
+
 def musicxml_export_path(workspace_dir: Path, project_id: str) -> Path:
     """#27 Stage 6: `POST /export` が書き出すMusicXMLの保存先。"""
     return project_dir(workspace_dir, project_id) / "export" / "score.musicxml"

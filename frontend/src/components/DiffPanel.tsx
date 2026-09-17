@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { NoteChangeResponse } from "../api/client";
+import { useAgentReport } from "../hooks/useAgentReport";
 import { useDiff } from "../hooks/useDiff";
 
 interface DiffPanelProps {
@@ -75,6 +76,7 @@ const CHANGE_TYPE_BADGE: Record<NoteChangeResponse["change_type"], string> = {
  */
 export function DiffPanel({ projectId, runId, onDismiss }: DiffPanelProps) {
   const { diff, isLoading, error, accept, reject } = useDiff(projectId, runId);
+  const { report } = useAgentReport(runId);
 
   const changesByBar = useMemo(() => {
     const groups = new Map<number, NoteChangeResponse[]>();
@@ -111,6 +113,17 @@ export function DiffPanel({ projectId, runId, onDismiss }: DiffPanelProps) {
           </button>
         </div>
       </div>
+
+      {report && (
+        <details className="rounded-md border border-indigo-100 bg-indigo-50/50 p-3 text-sm" open>
+          <summary className="cursor-pointer font-medium text-indigo-900 select-none">
+            AI成果報告 (report.md)
+          </summary>
+          <div className="mt-2 max-h-60 overflow-y-auto whitespace-pre-wrap rounded border border-indigo-100 bg-white p-3 font-mono text-xs text-gray-800">
+            {report.content}
+          </div>
+        </details>
+      )}
 
       {isLoading && <p className="text-sm text-gray-500">差分を読み込み中...</p>}
       {error && <p className="text-sm text-red-600">{error.message}</p>}

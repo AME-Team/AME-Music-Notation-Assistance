@@ -8,8 +8,9 @@ let cached: Promise<BackendInfo> | null = null;
  */
 export function getBackendInfo(): Promise<BackendInfo> {
   if (cached) return cached;
-  cached = window.api
-    ? window.api.getBackendInfo()
+  const electronApi = typeof window !== "undefined" ? window.api : undefined;
+  cached = electronApi
+    ? electronApi.getBackendInfo()
     : Promise.resolve({
         baseUrl: import.meta.env.VITE_DEV_BACKEND_URL ?? "http://127.0.0.1:8000",
         token: import.meta.env.VITE_DEV_BACKEND_TOKEN ?? "",

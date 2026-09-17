@@ -1,10 +1,11 @@
-"""L2 Coding Agent API(#42, #46, 設計書§11.3)。
+"""L2 Coding Agent API(#42, #46, #47, 設計書§11.3)。
 
 - `GET /api/agent/providers`: プロバイダ一覧(#42)
 - `GET /api/agent/runs/{run_id}/diff`: ステージング vs current の差分(#46)
 - `POST /api/agent/runs/{run_id}/accept`: 差分の承認(スコープ指定対応)(#46)
 - `POST /api/agent/runs/{run_id}/reject`: 差分の却下(スコープ指定対応)(#46)
 - `POST /api/agent/runs/{run_id}/cancel`: キャンセル(ステージング破棄・current無変更)(#46)
+- `GET /api/agent/runs/{run_id}/report`: 成果報告 report.md の取得(#47)
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 
 from app.agent.provider import AgentRunNotFoundError
 from app.agent.providers.dummy import DummyAgentProvider
+from app.agent.workspace import ReportNotFoundError
 from app.api.deps import get_agent_run_service
 from app.api.diff import (
     AcceptResponse,
@@ -42,6 +44,11 @@ class CancelResponse(BaseModel):
     run_id: str
     status: Literal["cancelled"]
     project_id: str
+
+
+class AgentReportResponse(BaseModel):
+    run_id: str
+    content: str
 
 
 @router.get("/providers", response_model=list[AgentProviderInfo])
@@ -138,3 +145,18 @@ def cancel_agent_run(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/report", response_model=AgentReportResponse)
+def get_agent_report(
+    run_id: str,
+    service: AgentRunService = Depends(get_agent_run_service),
+) -> AgentReportResponse:
+    """#47: run_id のワークスペースから成果報告 report.md を取得する(設計書§8.6, §11.3)。"""
+    try:
+        content = service.get_report(run_id)
+        return AgentReportResponse(run_id=run_id, content=content)
+    except AgentRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ReportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
