@@ -19,7 +19,7 @@ import contextlib
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from claude_agent_sdk import HookMatcher
 
@@ -41,8 +41,27 @@ _SCORE_APPLY_OPS_TOOL_NAME = "mcp__score__score_apply_ops"
 # NFR-14: 複数コマンドの連結・置換に使われうるシェルメタ文字。ホワイトリストの
 # 判定は「先頭コマンド名だけ見る」のではなく、これらの文字が1つでも含まれて
 # いれば無条件に拒否する(パースして安全性を判断するより、保守的に全拒否する
-# 方がセキュリティ境界として安全なため)。
-_SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<", "&")
+# 方がセキュリティ境界として安全なため)。改行/復帰(`\n`/`\r`)もシェルにとっては
+# コマンド区切りとして働く(#45 Gate2レビュー指摘・1巡目 HIGH: これが無いと
+# "ls\ncurl ..."のような改行区切りでの連結を素通ししてしまっていた)。
+_SHELL_METACHARACTERS = (";", "&&", "||", "|", "`", "$(", ">", "<", "&", "\n", "\r")
+
+# NFR-14: python/python3はインタプリタであり、実行ファイル名だけを許可すると
+# 事実上あらゆるコード実行が可能になってしまう(#45 Gate2レビュー指摘・1巡目
+# HIGH)。`-c`(インラインコード実行)・`-i`(対話モード)・`-m`(任意インストール
+# 済みモジュールの実行)は無条件に拒否し、実行対象のスクリプトパスは
+# workspace配下のもののみ許可する。
+_PYTHON_EXECUTABLES = frozenset({"python", "python3"})
+_PYTHON_DANGEROUS_FLAGS = frozenset({"-c", "-i", "-m"})
+# NFR-14: cat/grep/lsは引数(読み取り対象パス)を検証しないと、workspace外の
+# 任意ファイル読み取り(例: `cat /etc/passwd`)に使われてしまう(#45 Gate2
+# レビュー指摘・1巡目 HIGH)。パスらしき引数(`/`を含む、または`.`/`..`)は
+# workspace配下のもののみ許可する。`/`を含まない裸のトークン(例: grepの
+# 検索パターン文字列)は、実行時のcwdがworkspace配下である前提
+# (#48が`ClaudeAgentOptions(cwd=str(task.workspace))`を設定する設計、
+# 設計書§8.3のpseudocode参照)の下では単体でworkspace外を参照できないため
+# 検証対象外とする。
+_PATH_SENSITIVE_EXECUTABLES = frozenset({"cat", "grep", "ls"})
 
 
 @dataclass
@@ -59,13 +78,29 @@ class PolicyContext:
     consecutive_score_apply_ops_failures: int = 0
 
 
-def is_allowed_command(command: str) -> bool:
+def _looks_like_path(arg: str) -> bool:
+    """引数がファイル/ディレクトリパスらしいかを判定する(フラグ・裸の
+
+    トークンとの区別用)。`/`を含む(絶対パス・相対ディレクトリ指定)、または
+    `.`/`..`そのものであればパスとみなす。
+    """
+    return "/" in arg or arg in (".", "..")
+
+
+def is_allowed_command(command: str, workspace: Path) -> bool:
     """NFR-14: シェルコマンドのホワイトリスト判定。
 
-    シェルメタ文字を含む場合は複数コマンドの連結(ホワイトリストの回避)を
-    許す可能性があるため無条件に拒否する。それ以外は`shlex.split`で
+    シェルメタ文字(改行含む)を含む場合は複数コマンドの連結(ホワイトリストの
+    回避)を許す可能性があるため無条件に拒否する。それ以外は`shlex.split`で
     トークン化し、先頭の実行ファイル名(パス部分を除いた basename)を
     `SHELL_COMMAND_WHITELIST`と照合する。
+
+    実行ファイル名の一致だけでは不十分な2種のコマンドについて、追加で引数を
+    検証する(#45 Gate2レビュー指摘・1巡目 HIGH、`_PYTHON_EXECUTABLES`/
+    `_PATH_SENSITIVE_EXECUTABLES`のコメント参照):
+    - python/python3: 危険フラグ(`-c`/`-i`/`-m`)を拒否し、スクリプトパスは
+      workspace配下のみ許可する。
+    - cat/grep/ls: `/`を含む引数(パスらしきもの)はworkspace配下のみ許可する。
     """
     if any(meta in command for meta in _SHELL_METACHARACTERS):
         return False
@@ -77,7 +112,22 @@ def is_allowed_command(command: str) -> bool:
     if not tokens:
         return False
     executable = Path(tokens[0]).name
-    return executable in SHELL_COMMAND_WHITELIST
+    if executable not in SHELL_COMMAND_WHITELIST:
+        return False
+
+    args = tokens[1:]
+    if executable in _PYTHON_EXECUTABLES:
+        if any(arg in _PYTHON_DANGEROUS_FLAGS for arg in args):
+            return False
+        non_flag_args = [arg for arg in args if not arg.startswith("-")]
+        if not non_flag_args:
+            # スクリプト指定なしのpython呼び出しは対話モード(REPL)相当のため拒否する。
+            return False
+        script_path = non_flag_args[0]
+        return within_workspace(script_path, workspace)
+    if executable in _PATH_SENSITIVE_EXECUTABLES:
+        return all(not _looks_like_path(arg) or within_workspace(arg, workspace) for arg in args)
+    return True
 
 
 def within_workspace(path: str, workspace: Path) -> bool:
@@ -101,7 +151,7 @@ def _record_pretooluse_decision(
     *,
     tool_name: str,
     tool_input: dict[str, Any],
-    decision: str,
+    decision: Literal["allow", "deny"],
     reason: str | None,
 ) -> None:
     # 監査ログの書き込み失敗でポリシー判定自体を失敗させない(#41/#43の
@@ -114,7 +164,7 @@ def _record_pretooluse_decision(
                 project_id=ctx.project_id,
                 tool_name=tool_name,
                 tool_input=tool_input,
-                decision=decision,  # type: ignore[arg-type]
+                decision=decision,
                 reason=reason,
             ),
         )
@@ -126,7 +176,7 @@ async def guard_bash(
     """PreToolUseフック(matcher="Bash")。ホワイトリスト外なら拒否+監査記録する。"""
     ctx: PolicyContext = context["ctx"]
     command = input_data.get("tool_input", {}).get("command", "")
-    if is_allowed_command(command):
+    if is_allowed_command(command, ctx.workspace):
         _record_pretooluse_decision(
             ctx,
             tool_name="Bash",
@@ -267,12 +317,24 @@ def build_opencode_tools_config() -> dict[str, Any]:
     一般に知られるbool値によるツール無効化形式で実装する。**実際の
     OpenCodeの挙動・スキーマによる検証はまだ行っていない — #52
     (OpenCodeProvider実装)の担当として残す。**
+
+    bash/write/editはClaude側と同じ意図(許可はするが制約付き)で`True`とする
+    (#45 Gate2レビュー指摘・1巡目 MIDDLE: 一律`False`で全無効化すると
+    OpenCode版エージェントが一切作業できず、「単一のポリシー表から両
+    プロバイダを生成し挙動を乖離させない」という本モジュールの方針に反する)。
+    **ただし`opencode.json`の`"tools"`は静的なon/off切り替えのみで、
+    Claude側の`PreToolUse`フックのような動的な引数検証(シェルコマンドの
+    ホワイトリスト、workspace境界チェック)を表現できない。** そのため
+    bash/write/editを有効化しても、Claude側と同等のNFR-13/14の実効的な
+    強制力は無い — #52はこの設定だけに頼らず、別途動的な検証手段(例:
+    stdio_serverでの追加チェックや、opencode自体のプロセスサンドボックス)
+    を用意する必要がある。
     """
     return {
         "tools": {
-            "bash": False,
-            "write": False,
-            "edit": False,
+            "bash": True,
+            "write": True,
+            "edit": True,
             "webfetch": False,
         }
     }

