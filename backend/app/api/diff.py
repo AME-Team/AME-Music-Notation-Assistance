@@ -90,7 +90,8 @@ class RejectResponse(BaseModel):
     remaining_diff: DiffResponse
 
 
-def _to_response(run_id: str, changes: list[NoteDiffChange]) -> DiffResponse:
+def to_diff_response(run_id: str, changes: list[NoteDiffChange]) -> DiffResponse:
+    """NoteDiffChangeのリストをAPI共通のDiffResponseモデルへ変換する。"""
     return DiffResponse(
         run_id=run_id,
         changes=[
@@ -108,6 +109,10 @@ def _to_response(run_id: str, changes: list[NoteDiffChange]) -> DiffResponse:
             for c in changes
         ],
     )
+
+
+# 既存コードとの後方互換用エイリアス
+_to_response = to_diff_response
 
 
 def _read_current(project_id: str, settings: Settings) -> tuple[dict, ScoreIR]:

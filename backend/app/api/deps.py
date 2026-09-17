@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request
 
 from app.config import Settings
 from app.domain.score import ScoreIR
+from app.services.agent_run_service import AgentRunService
 from app.services.job_service import JobManager
 from app.services.project_service import ProjectNotFoundError, ProjectService
 from app.services.score_service import ScoreNotFoundError, ScoreService
@@ -21,6 +22,10 @@ def get_project_service(request: Request) -> ProjectService:
 
 def get_job_manager(request: Request) -> JobManager:
     return request.app.state.job_manager
+
+
+def get_agent_run_service(request: Request) -> AgentRunService:
+    return request.app.state.agent_run_service
 
 
 def ensure_project_exists(project_id: str, service: ProjectService) -> dict:

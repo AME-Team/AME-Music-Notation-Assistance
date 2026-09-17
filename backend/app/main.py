@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from app.api import agent, diff, export, jobs, media, projects, refine, score
 from app.config import Settings, load_settings
+from app.services.agent_run_service import AgentRunService
 from app.services.job_service import JobManager
 from app.services.project_service import ProjectService
 
@@ -33,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.project_service = ProjectService(workspace_dir=settings.workspace_dir)
     app.state.job_manager = JobManager(workspace_dir=settings.workspace_dir)
+    app.state.agent_run_service = AgentRunService(workspace_dir=settings.workspace_dir)
 
     app.add_middleware(
         CORSMiddleware,
