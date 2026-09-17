@@ -22,7 +22,7 @@ from app.api.diff import (
     DiffResponse,
     RejectResponse,
     ScopeRequest,
-    _to_response,
+    to_diff_response,
 )
 from app.services.agent_run_service import (
     AgentRunService,
@@ -64,7 +64,7 @@ def get_agent_diff(
     """#46: エージェント run のステージング変更 vs current.json の差分を取得する(FR-23)。"""
     try:
         _, changes = service.get_diff(run_id)
-        return _to_response(run_id, changes)
+        return to_diff_response(run_id, changes)
     except AgentRunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ScoreNotFoundError as exc:
@@ -85,7 +85,7 @@ def accept_agent_diff(
         return AcceptResponse(
             score=score_dict,
             applied_note_ids=applied_note_ids,
-            remaining_diff=_to_response(run_id, remaining),
+            remaining_diff=to_diff_response(run_id, remaining),
         )
     except AgentRunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -108,12 +108,14 @@ def reject_agent_diff(
         )
         return RejectResponse(
             reverted_note_ids=reverted_note_ids,
-            remaining_diff=_to_response(run_id, remaining),
+            remaining_diff=to_diff_response(run_id, remaining),
         )
     except AgentRunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ScoreNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ScoreConcurrentModificationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/runs/{run_id}/cancel", response_model=CancelResponse)
@@ -134,3 +136,5 @@ def cancel_agent_run(
         )
     except AgentRunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

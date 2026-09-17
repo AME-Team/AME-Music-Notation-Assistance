@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -282,6 +283,84 @@ class TestAgentDiffAndApproval:
         ]
         reject_entries = [e for e in entries if e["ops"][0]["op"] == "ai.reject"]
         assert len(reject_entries) == 1
+
+    def test_accept_transitions_status_to_completed(
+        self, client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+    ) -> None:
+        """全差分が確定適用された時点で run の status が completed へ遷移すること(#46 レビュー対応)。"""
+        project_id = _create_project(client, tiny_wav_bytes)
+        _setup_score_and_staging(settings, project_id, "run_accept_complete")
+
+        resp = client.post("/api/agent/runs/run_accept_complete/accept", json={})
+        assert resp.status_code == 200
+        assert len(resp.json()["remaining_diff"]["changes"]) == 0
+
+        agent_service = AgentRunService(workspace_dir=settings.workspace_dir)
+        run_record = agent_service.get_run("run_accept_complete")
+        assert run_record["status"] == "completed"
+
+    def test_reject_transitions_status_to_completed(
+        self, client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+    ) -> None:
+        """全差分が却下された時点で run の status が completed へ遷移すること(#46 レビュー対応)。"""
+        project_id = _create_project(client, tiny_wav_bytes)
+        _setup_score_and_staging(settings, project_id, "run_reject_complete")
+
+        resp = client.post("/api/agent/runs/run_reject_complete/reject", json={})
+        assert resp.status_code == 200
+        assert len(resp.json()["remaining_diff"]["changes"]) == 0
+
+        agent_service = AgentRunService(workspace_dir=settings.workspace_dir)
+        run_record = agent_service.get_run("run_reject_complete")
+        assert run_record["status"] == "completed"
+
+    def test_reject_aborts_on_concurrent_modification(
+        self,
+        client: TestClient,
+        settings: Settings,
+        tiny_wav_bytes: bytes,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """reject 実行中に current.json が並行更新されていた場合 409 になり、上書きを防止する(#46 レビュー対応)。"""
+        import app.services.agent_run_service as service_module
+
+        project_id = _create_project(client, tiny_wav_bytes)
+        _setup_score_and_staging(settings, project_id, "run_reject_conflict")
+
+        score_path = storage.score_current_path(settings.workspace_dir, project_id)
+        original_revert = service_module.revert_change_in_staging
+
+        def _revert_and_concurrently_modify(change, *, current, staged):
+            # raw_before 読み取り後、staging 保存前に current.json を並行更新する
+            concurrent = storage.read_json(score_path)
+            concurrent["divisions"] = 960
+            storage.write_json(score_path, concurrent)
+            return original_revert(change, current=current, staged=staged)
+
+        monkeypatch.setattr(
+            service_module, "revert_change_in_staging", _revert_and_concurrently_modify
+        )
+
+        resp = client.post("/api/agent/runs/run_reject_conflict/reject", json={})
+        assert resp.status_code == 409
+        assert "concurrently" in resp.json()["detail"]
+
+    def test_cannot_cancel_already_completed_run(
+        self, client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+    ) -> None:
+        """承認完了済みの completed run をキャンセルしようとすると 400 エラーになり上書きされない(#46 レビュー対応)。"""
+        project_id = _create_project(client, tiny_wav_bytes)
+        _setup_score_and_staging(
+            settings, project_id, "run_already_completed", status="completed"
+        )
+
+        resp = client.post("/api/agent/runs/run_already_completed/cancel")
+        assert resp.status_code == 400
+        assert "cannot cancel an already completed" in resp.json()["detail"]
+
+        # status が completed のままであること
+        agent_service = AgentRunService(workspace_dir=settings.workspace_dir)
+        assert agent_service.get_run("run_already_completed")["status"] == "completed"
 
 
 class TestAgentTruncatedRun:

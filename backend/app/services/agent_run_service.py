@@ -39,14 +39,6 @@ class ScoreConcurrentModificationError(RuntimeError):
 
 
 @dataclass
-class AgentRunRecord:
-    id: str
-    project_id: str
-    status: AgentRunStatus
-    created_at: str
-
-
-@dataclass
 class AgentRunService:
     workspace_dir: Path
 
@@ -197,6 +189,23 @@ class AgentRunService:
             return project_id, []
         return project_id, compute_diff(current, staged, run_id)
 
+    def _verify_optimistic_lock(
+        self,
+        project_id: str,
+        raw_before: dict[str, Any],
+        raw_undo_before: dict[str, Any] | None,
+    ) -> None:
+        """楽観的ロックの検証: current.json または undo 状態が並行変更されていれば
+
+        例外を送出する。
+        """
+        score_path = storage.score_current_path(self.workspace_dir, project_id)
+        raw_now = storage.read_json(score_path) if score_path.exists() else None
+        if raw_now != raw_before or self._read_undo_state_raw(project_id) != raw_undo_before:
+            raise ScoreConcurrentModificationError(
+                "score/current.json was modified concurrently; please retry with the latest score"
+            )
+
     def accept(
         self,
         run_id: str,
@@ -204,7 +213,10 @@ class AgentRunService:
         part_id: str | None = None,
         bar_range: list[int] | None = None,
     ) -> tuple[dict[str, Any], list[int], list[NoteDiffChange]]:
-        """ステージングされた差分を current.json へ確定反映する(スコープ指定対応)。"""
+        """ステージングされた差分を current.json へ確定適用する(スコープ指定対応)。
+
+        全差分が確定された場合(remaining が空)、run の status を completed へ遷移させる。
+        """
         run = self.get_run(run_id)
         project_id = run["project_id"]
 
@@ -228,13 +240,8 @@ class AgentRunService:
         after_snapshot = score_undo.snapshot_notes(current)
         changes_snapshot = score_undo.diff_snapshots(before_snapshot, after_snapshot)
 
-        # 楽観的ロック検証
-        score_path = storage.score_current_path(self.workspace_dir, project_id)
-        raw_now = storage.read_json(score_path) if score_path.exists() else None
-        if raw_now != raw_before or self._read_undo_state_raw(project_id) != raw_undo_before:
-            raise ScoreConcurrentModificationError(
-                "score/current.json was modified concurrently; please retry with the latest score"
-            )
+        # 楽観的ロック検証(#46 Gate2レビュー指摘・1巡目: 共通ヘルパで検証)
+        self._verify_optimistic_lock(project_id, raw_before, raw_undo_before)
 
         if changes_snapshot:
             ScoreService(workspace_dir=self.workspace_dir).write_score(project_id, current)
@@ -248,6 +255,10 @@ class AgentRunService:
             )
 
         remaining = compute_diff(current, staged, run_id)
+        # 全差分が適用完了した場合は completed へ遷移(#46 Gate2レビュー指摘・1巡目)
+        if not remaining and run["status"] != "completed":
+            self.update_status(run_id, "completed")
+
         return current.model_dump(mode="json"), applied_note_ids, remaining
 
     def reject(
@@ -257,11 +268,15 @@ class AgentRunService:
         part_id: str | None = None,
         bar_range: list[int] | None = None,
     ) -> tuple[list[int], list[NoteDiffChange]]:
-        """スコープ内のステージング変更を却下する。current.json は変更しない。"""
+        """スコープ内のステージング変更を却下する。current.json は変更しない。
+
+        accept と同様に楽観的ロックを検証し、全変更が却下された場合は completed へ遷移する。
+        """
         run = self.get_run(run_id)
         project_id = run["project_id"]
 
-        _, current = self._read_current(project_id)
+        raw_before, current = self._read_current(project_id)
+        raw_undo_before = self._read_undo_state_raw(project_id)
         staged = self._read_staged_optional(project_id, run_id)
 
         if staged is None:
@@ -276,6 +291,8 @@ class AgentRunService:
             reverted_note_ids.extend(change.note_ids)
 
         if target:
+            # 楽観的ロック検証(#46 Gate2レビュー指摘・1巡目: reject時も並行更新を検知)
+            self._verify_optimistic_lock(project_id, raw_before, raw_undo_before)
             staging_path = storage.score_staging_path(self.workspace_dir, project_id, run_id)
             storage.write_json(staging_path, staged.model_dump(mode="json"))
             self._record_ai_decision(
@@ -288,15 +305,29 @@ class AgentRunService:
             )
 
         remaining = compute_diff(current, staged, run_id)
+        # 全差分が却下完了した場合も completed へ遷移(#46 Gate2レビュー指摘・1巡目)
+        if not remaining and run["status"] != "completed":
+            self.update_status(run_id, "completed")
+
         return reverted_note_ids, remaining
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         """エージェント run をキャンセルし、ステージング領域を破棄する(FR-23)。
 
         重要: 実行途中でキャンセルしても current.json は1バイトも変更されない。
+        既に completed の run は承認履歴との整合性を守るためキャンセルを拒否する。
         """
         run = self.get_run(run_id)
         project_id = run["project_id"]
+
+        if run["status"] == "completed":
+            raise ValueError(f"cannot cancel an already completed agent run: {run_id!r}")
+        if run["status"] == "cancelled":
+            return {
+                "run_id": run_id,
+                "status": "cancelled",
+                "project_id": project_id,
+            }
 
         # ステージングファイルを破棄(存在する場合)
         staging_path = storage.score_staging_path(self.workspace_dir, project_id, run_id)
