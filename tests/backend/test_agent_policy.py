@@ -159,7 +159,9 @@ class TestGuardBash:
         assert result == {}
         entries = [
             json.loads(line)
-            for line in audit_log_path(workspace).read_text().splitlines()
+            for line in audit_log_path(workspace)
+            .read_text(encoding="utf-8")
+            .splitlines()
         ]
         assert entries[0]["decision"] == "allow"
         assert entries[0]["tool_name"] == "Bash"
@@ -178,7 +180,9 @@ class TestGuardBash:
         assert "curl" in result["hookSpecificOutput"]["permissionDecisionReason"]
         entries = [
             json.loads(line)
-            for line in audit_log_path(workspace).read_text().splitlines()
+            for line in audit_log_path(workspace)
+            .read_text(encoding="utf-8")
+            .splitlines()
         ]
         assert entries[0]["decision"] == "deny"
 
@@ -223,7 +227,9 @@ class TestGuardWrite:
 
         entries = [
             json.loads(line)
-            for line in audit_log_path(workspace).read_text().splitlines()
+            for line in audit_log_path(workspace)
+            .read_text(encoding="utf-8")
+            .splitlines()
         ]
         assert entries[0]["decision"] == "deny"
         assert entries[0]["tool_input"]["file_path"] == score_path
@@ -247,7 +253,9 @@ class TestAuditPostToolUse:
         assert result == {}
         entries = [
             json.loads(line)
-            for line in audit_log_path(workspace).read_text().splitlines()
+            for line in audit_log_path(workspace)
+            .read_text(encoding="utf-8")
+            .splitlines()
         ]
         assert entries[0]["tool_name"] == "score_context"
         assert entries[0]["result"] == {"key_signatures": []}

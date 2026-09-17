@@ -95,6 +95,13 @@ def is_allowed_command(command: str, workspace: Path) -> bool:
     トークン化し、先頭の実行ファイル名(パス部分を除いた basename)を
     `SHELL_COMMAND_WHITELIST`と照合する。
 
+    `posix=False`でトークン化する: 本プロジェクトはWindows専用(NFR-08′)の
+    ため、コマンド文字列にはバックスラッシュ区切りのWindowsパス
+    (`C:\\Users\\...`)が渡されうる。既定のPOSIXモードだとバックスラッシュを
+    エスケープ文字として解釈し`C:\\Users\\foo`が`C:Usersfoo`に化けてしまい、
+    後段のworkspace境界チェックが正しいパスを見られなくなる(#45 Gate2
+    レビュー指摘・2巡目、Windows実行のCIで発覚)。
+
     実行ファイル名の一致だけでは不十分な2種のコマンドについて、追加で引数を
     検証する(#45 Gate2レビュー指摘・1巡目 HIGH、`_PYTHON_EXECUTABLES`/
     `_PATH_SENSITIVE_EXECUTABLES`のコメント参照):
@@ -105,7 +112,7 @@ def is_allowed_command(command: str, workspace: Path) -> bool:
     if any(meta in command for meta in _SHELL_METACHARACTERS):
         return False
     try:
-        tokens = shlex.split(command)
+        tokens = shlex.split(command, posix=False)
     except ValueError:
         # 引用符の対応が取れない等、shlexが解釈できない不正な文字列は拒否する。
         return False
