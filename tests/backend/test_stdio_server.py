@@ -180,12 +180,26 @@ class TestContextFromEnv:
             workspace_dir=workspace_dir, project_id="prj_env", run_id="run_env"
         )
 
-    def test_missing_env_var_raises_key_error(
+    def test_missing_env_vars_raise_runtime_error_naming_all_missing_keys(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("AME_WORKSPACE_DIR", raising=False)
         monkeypatch.delenv("AME_PROJECT_ID", raising=False)
         monkeypatch.delenv("AME_RUN_ID", raising=False)
 
-        with pytest.raises(KeyError):
+        with pytest.raises(
+            RuntimeError, match="AME_WORKSPACE_DIR.*AME_PROJECT_ID.*AME_RUN_ID"
+        ):
             stdio_server.context_from_env()
+
+    def test_partially_missing_env_var_names_only_the_missing_one(
+        self, workspace_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AME_WORKSPACE_DIR", str(workspace_dir))
+        monkeypatch.setenv("AME_PROJECT_ID", "prj_env")
+        monkeypatch.delenv("AME_RUN_ID", raising=False)
+
+        with pytest.raises(RuntimeError, match="AME_RUN_ID") as exc_info:
+            stdio_server.context_from_env()
+        assert "AME_WORKSPACE_DIR" not in str(exc_info.value)
+        assert "AME_PROJECT_ID" not in str(exc_info.value)

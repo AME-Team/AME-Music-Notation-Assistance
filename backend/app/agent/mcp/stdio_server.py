@@ -39,7 +39,18 @@ def context_from_env() -> ToolContext:
     相当。エージェント自身のスクラッチ用`AgentTask.workspace`とは別物)は
     設計書§8.4の`opencode.json`例には無いが、`ToolContext`の構築に必須のため
     #44の実装判断として追加する(実際の起動時の設定は#52が担当)。
+
+    欠落している変数名を明示した`RuntimeError`を送出する(#44 Gate2レビュー
+    指摘: 素の`KeyError`だと`main()`起動時にどのキーが欠けているか分からず、
+    MCPクライアント側からは原因不明の「サーバ起動失敗」にしか見えない)。
     """
+    required = (_ENV_WORKSPACE_DIR, _ENV_PROJECT_ID, _ENV_RUN_ID)
+    missing = [name for name in required if name not in os.environ]
+    if missing:
+        raise RuntimeError(
+            "missing required environment variable(s) for score-mcp stdio server: "
+            + ", ".join(missing)
+        )
     return ToolContext(
         workspace_dir=Path(os.environ[_ENV_WORKSPACE_DIR]),
         project_id=os.environ[_ENV_PROJECT_ID],
