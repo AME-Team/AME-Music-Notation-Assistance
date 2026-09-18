@@ -40,12 +40,18 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_project ON jobs(project_id);
 
--- ★ M5以降で使うagent run の骨組みのみ(#12完了条件はM0の範囲に限定)。
+-- #49: turns/usage_json/staged_ops_count/error は AgentRunManager が
+-- provider.result() を受けて書き込む(§11.3 `GET /api/agent/runs/{run_id}`
+-- レスポンスの実体)。
 CREATE TABLE IF NOT EXISTS agent_runs (
-    id          TEXT PRIMARY KEY,
-    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    status      TEXT NOT NULL,
-    created_at  TEXT NOT NULL
+    id                TEXT PRIMARY KEY,
+    project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    status            TEXT NOT NULL,
+    turns             INTEGER NOT NULL DEFAULT 0,
+    usage_json        TEXT,
+    staged_ops_count  INTEGER NOT NULL DEFAULT 0,
+    error             TEXT,
+    created_at        TEXT NOT NULL
 );
 """
 

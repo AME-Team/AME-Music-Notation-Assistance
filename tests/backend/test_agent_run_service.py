@@ -1,11 +1,11 @@
-"""#46: AgentRunService の単体テスト。"""
+"""#46/#49: AgentRunService の単体テスト。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-
+from app.agent.audit import AuditEntry, append_audit_entry
 from app.agent.provider import AgentRunNotFoundError
 from app.infra import storage
 from app.services.agent_run_service import AgentRunService
@@ -91,3 +91,77 @@ class TestAgentRunService:
         proj_1_runs = service.list_runs(project_id="proj_1")
         assert len(proj_1_runs) == 2
         assert {r["id"] for r in proj_1_runs} == {"run_a", "run_b"}
+
+    def test_update_status_persists_provider_result_fields(
+        self, tmp_path: Path
+    ) -> None:
+        """#49: AgentRunManagerがprovider.result()を受けて書き込むturns/usage/
+
+        staged_ops_count/errorがget_run()で読み戻せることを確認する。
+        """
+        service = AgentRunService(workspace_dir=tmp_path)
+        _create_project_dir(tmp_path, "proj_1")
+        service.create_run(run_id="run_1", project_id="proj_1")
+
+        updated = service.update_status(
+            "run_1",
+            "completed",
+            turns=3,
+            usage={"input_tokens": 100, "output_tokens": 20},
+            staged_ops_count=5,
+        )
+        assert updated["turns"] == 3
+        assert updated["usage"] == {"input_tokens": 100, "output_tokens": 20}
+        assert updated["staged_ops_count"] == 5
+        assert updated["error"] is None
+
+        fetched = service.get_run("run_1")
+        assert fetched["turns"] == 3
+        assert fetched["usage"] == {"input_tokens": 100, "output_tokens": 20}
+        assert fetched["staged_ops_count"] == 5
+
+    def test_get_audit_log_returns_empty_list_when_no_file(
+        self, tmp_path: Path
+    ) -> None:
+        service = AgentRunService(workspace_dir=tmp_path)
+        _create_project_dir(tmp_path, "proj_1")
+        service.create_run(run_id="run_1", project_id="proj_1")
+        assert service.get_audit_log("run_1") == []
+
+    def test_get_audit_log_reads_entries(self, tmp_path: Path) -> None:
+        service = AgentRunService(workspace_dir=tmp_path)
+        _create_project_dir(tmp_path, "proj_1")
+        service.create_run(run_id="run_1", project_id="proj_1")
+
+        workspace = storage.agent_workspace_dir(tmp_path, "proj_1", "run_1")
+        append_audit_entry(
+            workspace,
+            AuditEntry(
+                run_id="run_1",
+                project_id="proj_1",
+                tool_name="Bash",
+                tool_input={"command": "ls"},
+                decision="allow",
+            ),
+        )
+        append_audit_entry(
+            workspace,
+            AuditEntry(
+                run_id="run_1",
+                project_id="proj_1",
+                tool_name="mcp__score__score_apply_ops",
+                tool_input={"ops": []},
+                decision="allow",
+                result={"ok": True},
+            ),
+        )
+
+        entries = service.get_audit_log("run_1")
+        assert len(entries) == 2
+        assert entries[0].tool_name == "Bash"
+        assert entries[1].tool_name == "mcp__score__score_apply_ops"
+
+    def test_get_audit_log_raises_for_unknown_run(self, tmp_path: Path) -> None:
+        service = AgentRunService(workspace_dir=tmp_path)
+        with pytest.raises(AgentRunNotFoundError):
+            service.get_audit_log("unknown_run")

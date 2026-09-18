@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from pydantic import ValidationError
+
+from app.agent.audit import AuditEntry, audit_log_path
 from app.agent.provider import AgentRunNotFoundError, AgentRunStatus
 from app.agent.workspace import (
     clean_workspace,
@@ -74,37 +78,69 @@ class AgentRunService:
                 raise ProjectNotFoundError(f"project not found: {project_id!r}") from exc
             raise ValueError(f"agent run already exists: {run_id!r}") from exc
 
-        return {
-            "id": run_id,
-            "project_id": project_id,
-            "status": status,
-            "created_at": now,
-        }
+        return self.get_run(run_id)
 
     def get_run(self, run_id: str) -> dict[str, Any]:
-        """run_id からエージェント run のメタデータを取得する。"""
+        """run_id からエージェント run のメタデータを取得する。
+
+        `usage_json`(#49: `AgentRunManager`が`provider.result()`を受けて書き込む)は
+        呼び出し元がdictとして扱えるよう、ここでparseした`usage`キーへ変換して返す。
+        """
         row = (
             self._conn()
             .execute(
-                "SELECT id, project_id, status, created_at FROM agent_runs WHERE id = ?",
+                "SELECT id, project_id, status, turns, usage_json, staged_ops_count, error, "
+                "created_at FROM agent_runs WHERE id = ?",
                 (run_id,),
             )
             .fetchone()
         )
         if row is None:
             raise AgentRunNotFoundError(f"agent run not found: {run_id!r}")
-        return dict(row)
+        result = dict(row)
+        usage_json = result.pop("usage_json")
+        result["usage"] = json.loads(usage_json) if usage_json else None
+        return result
 
-    def update_status(self, run_id: str, status: AgentRunStatus) -> dict[str, Any]:
-        """run_id のステータスを更新する。
+    def update_status(
+        self,
+        run_id: str,
+        status: AgentRunStatus,
+        *,
+        turns: int | None = None,
+        usage: dict[str, int] | None = None,
+        staged_ops_count: int | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """run_id のステータス(および#49: providerの実行結果)を更新する。
+
+        `turns`/`usage`/`staged_ops_count`/`error`は`None`の場合そのカラムを
+        更新しない(#46のaccept/reject/cancelは`status`のみ更新し、実行結果は
+        AgentRunManagerが`_drive_run`終了時にまとめて書き込むため)。
 
         終了ステータス(completed/failed/truncated/cancelled)確定時は
         保持/削除ポリシーを適用し、一時領域(scratch/)を自動クリーンアップする(#47)。
         """
+        set_clauses = ["status = ?"]
+        params: list[Any] = [status]
+        if turns is not None:
+            set_clauses.append("turns = ?")
+            params.append(turns)
+        if usage is not None:
+            set_clauses.append("usage_json = ?")
+            params.append(json.dumps(usage))
+        if staged_ops_count is not None:
+            set_clauses.append("staged_ops_count = ?")
+            params.append(staged_ops_count)
+        if error is not None:
+            set_clauses.append("error = ?")
+            params.append(error)
+        params.append(run_id)
+
         conn = self._conn()
         cursor = conn.execute(
-            "UPDATE agent_runs SET status = ? WHERE id = ?",
-            (status, run_id),
+            f"UPDATE agent_runs SET {', '.join(set_clauses)} WHERE id = ?",  # noqa: S608
+            params,
         )
         if cursor.rowcount == 0:
             raise AgentRunNotFoundError(f"agent run not found: {run_id!r}")
@@ -119,17 +155,49 @@ class AgentRunService:
 
     def list_runs(self, project_id: str | None = None) -> list[dict[str, Any]]:
         conn = self._conn()
+        columns = "id, project_id, status, turns, usage_json, staged_ops_count, error, created_at"
         if project_id is not None:
             rows = conn.execute(
-                "SELECT id, project_id, status, created_at FROM agent_runs "
-                "WHERE project_id = ? ORDER BY created_at DESC",
+                f"SELECT {columns} FROM agent_runs WHERE project_id = ? ORDER BY created_at DESC",  # noqa: S608
                 (project_id,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, project_id, status, created_at FROM agent_runs ORDER BY created_at DESC"
+                f"SELECT {columns} FROM agent_runs ORDER BY created_at DESC"  # noqa: S608
             ).fetchall()
-        return [dict(r) for r in rows]
+        results = []
+        for row in rows:
+            item = dict(row)
+            usage_json = item.pop("usage_json")
+            item["usage"] = json.loads(usage_json) if usage_json else None
+            results.append(item)
+        return results
+
+    def get_audit_log(self, run_id: str) -> list[AuditEntry]:
+        """#49: run_id の監査ログ(`audit.jsonl`)を読み込む(FR-22)。
+
+        まだ1件もツール呼び出しが無い(ファイル未作成)場合は空リストを返す
+        (`get_report`と異なり、report.mdのような「完了時の必須成果物」ではなく
+        run進行中から逐次読めるものであるため404にはしない)。壊れた行
+        (不正なJSON/スキーマ不一致)は`score_note_history`(tools.py)と同じ
+        「環境側の1件の破損で全体を失わない」方針でスキップする。
+        """
+        run = self.get_run(run_id)
+        workspace = storage.agent_workspace_dir(self.workspace_dir, run["project_id"], run_id)
+        log_path = audit_log_path(workspace)
+        if not log_path.exists():
+            return []
+        entries: list[AuditEntry] = []
+        with log_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(AuditEntry.model_validate_json(line))
+                except ValidationError:
+                    continue
+        return entries
 
     def _read_current(self, project_id: str) -> tuple[dict[str, Any], ScoreIR]:
         score_path = storage.score_current_path(self.workspace_dir, project_id)
