@@ -213,6 +213,23 @@ def _extract_tool_result_payload(content: str | list[dict[str, Any]] | None) -> 
         return text
 
 
+def _resolve_interrupted_status(run: _RunState, *, default: AgentRunStatus) -> AgentRunStatus:
+    """`cancel_requested`/`budget_exceeded`を`default`より優先する共通ヘルパ。
+
+    Gate2レビュー指摘: `_map_terminal_status`とStopAsyncIterationフォールバック
+    だけに優先順位を適用しても、タイムアウト系の終端経路(`connect()`の
+    タイムアウト・deadline切れ・メッセージ受信のタイムアウト)は独自に
+    `"truncated"`を決め打ちしていたため、`cancel()`呼び出し後でもタイムアウトが
+    先に発火すると状態が"truncated"へ巻き戻っていた。全ての「タイムアウト/
+    中断」系の終端イベント生成箇所をこのヘルパ経由に統一する。
+    """
+    if run.cancel_requested:
+        return "cancelled"
+    if run.budget_exceeded:
+        return "truncated"
+    return default
+
+
 def _map_terminal_status(
     result: ResultMessage, *, cancel_requested: bool, budget_exceeded: bool
 ) -> tuple[AgentRunStatus, str | None]:
@@ -326,7 +343,8 @@ class ClaudeAgentProvider:
             attempt += 1
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                event = self._terminal_event(run, next_seq(), status="truncated", error=None)
+                status = _resolve_interrupted_status(run, default="truncated")
+                event = self._terminal_event(run, next_seq(), status=status, error=None)
                 events.append(event)
                 yield event
                 return
@@ -343,7 +361,8 @@ class ClaudeAgentProvider:
                         client.connect(run.task.prompt), timeout=max(remaining, 0.01)
                     )
                 except TimeoutError:
-                    event = self._terminal_event(run, next_seq(), status="truncated", error=None)
+                    status = _resolve_interrupted_status(run, default="truncated")
+                    event = self._terminal_event(run, next_seq(), status=status, error=None)
                     events.append(event)
                     yield event
                     return
@@ -357,9 +376,8 @@ class ClaudeAgentProvider:
 
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        event = self._terminal_event(
-                            run, next_seq(), status="truncated", error=None
-                        )
+                        status = _resolve_interrupted_status(run, default="truncated")
+                        event = self._terminal_event(run, next_seq(), status=status, error=None)
                         events.append(event)
                         yield event
                         return
@@ -371,9 +389,8 @@ class ClaudeAgentProvider:
                     except StopAsyncIteration:
                         break
                     except TimeoutError:
-                        event = self._terminal_event(
-                            run, next_seq(), status="truncated", error=None
-                        )
+                        status = _resolve_interrupted_status(run, default="truncated")
+                        event = self._terminal_event(run, next_seq(), status=status, error=None)
                         events.append(event)
                         yield event
                         return
@@ -411,16 +428,12 @@ class ClaudeAgentProvider:
                                 await client.interrupt()
 
                 # StopAsyncIteration without a ResultMessage: `interrupt()`だけでは
-                # 必ずしもResultMessageを生まないため、cancel/予算超過の状態を
-                # 確認してから既定の"completed"にフォールバックする(Gate2レビュー
-                # 指摘: 以前は無条件にcompletedとしており、キャンセル済み/
-                # truncated済みのrunがここで状態を巻き戻されていた)。
-                if run.cancel_requested:
-                    fallback_status: AgentRunStatus = "cancelled"
-                elif run.budget_exceeded:
-                    fallback_status = "truncated"
-                else:
-                    fallback_status = "completed"
+                # 必ずしもResultMessageを生まないため、`_resolve_interrupted_status`
+                # 経由でcancel/予算超過の状態を確認してから既定の"completed"に
+                # フォールバックする(Gate2レビュー指摘: 以前は無条件にcompletedと
+                # しており、キャンセル済み/truncated済みのrunがここで状態を
+                # 巻き戻されていた)。
+                fallback_status = _resolve_interrupted_status(run, default="completed")
                 event = self._terminal_event(run, next_seq(), status=fallback_status, error=None)
                 events.append(event)
                 yield event
@@ -428,6 +441,19 @@ class ClaudeAgentProvider:
             except ClaudeSDKError as exc:
                 if received_any_message or isinstance(exc, CLINotFoundError):
                     event = self._terminal_event(run, next_seq(), status="failed", error=str(exc))
+                    events.append(event)
+                    yield event
+                    return
+                if run.cancel_requested:
+                    # 接続確立前(`run.client`未設定)に`cancel()`が呼ばれた場合、
+                    # `interrupt()`を送る先が無く実際には接続失敗まで中断できない
+                    # (Gate2レビュー指摘)。接続が(タイムアウトではなく)エラーで
+                    # 終わった時点で`cancel_requested`を見て、リトライせず
+                    # `cancelled`として終了する。`budget_exceeded`は
+                    # `received_any_message`が真の場合のみ立つため、ここでは
+                    # チェック不要(このガードは`received_any_message`が偽の
+                    # 分岐でのみ到達する)。
+                    event = self._terminal_event(run, next_seq(), status="cancelled", error=None)
                     events.append(event)
                     yield event
                     return

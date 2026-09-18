@@ -401,6 +401,74 @@ async def test_unexpected_non_sdk_exception_marks_run_failed_not_stuck_running(
     assert events_again[-1].kind == "error"
 
 
+async def test_cancel_during_connect_timeout_maps_to_cancelled_not_truncated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE): タイムアウト系の終端経路が`cancel_requested`を
+
+    見ずに無条件で`truncated`を返していたため、接続待ち中にcancel()が呼ばれても
+    最終的にtimeoutが先に発火すると状態が"truncated"へ巻き戻っていたことの
+    回帰テスト。
+    """
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        timeout_sec=1,
+    )
+    handle = await provider.start(task)
+
+    class _HangingConnectThenCancelClient(_FakeClient):
+        async def connect(self, prompt: str) -> None:
+            # connect()進行中にcancel()が飛んできた状況を模す。この時点では
+            # run.clientがまだ設定されておらずinterrupt()も効かないため、
+            # 実際にはdeadlineのtimeoutを待つしかない。
+            await provider.cancel(handle.run_id)
+            await asyncio.sleep(10)
+
+    _HangingConnectThenCancelClient.calls = []
+    monkeypatch.setattr(
+        claude_provider, "ClaudeSDKClient", _HangingConnectThenCancelClient
+    )
+
+    events = [e async for e in provider.stream(handle.run_id)]
+
+    assert events[-1].kind == "cancelled"
+    result = await provider.result(handle.run_id)
+    assert result.status == "cancelled"
+
+
+async def test_cancel_after_connect_error_skips_retry_and_cancels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE): 接続エラー後のリトライ判定が`cancel_requested`を
+
+    見ておらず、キャンセル後も再試行し得たことの回帰テスト。
+    """
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test", project_id="proj-1", prompt="do it", workspace=tmp_path
+    )
+    handle = await provider.start(task)
+
+    class _CancelThenErrorClient(_FakeClient):
+        async def connect(self, prompt: str) -> None:
+            await provider.cancel(handle.run_id)
+            raise ClaudeSDKError("connection refused")
+
+    _CancelThenErrorClient.calls = []
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", _CancelThenErrorClient)
+
+    events = [e async for e in provider.stream(handle.run_id)]
+
+    assert events[-1].kind == "cancelled"
+    assert len(_CancelThenErrorClient.calls) == 1
+    result = await provider.result(handle.run_id)
+    assert result.status == "cancelled"
+
+
 async def test_unsupported_mcp_server_kind_raises_before_registering_run(
     tmp_path: Path,
 ) -> None:
