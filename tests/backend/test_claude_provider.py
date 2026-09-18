@@ -623,3 +623,58 @@ async def test_in_process_mcp_server_is_wired_into_options(
     assert options.allowed_tools == ["mcp__score__score_query"]
     assert options.cwd == str(tmp_path)
     assert options.permission_mode == "bypassPermissions"
+
+
+async def test_config_run_id_is_adopted_as_provider_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#50の実機テストで発見した回帰テスト: `McpServerSpec.config["run_id"]`が
+
+    指定された場合、`start()`はそれをprovider内部run_id自体として採用する。
+    これが無いと、`score_apply_ops`が書き込むstaging先
+    (`score/staging/{run_id}.json`)が呼び出し元(#49 `AgentRunManager`)の
+    公開run_idと食い違い、`AgentRunService.accept`/`reject`/`get_diff`(#46)が
+    ステージング済みの変更を永遠に見つけられなくなる。
+    """
+    fake_cls = _make_fake_client_cls(_HAPPY_SCRIPT)
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        mcp_servers=[
+            McpServerSpec(
+                name="score",
+                kind="in_process",
+                config={"workspace_dir": str(tmp_path), "run_id": "run_public_abc123"},
+            )
+        ],
+    )
+    handle = await provider.start(task)
+    assert handle.run_id == "run_public_abc123"
+
+
+async def test_without_config_run_id_provider_generates_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_cls = _make_fake_client_cls(_HAPPY_SCRIPT)
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        mcp_servers=[
+            McpServerSpec(
+                name="score", kind="in_process", config={"workspace_dir": str(tmp_path)}
+            )
+        ],
+    )
+    handle = await provider.start(task)
+    assert handle.run_id
+    assert handle.run_id != "run_public_abc123"

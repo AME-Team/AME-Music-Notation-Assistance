@@ -58,14 +58,30 @@ class MissingPromptError(ValueError):
     """`task_type="investigate"`(自然言語の自由指示、§8.7)に`prompt`が無い場合。"""
 
 
-def _compose_prompt(task_def: TaskDefinition, user_prompt: str | None) -> str:
-    """タスク定義の目的 + ユーザー指示を、実際にプロバイダへ渡す1本のpromptへ組み立てる。
+def _compose_prompt(
+    task_def: TaskDefinition, user_prompt: str | None, scope: dict[str, Any] | None
+) -> str:
+    """タスク定義の目的/手順 + スコープ + ユーザー指示を、実際にプロバイダへ渡す
 
-    タスクごとの詳細なプロンプトテンプレートの作り込みは#50の担当(§8.7の表は
-    「目的」レベルの記述のみで、実文面までは規定していない)。#49ではエージェントが
-    実際にツール呼び出しを開始できる最小限の文面を組み立てる。
+    1本のpromptへ組み立てる。
+
+    `task_def.prompt_template`が設定されているタスク(#50時点では
+    consistency-pass/voicing-fixのみ)はその具体的な作業手順を埋め込む。
+    それ以外のタスクは目的レベルの記述のみの汎用プロンプトにフォールバックする
+    (各タスクの実プロンプトの作り込みはM6でこのフィールドを埋めていく想定)。
+
+    `scope`はTASK.mdにも書き込まれる(`create_workspace`側)が、
+    エージェントが最初に読むメインプロンプト自体にも埋め込む — 特に
+    voicing-fixは「指定範囲」が作業の前提そのものであり、TASK.mdを読むまで
+    スコープを知らない状態を作らない。
     """
     lines = [f"タスク種別: {task_def.id}", f"目的: {task_def.purpose}", ""]
+    if scope:
+        lines.append(f"対象スコープ: {scope}")
+        lines.append("")
+    if task_def.prompt_template:
+        lines.append(task_def.prompt_template)
+        lines.append("")
     if user_prompt:
         lines.append("追加指示:")
         lines.append(user_prompt)
@@ -128,7 +144,11 @@ class AgentRunManager:
         run_id = ids.new_id("run")
         self.agent_run_service.create_run(run_id=run_id, project_id=project_id)
 
-        composed_prompt = _compose_prompt(task_def, prompt)
+        composed_prompt = _compose_prompt(task_def, prompt, scope)
+        # 呼び出し元が明示的に`budget`を渡した場合はそれを優先し、無指定なら
+        # タスク定義の既定予算(#50: consistency-pass/voicing-fixはturns_maxと
+        # 同様にタスクごとに調整済み)を使う。
+        max_tokens_budget = budget if budget is not None else task_def.max_tokens_budget
         asyncio.create_task(  # noqa: RUF006 - fire-and-forget(JobManager._run_jobと同じ設計)
             self._drive_run(
                 run_id,
@@ -140,7 +160,8 @@ class AgentRunManager:
                 allowed_tools=list(task_def.allowed_tools),
                 model=model,
                 max_turns=task_def.turns_max,
-                max_tokens_budget=budget,
+                max_tokens_budget=max_tokens_budget,
+                timeout_sec=task_def.timeout_sec,
             )
         )
         return run_id
@@ -158,6 +179,7 @@ class AgentRunManager:
         model: str | None,
         max_turns: int,
         max_tokens_budget: int | None,
+        timeout_sec: int | None,
     ) -> None:
         # JobManager._run_jobと同じレース対策(#13): create_run()がこのコルーチンを
         # asyncio.create_taskでスケジュールした直後にcancel_run()が呼ばれると、
@@ -188,6 +210,11 @@ class AgentRunManager:
         task_kwargs: dict[str, Any] = {}
         if max_tokens_budget is not None:
             task_kwargs["max_tokens_budget"] = max_tokens_budget
+        # #50: timeout_secもタスク定義の既定値(未指定ならAgentTask自身の
+        # 既定900秒)で上書きする。#49時点ではmax_turns/max_tokens_budgetのみが
+        # AgentTaskへ届いており、timeout_secはどのタスクでも常に既定値固定だった。
+        if timeout_sec is not None:
+            task_kwargs["timeout_sec"] = timeout_sec
         task = AgentTask(
             task_type=task_type,
             project_id=project_id,
@@ -197,7 +224,13 @@ class AgentRunManager:
                 McpServerSpec(
                     name="score",
                     kind="in_process",
-                    config={"workspace_dir": str(self.workspace_dir)},
+                    # `run_id`(公開run_id)を明示的に渡す(#50で発見した実バグの
+                    # 修正): ClaudeAgentProviderがこれを自身のprovider内部run_id
+                    # として採用しないと、score_apply_opsが書き込むstaging先
+                    # (score/staging/{run_id}.json)がこのManagerの公開run_idと
+                    # 食い違い、AgentRunService.accept/reject/get_diff(#46)が
+                    # 永遠にステージング済みの変更を見つけられなくなる。
+                    config={"workspace_dir": str(self.workspace_dir), "run_id": run_id},
                 )
             ],
             allowed_tools=allowed_tools,
