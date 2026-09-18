@@ -569,6 +569,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agent/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Task Definitions
+         * @description #49: 標準タスク定義一覧(設計書§8.7)。
+         */
+        get: operations["list_task_definitions_api_agent_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Run Status
+         * @description #49: run状態 `{status, turns, usage, staged_ops_count}`(§11.3)。
+         */
+        get: operations["get_agent_run_status_api_agent_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Run Events
+         * @description #49: `event: agent`形式のSSEでAgentEventを逐次配信する(§11.4、FR-20)。
+         *
+         *     `job_events`(`api/jobs.py`)と全く同じ枠組み(`manager.subscribe`が返す
+         *     `asyncio.Queue`を`None`終端まで読み続ける、切断は`CancelledError`で検知して
+         *     購読解除する)。**`async def`にする**(`job_events`と同様): `manager.subscribe`/
+         *     `_publish`は`asyncio.Queue`と`self._subscribers`/`self._event_history`を
+         *     イベントループのスレッドからのみ触れる前提で書かれている — 素の`def`だと
+         *     FastAPIがスレッドプールで実行するため、`_drive_run`(イベントループ側)と
+         *     別スレッドから同じ`asyncio.Queue`/dictへ同時にアクセスすることになり、
+         *     `asyncio.Queue`はスレッドセーフではないためデータ破損やハングを起こしうる。
+         */
+        get: operations["agent_run_events_api_agent_runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent/runs/{run_id}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Audit Log
+         * @description #49: 監査ログ(`audit.jsonl`)を返す(FR-22)。
+         */
+        get: operations["get_agent_audit_log_api_agent_runs__run_id__audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agent/runs/{run_id}/diff": {
         parameters: {
             query?: never;
@@ -640,9 +729,11 @@ export interface paths {
         put?: never;
         /**
          * Cancel Agent Run
-         * @description #46: エージェント run をキャンセルし、ステージング領域を破棄する(FR-23)。
+         * @description #46/#49: エージェント run をキャンセルする(FR-23)。
          *
-         *     重要: current.json は1バイトも変更されない。
+         *     ライブなprovider runがあればベストエフォートで中断を要求し(#49)、
+         *     その後ステージング領域を破棄する(#46)。重要: current.json は1バイトも
+         *     変更されない。
          */
         post: operations["cancel_agent_run_api_agent_runs__run_id__cancel_post"];
         delete?: never;
@@ -665,6 +756,30 @@ export interface paths {
         get: operations["get_agent_report_api_agent_runs__run_id__report_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/agent/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Agent Run
+         * @description #49: L2エージェントrunを起動する(§11.3)。202を返した時点ではまだ`running`
+         *
+         *     (`AgentRunManager.create_run`はワークスペース構築・`AgentProvider.start()`を
+         *     バックグラウンドタスクで行う、`POST /api/projects/{id}/stages/{stage}/run`と
+         *     同じ非同期起動パターン)。
+         */
+        post: operations["create_agent_run_api_projects__project_id__agent_runs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -698,6 +813,54 @@ export interface components {
             run_id: string;
             /** Content */
             content: string;
+        };
+        /** AgentRunStatusResponse */
+        AgentRunStatusResponse: {
+            /** Run Id */
+            run_id: string;
+            /** Project Id */
+            project_id: string;
+            /** Status */
+            status: string;
+            /** Turns */
+            turns: number;
+            /** Usage */
+            usage?: {
+                [key: string]: number;
+            } | null;
+            /** Staged Ops Count */
+            staged_ops_count: number;
+            /** Error */
+            error?: string | null;
+        };
+        /**
+         * AuditEntry
+         * @description ツール呼び出し1件分の監査記録(引数・決定・結果・所要時間)。
+         */
+        AuditEntry: {
+            /** Ts */
+            ts?: string;
+            /** Run Id */
+            run_id: string;
+            /** Project Id */
+            project_id: string;
+            /** Tool Name */
+            tool_name: string;
+            /** Tool Input */
+            tool_input: {
+                [key: string]: unknown;
+            };
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "allow" | "deny";
+            /** Reason */
+            reason?: string | null;
+            /** Result */
+            result?: unknown | null;
+            /** Elapsed Ms */
+            elapsed_ms?: number | null;
         };
         /** BeatEntry */
         BeatEntry: {
@@ -758,6 +921,39 @@ export interface components {
             status: "cancelled";
             /** Project Id */
             project_id: string;
+        };
+        /**
+         * CreateAgentRunRequest
+         * @description §11.3: `POST /api/projects/{id}/agent/runs`のリクエストボディ。
+         *
+         *     `task_type="investigate"`(自然言語の自由指示、§8.7)の場合は`prompt`が必須
+         *     (`AgentRunManager.create_run`が検証する)。それ以外のタスクでは、
+         *     `prompt`はタスク定義の目的文へ追加される補足指示として扱われる(#50が
+         *     各タスクの実プロンプトを作り込むまでの暫定挙動)。
+         */
+        CreateAgentRunRequest: {
+            /** Task Type */
+            task_type: string;
+            /** Scope */
+            scope?: {
+                [key: string]: unknown;
+            } | null;
+            /** Prompt */
+            prompt?: string | null;
+            /**
+             * Provider
+             * @default claude
+             */
+            provider: string;
+            /** Model */
+            model?: string | null;
+            /** Budget */
+            budget?: number | null;
+        };
+        /** CreateAgentRunResponse */
+        CreateAgentRunResponse: {
+            /** Run Id */
+            run_id: string;
         };
         /** DiffResponse */
         DiffResponse: {
@@ -1152,6 +1348,19 @@ export interface components {
         StemListResponse: {
             /** Names */
             names: string[];
+        };
+        /** TaskDefinitionResponse */
+        TaskDefinitionResponse: {
+            /** Id */
+            id: string;
+            /** Purpose */
+            purpose: string;
+            /** Tools */
+            tools: string[];
+            /** Turns Min */
+            turns_min: number | null;
+            /** Turns Max */
+            turns_max: number;
         };
         /** TempoMapEntry */
         TempoMapEntry: {
@@ -2125,6 +2334,119 @@ export interface operations {
             };
         };
     };
+    list_task_definitions_api_agent_tasks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDefinitionResponse"][];
+                };
+            };
+        };
+    };
+    get_agent_run_status_api_agent_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_run_events_api_agent_runs__run_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_audit_log_api_agent_runs__run_id__audit_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_agent_diff_api_agent_runs__run_id__diff_get: {
         parameters: {
             query?: never;
@@ -2275,6 +2597,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_agent_run_api_projects__project_id__agent_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAgentRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateAgentRunResponse"];
                 };
             };
             /** @description Validation Error */

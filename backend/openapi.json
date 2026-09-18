@@ -1342,6 +1342,163 @@
         }
       }
     },
+    "/api/agent/tasks": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "List Task Definitions",
+        "description": "#49: 標準タスク定義一覧(設計書§8.7)。",
+        "operationId": "list_task_definitions_api_agent_tasks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TaskDefinitionResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Task Definitions Api Agent Tasks Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent Run Status",
+        "description": "#49: run状態 `{status, turns, usage, staged_ops_count}`(§11.3)。",
+        "operationId": "get_agent_run_status_api_agent_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/runs/{run_id}/events": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Agent Run Events",
+        "description": "#49: `event: agent`形式のSSEでAgentEventを逐次配信する(§11.4、FR-20)。\n\n`job_events`(`api/jobs.py`)と全く同じ枠組み(`manager.subscribe`が返す\n`asyncio.Queue`を`None`終端まで読み続ける、切断は`CancelledError`で検知して\n購読解除する)。**`async def`にする**(`job_events`と同様): `manager.subscribe`/\n`_publish`は`asyncio.Queue`と`self._subscribers`/`self._event_history`を\nイベントループのスレッドからのみ触れる前提で書かれている — 素の`def`だと\nFastAPIがスレッドプールで実行するため、`_drive_run`(イベントループ側)と\n別スレッドから同じ`asyncio.Queue`/dictへ同時にアクセスすることになり、\n`asyncio.Queue`はスレッドセーフではないためデータ破損やハングを起こしうる。",
+        "operationId": "agent_run_events_api_agent_runs__run_id__events_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/runs/{run_id}/audit": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Get Agent Audit Log",
+        "description": "#49: 監査ログ(`audit.jsonl`)を返す(FR-22)。",
+        "operationId": "get_agent_audit_log_api_agent_runs__run_id__audit_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEntry"
+                  },
+                  "title": "Response Get Agent Audit Log Api Agent Runs  Run Id  Audit Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/agent/runs/{run_id}/diff": {
       "get": {
         "tags": [
@@ -1497,7 +1654,7 @@
           "agent"
         ],
         "summary": "Cancel Agent Run",
-        "description": "#46: エージェント run をキャンセルし、ステージング領域を破棄する(FR-23)。\n\n重要: current.json は1バイトも変更されない。",
+        "description": "#46/#49: エージェント run をキャンセルする(FR-23)。\n\nライブなprovider runがあればベストエフォートで中断を要求し(#49)、\nその後ステージング領域を破棄する(#46)。重要: current.json は1バイトも\n変更されない。",
         "operationId": "cancel_agent_run_api_agent_runs__run_id__cancel_post",
         "parameters": [
           {
@@ -1560,6 +1717,59 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AgentReportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/agent/runs": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Create Agent Run",
+        "description": "#49: L2エージェントrunを起動する(§11.3)。202を返した時点ではまだ`running`\n\n(`AgentRunManager.create_run`はワークスペース構築・`AgentProvider.start()`を\nバックグラウンドタスクで行う、`POST /api/projects/{id}/stages/{stage}/run`と\n同じ非同期起動パターン)。",
+        "operationId": "create_agent_run_api_projects__project_id__agent_runs_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgentRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateAgentRunResponse"
                 }
               }
             }
@@ -1641,6 +1851,138 @@
           "content"
         ],
         "title": "AgentReportResponse"
+      },
+      "AgentRunStatusResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "turns": {
+            "type": "integer",
+            "title": "Turns"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage"
+          },
+          "staged_ops_count": {
+            "type": "integer",
+            "title": "Staged Ops Count"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "project_id",
+          "status",
+          "turns",
+          "staged_ops_count"
+        ],
+        "title": "AgentRunStatusResponse"
+      },
+      "AuditEntry": {
+        "properties": {
+          "ts": {
+            "type": "string",
+            "title": "Ts"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "tool_name": {
+            "type": "string",
+            "title": "Tool Name"
+          },
+          "tool_input": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Tool Input"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ],
+            "title": "Decision"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "result": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "elapsed_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "project_id",
+          "tool_name",
+          "tool_input",
+          "decision"
+        ],
+        "title": "AuditEntry",
+        "description": "ツール呼び出し1件分の監査記録(引数・決定・結果・所要時間)。"
       },
       "BeatEntry": {
         "properties": {
@@ -1796,6 +2138,83 @@
           "project_id"
         ],
         "title": "CancelResponse"
+      },
+      "CreateAgentRunRequest": {
+        "properties": {
+          "task_type": {
+            "type": "string",
+            "title": "Task Type"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "default": "claude"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_type"
+        ],
+        "title": "CreateAgentRunRequest",
+        "description": "§11.3: `POST /api/projects/{id}/agent/runs`のリクエストボディ。\n\n`task_type=\"investigate\"`(自然言語の自由指示、§8.7)の場合は`prompt`が必須\n(`AgentRunManager.create_run`が検証する)。それ以外のタスクでは、\n`prompt`はタスク定義の目的文へ追加される補足指示として扱われる(#50が\n各タスクの実プロンプトを作り込むまでの暫定挙動)。"
+      },
+      "CreateAgentRunResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id"
+        ],
+        "title": "CreateAgentRunResponse"
       },
       "DiffResponse": {
         "properties": {
@@ -2704,6 +3123,49 @@
         ],
         "title": "StemListResponse",
         "description": "#21 TrackList: 分離済みステム名の一覧(拡張子抜き、順不同)。"
+      },
+      "TaskDefinitionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "purpose": {
+            "type": "string",
+            "title": "Purpose"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "turns_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turns Min"
+          },
+          "turns_max": {
+            "type": "integer",
+            "title": "Turns Max"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "purpose",
+          "tools",
+          "turns_min",
+          "turns_max"
+        ],
+        "title": "TaskDefinitionResponse"
       },
       "TempoMapEntry": {
         "properties": {
