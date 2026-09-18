@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -289,6 +291,114 @@ async def test_cli_not_found_error_fails_without_retrying(
 
     result = await provider.result(handle.run_id)
     assert result.status == "failed"
+
+
+async def test_connect_hang_respects_timeout_and_truncates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE): `client.connect()`自体は`asyncio.wait_for`の
+
+    対象外で、CLIのハンドシェイクがハングすると`timeout_sec`を無視して
+    無期限に`running`のままになっていたことの回帰テスト。
+    """
+
+    class _HangingConnectClient(_FakeClient):
+        async def connect(self, prompt: str) -> None:
+            await asyncio.sleep(10)
+
+    _HangingConnectClient.calls = []
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", _HangingConnectClient)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        timeout_sec=1,
+    )
+    handle = await provider.start(task)
+    events = [e async for e in provider.stream(handle.run_id)]
+
+    assert events[-1].kind == "done"
+    result = await provider.result(handle.run_id)
+    assert result.status == "truncated"
+
+
+async def test_backoff_respects_deadline_instead_of_sleeping_full_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE): 接続リトライのバックオフ待機がdeadlineを
+
+    考慮しておらず、timeout_secが小さい場合に合計待機がtimeout_secを
+    超過しうったことの回帰テスト。バックオフ基準値をdeadlineより意図的に
+    大きくし、deadline側でclampされなければこのテスト自体が10秒以上かかる
+    ことで検出する。
+    """
+    fake_cls = _make_fake_client_cls(connect_error=ClaudeSDKError("connection refused"))
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+    monkeypatch.setattr(claude_provider, "_BACKOFF_BASE_SEC", 10.0)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        timeout_sec=1,
+    )
+    handle = await provider.start(task)
+
+    started = time.monotonic()
+    events = [e async for e in provider.stream(handle.run_id)]
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5.0, (
+        "backoff sleep should be clamped to the remaining deadline, not 10s"
+    )
+    assert events[-1].kind == "done"
+    result = await provider.result(handle.run_id)
+    assert result.status == "truncated"
+
+
+async def test_unexpected_non_sdk_exception_marks_run_failed_not_stuck_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE): `_drive`が`ClaudeSDKError`以外の予期しない
+
+    例外で中断した場合、`stream()`の`finally`が`run.status`を更新しないまま
+    部分イベント列だけをキャッシュしており、runが`running`に固定され
+    `result()`も完了状態を返せなくなっていたことの回帰テスト。
+    """
+
+    class _BrokenIterator:
+        def __aiter__(self) -> _BrokenIterator:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise RuntimeError("boom: unexpected bug in message parsing")
+
+    class _BrokenClient(_FakeClient):
+        def receive_response(self) -> AsyncIterator[Any]:
+            return _BrokenIterator()
+
+    _BrokenClient.calls = []
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", _BrokenClient)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test", project_id="proj-1", prompt="do it", workspace=tmp_path
+    )
+    handle = await provider.start(task)
+    events = [e async for e in provider.stream(handle.run_id)]
+
+    assert events[-1].kind == "error"
+    result = await provider.result(handle.run_id)
+    assert result.status == "failed"
+
+    # runがキャッシュ済みなので、再度stream()しても実SDKを叩かず同じ結果を再生する。
+    events_again = [e async for e in provider.stream(handle.run_id)]
+    assert events_again[-1].kind == "error"
 
 
 async def test_unsupported_mcp_server_kind_raises_before_registering_run(

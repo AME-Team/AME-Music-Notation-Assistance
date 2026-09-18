@@ -30,9 +30,12 @@ PreToolUseフックのみに委ねる(フックの deny 決定は`permission_mod
 一切触れない(本プロバイダは`score/staging/{run_id}.json`しか書かないため、
 これは構造的に保証される)。
 
-タイムアウト(`AgentTask.timeout_sec`)は各メッセージ受信の`await`ごとに
-`asyncio.wait_for`で強制する(単一の長時間ハングにも対応するため、ループ全体を
-1回`wait_for`で包むのではなくメッセージ単位で包む)。トークン予算
+タイムアウト(`AgentTask.timeout_sec`)は`connect()`(CLIサブプロセスの
+ハンドシェイク)および各メッセージ受信の`await`ごとに`asyncio.wait_for`で
+強制する(単一の長時間ハングにも対応するため、ループ全体を1回`wait_for`で
+包むのではなく個々の`await`単位で包む)。接続リトライのバックオフ待機も
+残りdeadline以下に切り詰め、deadline切れなら試行回数の上限未到達でも
+リトライせず`truncated`で終了する。トークン予算
 (`AgentTask.max_tokens_budget`)は直近の`AssistantMessage.usage`(その時点までの
 累積コンテキスト使用量)で`policy.exceeds_token_budget`を毎ターン判定する。
 両者とも超過時はrunを`truncated`にする(§8.9「それまでにステージングされた
@@ -291,7 +294,20 @@ class ClaudeAgentProvider:
         try:
             async for event in self._drive(run, options, events, _next_seq, tool_names, deadline):
                 yield event
-        finally:
+        except Exception as exc:
+            # `_drive`が`ClaudeSDKError`以外の予期しない例外で中断した場合の
+            # 最終防波堤(Gate2レビュー指摘): これが無いとrunが終端イベント無しで
+            # status="running"のまま固定され、result()も"running"を返し続け、
+            # 以後のstream()呼び出しも(`run.events`がNoneのままなので)毎回
+            # `_drive`を再実行してしまう。`asyncio.CancelledError`/`GeneratorExit`
+            # は`BaseException`でありここでは意図的に捕捉しない(非同期
+            # ジェネレータの協調的キャンセル/`aclose()`プロトコルを素通しする
+            # 必要があるため、業務上の失敗として扱うとその意味論を壊す)。
+            event = self._terminal_event(run, _next_seq(), status="failed", error=str(exc))
+            events.append(event)
+            run.events = events
+            yield event
+        else:
             run.events = events
 
     async def _drive(
@@ -308,9 +324,29 @@ class ClaudeAgentProvider:
 
         while True:
             attempt += 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                event = self._terminal_event(run, next_seq(), status="truncated", error=None)
+                events.append(event)
+                yield event
+                return
+
             client = ClaudeSDKClient(options)
             try:
-                await client.connect(run.task.prompt)
+                # `connect()`自体(CLIサブプロセスのハンドシェイク)も
+                # `timeout_sec`の対象に含める(Gate2レビュー指摘): 以前は
+                # メッセージ受信の`wait_for`にしか掛かっておらず、CLI起動が
+                # ハングするとrunが`timeout_sec`を無視して無期限に
+                # `running`のままになっていた。
+                try:
+                    await asyncio.wait_for(
+                        client.connect(run.task.prompt), timeout=max(remaining, 0.01)
+                    )
+                except TimeoutError:
+                    event = self._terminal_event(run, next_seq(), status="truncated", error=None)
+                    events.append(event)
+                    yield event
+                    return
                 run.client = client
 
                 messages = client.receive_response()
@@ -395,12 +431,25 @@ class ClaudeAgentProvider:
                     events.append(event)
                     yield event
                     return
-                if attempt >= _MAX_CONNECT_ATTEMPTS:
-                    event = self._terminal_event(run, next_seq(), status="failed", error=str(exc))
+                # バックオフ後の再試行がdeadlineを超過しないことを確認する
+                # (Gate2レビュー指摘): 以前はbackoffの秒数がdeadlineを
+                # 考慮しておらず、timeout_secが小さい場合に合計待機が
+                # timeout_secを超過しうった。残り時間切れなら試行回数の
+                # 上限未到達でもリトライせず"truncated"で終了する。
+                remaining = deadline - time.monotonic()
+                if attempt >= _MAX_CONNECT_ATTEMPTS or remaining <= 0:
+                    if remaining <= 0:
+                        event = self._terminal_event(
+                            run, next_seq(), status="truncated", error=None
+                        )
+                    else:
+                        event = self._terminal_event(
+                            run, next_seq(), status="failed", error=str(exc)
+                        )
                     events.append(event)
                     yield event
                     return
-                await asyncio.sleep(_BACKOFF_BASE_SEC * (2 ** (attempt - 1)))
+                await asyncio.sleep(min(_BACKOFF_BASE_SEC * (2 ** (attempt - 1)), remaining))
                 continue
             finally:
                 run.client = None
