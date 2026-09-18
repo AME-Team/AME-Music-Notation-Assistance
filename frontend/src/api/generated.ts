@@ -622,7 +622,12 @@ export interface paths {
          *
          *     `job_events`(`api/jobs.py`)と全く同じ枠組み(`manager.subscribe`が返す
          *     `asyncio.Queue`を`None`終端まで読み続ける、切断は`CancelledError`で検知して
-         *     購読解除する)。
+         *     購読解除する)。**`async def`にする**(`job_events`と同様): `manager.subscribe`/
+         *     `_publish`は`asyncio.Queue`と`self._subscribers`/`self._event_history`を
+         *     イベントループのスレッドからのみ触れる前提で書かれている — 素の`def`だと
+         *     FastAPIがスレッドプールで実行するため、`_drive_run`(イベントループ側)と
+         *     別スレッドから同じ`asyncio.Queue`/dictへ同時にアクセスすることになり、
+         *     `asyncio.Queue`はスレッドセーフではないためデータ破損やハングを起こしうる。
          */
         get: operations["agent_run_events_api_agent_runs__run_id__events_get"];
         put?: never;

@@ -1417,7 +1417,7 @@
           "agent"
         ],
         "summary": "Agent Run Events",
-        "description": "#49: `event: agent`形式のSSEでAgentEventを逐次配信する(§11.4、FR-20)。\n\n`job_events`(`api/jobs.py`)と全く同じ枠組み(`manager.subscribe`が返す\n`asyncio.Queue`を`None`終端まで読み続ける、切断は`CancelledError`で検知して\n購読解除する)。",
+        "description": "#49: `event: agent`形式のSSEでAgentEventを逐次配信する(§11.4、FR-20)。\n\n`job_events`(`api/jobs.py`)と全く同じ枠組み(`manager.subscribe`が返す\n`asyncio.Queue`を`None`終端まで読み続ける、切断は`CancelledError`で検知して\n購読解除する)。**`async def`にする**(`job_events`と同様): `manager.subscribe`/\n`_publish`は`asyncio.Queue`と`self._subscribers`/`self._event_history`を\nイベントループのスレッドからのみ触れる前提で書かれている — 素の`def`だと\nFastAPIがスレッドプールで実行するため、`_drive_run`(イベントループ側)と\n別スレッドから同じ`asyncio.Queue`/dictへ同時にアクセスすることになり、\n`asyncio.Queue`はスレッドセーフではないためデータ破損やハングを起こしうる。",
         "operationId": "agent_run_events_api_agent_runs__run_id__events_get",
         "parameters": [
           {
