@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.agent.provider import AgentRunNotFoundError
+from app.agent.providers.claude import ClaudeAgentProvider
 from app.agent.providers.dummy import DummyAgentProvider
 from app.agent.workspace import ReportNotFoundError
 from app.api.deps import get_agent_run_service
@@ -26,6 +27,7 @@ from app.api.diff import (
     ScopeRequest,
     to_diff_response,
 )
+from app.pipeline.refine.l1_client import is_claude_cli_available
 from app.services.agent_run_service import (
     AgentRunService,
     ScoreConcurrentModificationError,
@@ -59,8 +61,16 @@ def list_providers() -> list[AgentProviderInfo]:
     2巡目 LOW: 文字列リテラルをここへ直書きすると`DummyAgentProvider.name`との
     二重管理になり、片方だけ更新漏れが起こりうる)。`dummy`は外部依存が無く
     常に実行可能なため`configured=True`固定。
+
+    `claude`の`configured`は`is_claude_cli_available()`(#104、`l1_client.py`)を
+    再利用する: `claude-agent-sdk`は同梱のClaude Code CLIをサブプロセスとして
+    起動するため、L1と同じ「CLIがPATH上にあり認証済みか」がL2でも同じ実行可否の
+    条件になる(APIキーの有無ではなくCLI認証状態で判定する、#104と同じ思想)。
     """
-    return [AgentProviderInfo(name=DummyAgentProvider.name, configured=True)]
+    return [
+        AgentProviderInfo(name=DummyAgentProvider.name, configured=True),
+        AgentProviderInfo(name=ClaudeAgentProvider.name, configured=is_claude_cli_available()),
+    ]
 
 
 @router.get("/runs/{run_id}/diff", response_model=DiffResponse)

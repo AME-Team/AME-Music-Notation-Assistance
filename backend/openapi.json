@@ -1322,7 +1322,7 @@
           "agent"
         ],
         "summary": "List Providers",
-        "description": "#48/#52でプロバイダが増えるたびにここへ追記する想定の静的レジストリ。\n\n`name`は各プロバイダクラスの`name`属性を参照する(#42 Gate2レビュー指摘・\n2巡目 LOW: 文字列リテラルをここへ直書きすると`DummyAgentProvider.name`との\n二重管理になり、片方だけ更新漏れが起こりうる)。`dummy`は外部依存が無く\n常に実行可能なため`configured=True`固定。",
+        "description": "#48/#52でプロバイダが増えるたびにここへ追記する想定の静的レジストリ。\n\n`name`は各プロバイダクラスの`name`属性を参照する(#42 Gate2レビュー指摘・\n2巡目 LOW: 文字列リテラルをここへ直書きすると`DummyAgentProvider.name`との\n二重管理になり、片方だけ更新漏れが起こりうる)。`dummy`は外部依存が無く\n常に実行可能なため`configured=True`固定。\n\n`claude`の`configured`は`is_claude_cli_available()`(#104、`l1_client.py`)を\n再利用する: `claude-agent-sdk`は同梱のClaude Code CLIをサブプロセスとして\n起動するため、L1と同じ「CLIがPATH上にあり認証済みか」がL2でも同じ実行可否の\n条件になる(APIキーの有無ではなくCLI認証状態で判定する、#104と同じ思想)。",
         "operationId": "list_providers_api_agent_providers_get",
         "responses": {
           "200": {
