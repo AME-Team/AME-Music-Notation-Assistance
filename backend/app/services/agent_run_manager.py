@@ -235,16 +235,25 @@ class AgentRunManager:
                 await self._publish(run_id, public_event)
 
             result = await provider.result(handle.run_id)
-            self.agent_run_service.update_status(
-                run_id,
-                result.status,
-                turns=result.turns,
-                usage=dataclasses.asdict(result.usage),
-                staged_ops_count=result.staged_ops_count,
-                error=result.error,
-            )
+            # #49 Gate2レビュー指摘(MIDDLE): provider.cancel()はcontextlib.suppressで
+            # 包まれたベストエフォートであり、実際には中断できないprovider(例:
+            # cancelを無視してstreamを最後まで流す実装)では、ここでstream完了後の
+            # result.status="completed"がcancel_run()側で既に確定させた"cancelled"を
+            # 上書きしてしまう。_cancel_requestedはfinallyまで残るため、この時点で
+            # 一度でもcancel_run()が呼ばれていればAgentRunService.cancel()が確定させた
+            # 状態を優先し、ここでは上書きしない。
+            if run_id not in self._cancel_requested:
+                self.agent_run_service.update_status(
+                    run_id,
+                    result.status,
+                    turns=result.turns,
+                    usage=dataclasses.asdict(result.usage),
+                    staged_ops_count=result.staged_ops_count,
+                    error=result.error,
+                )
         except Exception as exc:  # noqa: BLE001 - stream()/result()の想定外例外もfailed化する
-            self.agent_run_service.update_status(run_id, "failed", error=str(exc))
+            if run_id not in self._cancel_requested:
+                self.agent_run_service.update_status(run_id, "failed", error=str(exc))
         finally:
             self._cancel_requested.discard(run_id)
             await self._close_subscribers(run_id)

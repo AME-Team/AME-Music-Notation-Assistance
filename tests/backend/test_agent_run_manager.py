@@ -295,3 +295,41 @@ async def test_subscribe_mid_run_receives_earlier_events_via_history_replay(
     provider.resume.set()
     second = await queue.get()
     assert second.kind == "done"
+
+
+async def test_cancel_during_stream_is_not_overwritten_by_late_completion(
+    tmp_path: Path,
+) -> None:
+    """Gate2レビュー指摘(MIDDLE)の回帰テスト: provider.cancel()は
+
+    `contextlib.suppress`で包まれたベストエフォートであり、実際には
+    中断できないprovider(このテストの`_PausableProvider.cancel()`はno-op)
+    では、streamが自然に最後まで進んで`result()`がstatus="completed"を
+    返しても、既に`cancel_run()`が確定させた"cancelled"を上書きしては
+    ならないことを確認する。
+    """
+    _create_project(tmp_path, "proj_1")
+    provider = _PausableProvider()
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"pausable": provider},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1", task_type="refine-part", provider_name="pausable"
+    )
+
+    while not manager._event_history.get(run_id):
+        await asyncio.sleep(0)
+
+    await manager.cancel_run(run_id)
+    run = manager.agent_run_service.get_run(run_id)
+    assert run["status"] == "cancelled"
+
+    # providerはcancelを無視してstreamを最後まで進める。
+    provider.resume.set()
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+    run_after = manager.agent_run_service.get_run(run_id)
+    assert run_after["status"] == "cancelled"
