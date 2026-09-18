@@ -554,6 +554,11 @@ export interface paths {
          *     2巡目 LOW: 文字列リテラルをここへ直書きすると`DummyAgentProvider.name`との
          *     二重管理になり、片方だけ更新漏れが起こりうる)。`dummy`は外部依存が無く
          *     常に実行可能なため`configured=True`固定。
+         *
+         *     `claude`の`configured`は`is_claude_cli_available()`(#104、`l1_client.py`)を
+         *     再利用する: `claude-agent-sdk`は同梱のClaude Code CLIをサブプロセスとして
+         *     起動するため、L1と同じ「CLIがPATH上にあり認証済みか」がL2でも同じ実行可否の
+         *     条件になる(APIキーの有無ではなくCLI認証状態で判定する、#104と同じ思想)。
          */
         get: operations["list_providers_api_agent_providers_get"];
         put?: never;
