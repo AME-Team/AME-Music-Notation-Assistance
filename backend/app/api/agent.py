@@ -221,7 +221,7 @@ def get_agent_run_status(
 
 
 @router.get("/runs/{run_id}/events")
-def agent_run_events(
+async def agent_run_events(
     run_id: str,
     manager: AgentRunManager = Depends(get_agent_run_manager),
 ) -> StreamingResponse:
@@ -229,12 +229,17 @@ def agent_run_events(
 
     `job_events`(`api/jobs.py`)と全く同じ枠組み(`manager.subscribe`が返す
     `asyncio.Queue`を`None`終端まで読み続ける、切断は`CancelledError`で検知して
-    購読解除する)。
+    購読解除する)。**`async def`にする**(`job_events`と同様): `manager.subscribe`/
+    `_publish`は`asyncio.Queue`と`self._subscribers`/`self._event_history`を
+    イベントループのスレッドからのみ触れる前提で書かれている — 素の`def`だと
+    FastAPIがスレッドプールで実行するため、`_drive_run`(イベントループ側)と
+    別スレッドから同じ`asyncio.Queue`/dictへ同時にアクセスすることになり、
+    `asyncio.Queue`はスレッドセーフではないためデータ破損やハングを起こしうる。
     """
     try:
         queue = manager.subscribe(run_id)
     except AgentRunNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="agent run not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     async def event_stream() -> AsyncIterator[str]:
         try:

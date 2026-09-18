@@ -60,10 +60,29 @@ _lock = threading.Lock()
 # 同時に扱えるようにする(テストが workspace ごとに tmp_path を使うため必須)。
 _connections: dict[str, sqlite3.Connection] = {}
 
+# #49 Gate2レビュー指摘(HIGH): `CREATE TABLE IF NOT EXISTS`は既存テーブルの
+# 列を追加しない。#46/#47時点で作成済みの`agent_runs`(turns/usage_json/
+# staged_ops_count/error列が無い)を持つ既存ワークスペースでは、そのまま
+# `get_run`/`update_status`/`list_runs`を呼ぶと`no such column`で失敗する。
+# ここに簡易マイグレーション(不足列の検出→`ALTER TABLE ADD COLUMN`)を持つ。
+_AGENT_RUNS_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("turns", "INTEGER NOT NULL DEFAULT 0"),
+    ("usage_json", "TEXT"),
+    ("staged_ops_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("error", "TEXT"),
+)
+
 
 def _row_factory(cursor: sqlite3.Cursor, row: tuple) -> dict:
     fields = [col[0] for col in cursor.description]
     return dict(zip(fields, row, strict=True))
+
+
+def _migrate_agent_runs_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)").fetchall()}
+    for name, ddl in _AGENT_RUNS_MIGRATION_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {ddl}")  # noqa: S608
 
 
 def get_connection(db_path: Path) -> sqlite3.Connection:
@@ -81,6 +100,7 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript(_SCHEMA)
+            _migrate_agent_runs_columns(conn)
             conn.execute(
                 "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),

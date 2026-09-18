@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
-from app.agent.provider import AgentRunNotFoundError
+from app.agent.provider import (
+    AgentEvent,
+    AgentResult,
+    AgentRunHandle,
+    AgentRunNotFoundError,
+    AgentTask,
+    TokenUsage,
+)
 from app.agent.providers.dummy import DummyAgentProvider
 from app.domain.score import Part, ScoreIR, SourceInfo, TimeSignatureEntry
 from app.infra import db, storage
@@ -174,3 +182,116 @@ async def test_cancel_after_completion_raises_value_error(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="already completed"):
         await manager.cancel_run(run_id)
+
+
+class _BrokenStreamProvider:
+    """`stream()`が(接続確立後に)予期しない例外を送出するフェイクプロバイダ。
+
+    Gate2レビュー指摘(MIDDLE)の回帰テスト用: 以前は`_drive_run`がこの例外を
+    捕捉しておらず、runが`running`のまま固定され`_close_subscribers`も
+    呼ばれずSSE購読者がハングしていた。
+    """
+
+    name = "broken"
+
+    async def start(self, task: AgentTask) -> AgentRunHandle:
+        return AgentRunHandle(run_id="internal-broken")
+
+    async def stream(self, run_id: str) -> AsyncIterator[AgentEvent]:
+        raise RuntimeError("boom: unexpected provider bug")
+        yield  # pragma: no cover - unreachable, keeps this an async generator function
+
+    async def cancel(self, run_id: str) -> None:
+        pass
+
+    async def result(self, run_id: str) -> AgentResult:
+        raise AssertionError(
+            "result() should not be called since stream() raised first"
+        )
+
+
+async def test_provider_stream_exception_marks_run_failed_and_closes_subscribers(
+    tmp_path: Path,
+) -> None:
+    _create_project(tmp_path, "proj_1")
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"broken": _BrokenStreamProvider()},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1", task_type="refine-part", provider_name="broken"
+    )
+
+    # subscribe()はまだバックグラウンドタスクが走っていない時点で呼ぶため、
+    # ライブqueueに登録される。ここでNoneが届く(=ハングしない)ことを確認する。
+    queue = manager.subscribe(run_id)
+    event = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert event is None
+
+    run = manager.agent_run_service.get_run(run_id)
+    assert run["status"] == "failed"
+    assert run["error"] is not None
+    assert "boom" in run["error"]
+
+
+class _PausableProvider:
+    """`resume`イベントがセットされるまで2件目を保留するフェイクプロバイダ。
+
+    Gate2レビュー指摘(MIDDLE)の回帰テスト用: 実行中のrunに対する`subscribe()`が
+    既に発行済みのイベント(1件目)を取りこぼさないことを確認するために使う。
+    """
+
+    name = "pausable"
+
+    def __init__(self) -> None:
+        self.resume = asyncio.Event()
+
+    async def start(self, task: AgentTask) -> AgentRunHandle:
+        return AgentRunHandle(run_id="internal-pausable")
+
+    async def stream(self, run_id: str) -> AsyncIterator[AgentEvent]:
+        yield AgentEvent(
+            run_id=run_id, seq=0, kind="thinking", payload={"text": "step1"}
+        )
+        await self.resume.wait()
+        yield AgentEvent(run_id=run_id, seq=1, kind="done", payload={})
+
+    async def cancel(self, run_id: str) -> None:
+        pass
+
+    async def result(self, run_id: str) -> AgentResult:
+        return AgentResult(
+            run_id=run_id, status="completed", turns=1, usage=TokenUsage()
+        )
+
+
+async def test_subscribe_mid_run_receives_earlier_events_via_history_replay(
+    tmp_path: Path,
+) -> None:
+    _create_project(tmp_path, "proj_1")
+    provider = _PausableProvider()
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"pausable": provider},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1", task_type="refine-part", provider_name="pausable"
+    )
+
+    # 最初のイベント(thinking)が発行されるまでバックグラウンドタスクを進める。
+    while not manager._event_history.get(run_id):
+        await asyncio.sleep(0)
+
+    # 実行中(2件目はまだ)のこの時点で購読する。
+    run = manager.agent_run_service.get_run(run_id)
+    assert run["status"] == "running"
+    queue = manager.subscribe(run_id)
+
+    first = await queue.get()
+    assert first.kind == "thinking"
+
+    provider.resume.set()
+    second = await queue.get()
+    assert second.kind == "done"
