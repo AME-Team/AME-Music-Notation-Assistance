@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +84,7 @@ class _FakeClient:
             raise self.connect_error
         self.prompt = prompt
 
-    def receive_response(self) -> _FakeMessageIterator:
+    def receive_response(self) -> AsyncIterator[Any]:
         return _FakeMessageIterator(self.script)
 
     async def interrupt(self) -> None:
@@ -302,11 +302,12 @@ async def test_unsupported_mcp_server_kind_raises_before_registering_run(
         workspace=tmp_path,
         mcp_servers=[McpServerSpec(name="score", kind="stdio", config={})],
     )
-    handle = await provider.start(task)
 
     with pytest.raises(claude_provider.ClaudeAgentProviderError):
-        async for _ in provider.stream(handle.run_id):
-            pass
+        await provider.start(task)
+
+    # runは登録されていないため、他の操作は全てAgentRunNotFoundErrorになる。
+    assert provider._runs == {}
 
 
 async def test_in_process_mcp_server_missing_workspace_dir_raises(
@@ -320,11 +321,100 @@ async def test_in_process_mcp_server_missing_workspace_dir_raises(
         workspace=tmp_path,
         mcp_servers=[McpServerSpec(name="score", kind="in_process", config={})],
     )
-    handle = await provider.start(task)
 
     with pytest.raises(claude_provider.ClaudeAgentProviderError):
-        async for _ in provider.stream(handle.run_id):
-            pass
+        await provider.start(task)
+
+    assert provider._runs == {}
+
+
+async def test_budget_exceeded_result_message_maps_to_truncated_not_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE): 予算超過による`interrupt()`後にSDKが返す
+
+    `terminal_reason="aborted_streaming"`は、ユーザーによる`cancel()`と同じ値
+    だが§8.9上は別の状態(truncated)でなければならない。
+    """
+    script = [
+        AssistantMessage(
+            content=[TextBlock(text="thinking")],
+            model="claude-opus-5",
+            usage={"input_tokens": 200_000, "output_tokens": 200_000},
+        ),
+        ResultMessage(
+            subtype="aborted",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s1",
+            terminal_reason="aborted_streaming",
+        ),
+    ]
+    monkeypatch.setattr(
+        claude_provider, "ClaudeSDKClient", _make_fake_client_cls(script)
+    )
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        max_tokens_budget=1000,
+    )
+    handle = await provider.start(task)
+    events = [e async for e in provider.stream(handle.run_id)]
+
+    assert events[-1].kind == "done"
+    result = await provider.result(handle.run_id)
+    assert result.status == "truncated"
+
+
+async def test_cancel_mid_stream_without_result_message_maps_to_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE): `ResultMessage`を受け取らず`StopAsyncIteration`で
+
+    終了した場合のフォールバックが、`cancel_requested`を無視して無条件に
+    completedへ上書きしていた(状態機械の巻き戻り)ことの回帰テスト。
+    """
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test", project_id="proj-1", prompt="do it", workspace=tmp_path
+    )
+    handle = await provider.start(task)
+
+    class _CancelMidStreamIterator:
+        def __init__(self) -> None:
+            self._sent_first = False
+
+        def __aiter__(self) -> _CancelMidStreamIterator:
+            return self
+
+        async def __anext__(self) -> Any:
+            if not self._sent_first:
+                self._sent_first = True
+                return AssistantMessage(content=[TextBlock(text="working")], model="m")
+            # 2件目の取得を試みたタイミングで、SDKクライアント側から
+            # cancel()が飛んできた状況を模す(cancel()はrun.clientが
+            # 設定済みならinterrupt()もベストエフォートで呼ぶ)。
+            await provider.cancel(handle.run_id)
+            raise StopAsyncIteration
+
+    class _CancelMidStreamClient(_FakeClient):
+        def receive_response(self) -> AsyncIterator[Any]:
+            return _CancelMidStreamIterator()
+
+    _CancelMidStreamClient.calls = []
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", _CancelMidStreamClient)
+
+    events = [e async for e in provider.stream(handle.run_id)]
+
+    assert events[-1].kind == "cancelled"
+    result = await provider.result(handle.run_id)
+    assert result.status == "cancelled"
 
 
 async def test_in_process_mcp_server_is_wired_into_options(

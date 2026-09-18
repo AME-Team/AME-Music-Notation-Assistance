@@ -95,8 +95,11 @@ _SCORE_APPLY_OPS_TOOL_NAME: Final = f"mcp__{SERVER_NAME}__score_apply_ops"
 class ClaudeAgentProviderError(RuntimeError):
     """タスク構成エラー(未対応の`mcp_servers.kind`、`config`欠落等)。
 
-    `AgentRunNotFoundError`とは異なりrun開始前の構成不備なので、`start()`から
-    直接送出する(runは登録しない)。
+    `AgentRunNotFoundError`とは異なりrun開始前の構成不備なので、`start()`が
+    `_build_mcp_servers()`を(runを`self._runs`へ登録する前に)呼んで直接
+    送出する。Gate2レビュー指摘: 以前は`stream()`内(=run登録後)で構成を
+    組み立てており、構成不備時にrunが`status="running"`のまま残る状態機械の
+    穴があった。
     """
 
 
@@ -104,9 +107,15 @@ class ClaudeAgentProviderError(RuntimeError):
 class _RunState:
     run_id: str
     task: AgentTask
+    mcp_servers: dict[str, Any]
     status: AgentRunStatus = "running"
     events: list[AgentEvent] | None = None
     cancel_requested: bool = False
+    # トークン予算超過による`client.interrupt()`起因の中断であることを示す
+    # (Gate2レビュー指摘: これが無いと、超過後にSDKが返す`aborted_streaming`/
+    # `aborted_tools`をユーザーによる`cancel_requested`と区別できず、
+    # §8.9が定める`truncated`ではなく`cancelled`になってしまっていた)。
+    budget_exceeded: bool = False
     client: ClaudeSDKClient | None = None
     turns: int = 0
     usage: TokenUsage = field(default_factory=TokenUsage)
@@ -202,9 +211,18 @@ def _extract_tool_result_payload(content: str | list[dict[str, Any]] | None) -> 
 
 
 def _map_terminal_status(
-    result: ResultMessage, *, cancel_requested: bool
+    result: ResultMessage, *, cancel_requested: bool, budget_exceeded: bool
 ) -> tuple[AgentRunStatus, str | None]:
-    if cancel_requested or result.terminal_reason in ("aborted_streaming", "aborted_tools"):
+    # `cancel_requested`/`budget_exceeded`を`terminal_reason`の判定より先に見る
+    # (Gate2レビュー指摘): どちらも`client.interrupt()`を呼ぶため、SDKが返す
+    # `terminal_reason`は両ケースとも同じ"aborted_streaming"/"aborted_tools"に
+    # なりうる。予算超過は§8.9が定める"truncated"であり、ユーザーキャンセルの
+    # "cancelled"とは区別しなければならない。
+    if cancel_requested:
+        return "cancelled", None
+    if budget_exceeded:
+        return "truncated", None
+    if result.terminal_reason in ("aborted_streaming", "aborted_tools"):
         return "cancelled", None
     if result.is_error:
         error = result.result or "; ".join(result.errors or []) or f"subtype={result.subtype}"
@@ -232,7 +250,10 @@ class ClaudeAgentProvider:
 
     async def start(self, task: AgentTask) -> AgentRunHandle:
         run_id = str(uuid.uuid4())
-        self._runs[run_id] = _RunState(run_id=run_id, task=task)
+        # `mcp_servers`の構成不備(`ClaudeAgentProviderError`)はrunを
+        # `self._runs`へ登録する前に検出する(モジュールdocstring参照)。
+        mcp_servers = _build_mcp_servers(task, run_id)
+        self._runs[run_id] = _RunState(run_id=run_id, task=task, mcp_servers=mcp_servers)
         return AgentRunHandle(run_id=run_id)
 
     async def stream(self, run_id: str) -> AsyncIterator[AgentEvent]:
@@ -263,8 +284,7 @@ class ClaudeAgentProvider:
             yield event
             return
 
-        mcp_servers = _build_mcp_servers(run.task, run_id)
-        options = _build_options(run.task, run_id, mcp_servers)
+        options = _build_options(run.task, run_id, run.mcp_servers)
         tool_names: dict[str, str] = {}
         deadline = time.monotonic() + run.task.timeout_sec
 
@@ -326,7 +346,9 @@ class ClaudeAgentProvider:
 
                     if isinstance(message, ResultMessage):
                         status, error = _map_terminal_status(
-                            message, cancel_requested=run.cancel_requested
+                            message,
+                            cancel_requested=run.cancel_requested,
+                            budget_exceeded=run.budget_exceeded,
                         )
                         run.turns = message.num_turns
                         run.usage = _token_usage_from_dict(message.usage)
@@ -348,11 +370,22 @@ class ClaudeAgentProvider:
                             latest_usage.get("output_tokens") or 0
                         )
                         if exceeds_token_budget(total, run.task.max_tokens_budget):
+                            run.budget_exceeded = True
                             with contextlib.suppress(Exception):
                                 await client.interrupt()
 
-                # StopAsyncIteration without a ResultMessage: treat as completed.
-                event = self._terminal_event(run, next_seq(), status="completed", error=None)
+                # StopAsyncIteration without a ResultMessage: `interrupt()`だけでは
+                # 必ずしもResultMessageを生まないため、cancel/予算超過の状態を
+                # 確認してから既定の"completed"にフォールバックする(Gate2レビュー
+                # 指摘: 以前は無条件にcompletedとしており、キャンセル済み/
+                # truncated済みのrunがここで状態を巻き戻されていた)。
+                if run.cancel_requested:
+                    fallback_status: AgentRunStatus = "cancelled"
+                elif run.budget_exceeded:
+                    fallback_status = "truncated"
+                else:
+                    fallback_status = "completed"
+                event = self._terminal_event(run, next_seq(), status=fallback_status, error=None)
                 events.append(event)
                 yield event
                 return
