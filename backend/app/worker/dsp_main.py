@@ -33,6 +33,11 @@ from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_
 from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
 from app.pipeline.transcribe.bass import BASS_ALGO_VERSION, run_bass_transcription
+from app.pipeline.transcribe.guitar import (
+    GUITAR_ALGO_VERSION,
+    OTHER_ALGO_VERSION,
+    run_guitar_transcription,
+)
 from app.pipeline.transcribe.piano import run_piano_transcription
 from app.pipeline.transcribe.vocals import VOCALS_ALGO_VERSION, run_vocals_transcription
 from app.services import score_undo, stage_invalidation
@@ -377,6 +382,8 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path, params: di
 PIANO_STEM_NAME = "piano"
 BASS_STEM_NAME = "bass"
 VOCALS_STEM_NAME = "vocals"
+GUITAR_STEM_NAME = "guitar"
+OTHER_STEM_NAME = "other"
 
 
 def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
@@ -408,6 +415,8 @@ def _transcribe_artifacts_exist(
     require_piano: bool = False,
     require_bass: bool = False,
     require_vocals: bool = False,
+    require_guitar: bool = False,
+    require_other: bool = False,
     meta: dict[str, Any] | None = None,
 ) -> bool:
     """`should_skip_stage` の `artifacts_exist` 用(#24/#54/#55, #124/#125 レビュー指摘):
@@ -433,6 +442,8 @@ def _transcribe_artifacts_exist(
         (PIANO_STEM_NAME, require_piano),
         (BASS_STEM_NAME, require_bass),
         (VOCALS_STEM_NAME, require_vocals),
+        (GUITAR_STEM_NAME, require_guitar),
+        (OTHER_STEM_NAME, require_other),
     ]:
         if not required:
             continue
@@ -457,19 +468,26 @@ def _piano_part_has_notes(workspace_dir: Path, project_id: str) -> bool:
 
 
 def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
-    """#24/#54: Stage 3 ピアノ・ベースAMT。
+    """#24/#54/#55/#56: Stage 3 ピアノ・ベース・ボーカル・ギター/その他AMT。
 
-    §6: 入力(piano/bassステム)+使用ライブラリのバージョンが不変ならスキップする
-    (separate/beatステージと対称)。**この段階では一切ノートを捨てない**:
-    `run_piano_transcription` / `run_bass_transcription` が返す `ghost_candidate` フラグはそのまま
-    `Note.flags` へ引き継ぎ、削除はしない。
+    §6: 入力(piano/bass/vocals/guitar/otherステム)+使用ライブラリのバージョンが
+    不変ならスキップする(separate/beatステージと対称)。**この段階では一切
+    ノートを捨てない**: `run_piano_transcription` / `run_bass_transcription` /
+    `run_vocals_transcription` / `run_guitar_transcription` が返す
+    `ghost_candidate` フラグはそのまま `Note.flags` へ引き継ぎ、削除はしない。
+
+    guitar/other(#56, Basic Pitch ONNX)は既知の制約として、bass/vocalsと同様に
+    `voice=1`/`staff=1`固定で書き込む。ポリフォニックな和音を含みうるため、
+    ピアノのような`quantize`ステージでの声部/五線の再割り当て
+    (`refine_baseline`)は本PRの対象外(#60の実曲検証で問題が見つかり次第、
+    個別Issueとして起票する運用方針、設計書§16 M6完了条件を参照)。
     """
     emit(
         {
             "job_id": job_id,
             "stage": "transcribe",
             "progress": 0.0,
-            "message": "transcribing piano/bass",
+            "message": "transcribing piano/bass/vocals/guitar/other",
         }
     )
 
@@ -478,17 +496,22 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     piano_stem_path = stems_dir_path / f"{PIANO_STEM_NAME}.wav"
     bass_stem_path = stems_dir_path / f"{BASS_STEM_NAME}.wav"
     vocals_stem_path = stems_dir_path / f"{VOCALS_STEM_NAME}.wav"
+    guitar_stem_path = stems_dir_path / f"{GUITAR_STEM_NAME}.wav"
+    other_stem_path = stems_dir_path / f"{OTHER_STEM_NAME}.wav"
 
     has_piano = piano_stem_path.exists()
     has_bass = bass_stem_path.exists()
     has_vocals = vocals_stem_path.exists()
+    has_guitar = guitar_stem_path.exists()
+    has_other = other_stem_path.exists()
 
-    if not has_piano and not has_bass and not has_vocals:
-        # #16: pianoステムは `standard` プリセット(htdemucs_6s)でのみ生成される。
+    if not has_piano and not has_bass and not has_vocals and not has_guitar and not has_other:
+        # #16: これらのステムは `standard` プリセット(htdemucs_6s)でのみ生成される。
         # `fast`/`high_quality`(4ステム)には無い(M2時点の既知の制約)。
         raise ValueError(
-            "piano stem not found; run the separate stage with the 'standard' preset "
-            "first (only htdemucs_6s produces a dedicated piano stem)"
+            "no transcribable stems (piano/bass/vocals/guitar/other) found; "
+            "run the separate stage with the 'standard' preset first "
+            "(only htdemucs_6s produces these dedicated stems)"
         )
 
     hash_dict: dict[str, Any] = {}
@@ -522,6 +545,26 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         provider_versions["torchcrepe"] = torchcrepe_version
         provider_versions["torch"] = torch_version
 
+    if has_guitar or has_other:
+        # guitar/otherは同一の`run_guitar_transcription`(onnxruntime)を共有するため、
+        # バージョン取得は1回に集約する(#56レビュー指摘: 個別に呼ぶと同じ
+        # `provider_versions["onnxruntime"]`キーへの重複書き込みになっていた)。
+        onnxruntime_version = _package_version("onnxruntime")
+
+    if has_guitar:
+        hash_dict["guitar_audio_fingerprint"] = audio_fingerprint(guitar_stem_path)
+        hash_dict["guitar_algo_version"] = GUITAR_ALGO_VERSION
+        hash_dict["guitar_onnxruntime_version"] = onnxruntime_version
+        provider_versions["guitar_transcription"] = GUITAR_ALGO_VERSION
+        provider_versions["onnxruntime"] = onnxruntime_version
+
+    if has_other:
+        hash_dict["other_audio_fingerprint"] = audio_fingerprint(other_stem_path)
+        hash_dict["other_algo_version"] = OTHER_ALGO_VERSION
+        hash_dict["other_onnxruntime_version"] = onnxruntime_version
+        provider_versions["other_transcription"] = OTHER_ALGO_VERSION
+        provider_versions["onnxruntime"] = onnxruntime_version
+
     hash_payload = json.dumps(hash_dict, sort_keys=True)
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
 
@@ -536,6 +579,8 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
             require_piano=has_piano,
             require_bass=has_bass,
             require_vocals=has_vocals,
+            require_guitar=has_guitar,
+            require_other=has_other,
             meta=_meta,
         ),
     ):
@@ -570,6 +615,8 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     piano_pedals_count = 0
     new_bass_notes_count = 0
     new_vocals_notes_count = 0
+    new_guitar_notes_count = 0
+    new_other_notes_count = 0
 
     if has_piano:
         result = run_piano_transcription(piano_stem_path)
@@ -669,6 +716,74 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         vocals_part.pedals = []
         new_vocals_notes_count = len(new_vocals_notes)
 
+    if has_guitar:
+        result_guitar = run_guitar_transcription(guitar_stem_path)
+        guitar_part = score.find_part(GUITAR_STEM_NAME)
+        if guitar_part is None:
+            guitar_part = Part(
+                id=GUITAR_STEM_NAME,
+                name="Guitar",
+                midi_program=25,  # Acoustic Guitar (steel), §6 Stage3表の代表値
+                stem_source=f"stems/{GUITAR_STEM_NAME}.wav",
+                staves=1,
+                clefs=[Clef(staff=1, sign="G", line=2)],
+            )
+            score.parts.append(guitar_part)
+
+        preserved_guitar_notes = [n for n in guitar_part.notes if n.provenance != "amt"]
+        new_guitar_notes = [
+            Note(
+                id=score.allocate_note_id(),
+                onset_sec=event.onset_sec,
+                duration_sec=event.duration_sec,
+                midi=event.midi,
+                velocity=event.velocity,
+                voice=1,
+                staff=1,
+                provenance="amt",
+                flags=["ghost_candidate"] if event.ghost_candidate else [],
+            )
+            for event in result_guitar.notes
+        ]
+        guitar_part.notes = preserved_guitar_notes + new_guitar_notes
+        guitar_part.pedals = []
+        new_guitar_notes_count = len(new_guitar_notes)
+
+    if has_other:
+        result_other = run_guitar_transcription(other_stem_path)
+        other_part = score.find_part(OTHER_STEM_NAME)
+        if other_part is None:
+            other_part = Part(
+                id=OTHER_STEM_NAME,
+                name="Other",
+                # demucsの残余ステム(楽器種不明)のため、再生用の暫定値として
+                # Acoustic Grand Pianoを既定にする(記譜自体には影響しない、#56)。
+                midi_program=0,
+                stem_source=f"stems/{OTHER_STEM_NAME}.wav",
+                staves=1,
+                clefs=[Clef(staff=1, sign="G", line=2)],
+            )
+            score.parts.append(other_part)
+
+        preserved_other_notes = [n for n in other_part.notes if n.provenance != "amt"]
+        new_other_notes = [
+            Note(
+                id=score.allocate_note_id(),
+                onset_sec=event.onset_sec,
+                duration_sec=event.duration_sec,
+                midi=event.midi,
+                velocity=event.velocity,
+                voice=1,
+                staff=1,
+                provenance="amt",
+                flags=["ghost_candidate"] if event.ghost_candidate else [],
+            )
+            for event in result_other.notes
+        ]
+        other_part.notes = preserved_other_notes + new_other_notes
+        other_part.pedals = []
+        new_other_notes_count = len(new_other_notes)
+
     raw_now = storage.read_json(score_path) if score_path.exists() else None
     if raw_now != raw_before:
         emit(
@@ -697,6 +812,12 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     if has_vocals:
         v = score.find_part(VOCALS_STEM_NAME)
         note_counts[VOCALS_STEM_NAME] = len(v.notes) if v else 0
+    if has_guitar:
+        g = score.find_part(GUITAR_STEM_NAME)
+        note_counts[GUITAR_STEM_NAME] = len(g.notes) if g else 0
+    if has_other:
+        o = score.find_part(OTHER_STEM_NAME)
+        note_counts[OTHER_STEM_NAME] = len(o.notes) if o else 0
 
     storage.write_stage_metadata(
         workspace_dir,
@@ -706,7 +827,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         provider_versions=provider_versions,
         extra={"note_counts": note_counts},
     )
-    if not has_bass and not has_vocals:
+    if not has_bass and not has_vocals and not has_guitar and not has_other:
         msg = f"{new_piano_notes_count} notes, {piano_pedals_count} pedal events"
     else:
         parts_summary = []
@@ -716,7 +837,17 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
             parts_summary.append(f"{new_bass_notes_count} bass")
         if has_vocals:
             parts_summary.append(f"{new_vocals_notes_count} vocals")
-        total_notes = new_piano_notes_count + new_bass_notes_count + new_vocals_notes_count
+        if has_guitar:
+            parts_summary.append(f"{new_guitar_notes_count} guitar")
+        if has_other:
+            parts_summary.append(f"{new_other_notes_count} other")
+        total_notes = (
+            new_piano_notes_count
+            + new_bass_notes_count
+            + new_vocals_notes_count
+            + new_guitar_notes_count
+            + new_other_notes_count
+        )
         msg = f"{total_notes} notes ({', '.join(parts_summary)}), {piano_pedals_count} pedal events"
     emit(
         {

@@ -84,50 +84,23 @@ def ensure_checkpoint(path: Path = DEFAULT_CHECKPOINT_PATH) -> Path:
     Windowsに存在しない`wget`呼び出しへ進んでしまう。ダウンロード完了後にサイズを
     検証してから`path`へ置き換える。
 
-    プロセス間ロック(#24-M2レビュー2巡目の指摘): 複数プロセス(例: 並行ジョブ)が
-    初回ダウンロードに同時に入ると、ロック無しでは~165MBを重複してダウンロード
-    してしまう。`filelock`でダウンロード区間を直列化し、ロック取得後にもう一度
-    存在チェックすることで、待っていた他プロセスは再ダウンロードせずそのまま
-    再利用できるようにする。ロック保持中は自分以外がダウンロード中であることは
-    あり得ないため、残存する`.part`(前回いずれかのプロセスがSIGKILL等で
-    クラッシュした際の孤立ファイル)もここで安全に掃除できる。
+    ダウンロード基盤(httpx取得+FileLockによるプロセス間直列化+アトミック配置)は
+    `guitar.ensure_onnx_model`と共通のため`_model_fetch.fetch_verified_model`
+    に集約されている(#56レビュー指摘: 独立に再実装すると修正が片方にしか
+    反映されず不整合になるリスクがあったため)。検証方式(サイズ閾値)のみ
+    ここで注入する。
     """
-    if path.exists() and path.stat().st_size >= MIN_CHECKPOINT_SIZE_BYTES:
-        return path
+    from app.pipeline.transcribe._model_fetch import fetch_verified_model
 
-    import os
+    def _is_valid(p: Path) -> bool:
+        return p.stat().st_size >= MIN_CHECKPOINT_SIZE_BYTES
 
-    import httpx
-    from filelock import FileLock
+    def _describe_failure(p: Path) -> str:
+        return f"{p.stat().st_size} bytes, expected >= {MIN_CHECKPOINT_SIZE_BYTES}"
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.parent / f"{path.name}.lock"
-    with FileLock(str(lock_path)):
-        # ロック取得を待っている間に、先行プロセスがダウンロードを完了させている
-        # 場合がある。その場合は自分は何もダウンロードせず再利用する。
-        if path.exists() and path.stat().st_size >= MIN_CHECKPOINT_SIZE_BYTES:
-            return path
-
-        for stale_part in path.parent.glob(f"{path.name}.*.part"):
-            stale_part.unlink(missing_ok=True)
-
-        tmp_path = path.parent / f"{path.name}.{os.getpid()}.part"
-        try:
-            with httpx.stream("GET", _CHECKPOINT_URL, follow_redirects=True, timeout=300.0) as resp:
-                resp.raise_for_status()
-                with tmp_path.open("wb") as f:
-                    for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
-                        f.write(chunk)
-            downloaded_size = tmp_path.stat().st_size
-            if downloaded_size < MIN_CHECKPOINT_SIZE_BYTES:
-                raise RuntimeError(
-                    f"downloaded checkpoint is too small ({downloaded_size} bytes, "
-                    f"expected >= {MIN_CHECKPOINT_SIZE_BYTES}); download likely truncated"
-                )
-            tmp_path.replace(path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-    return path
+    return fetch_verified_model(
+        _CHECKPOINT_URL, path, is_valid=_is_valid, describe_failure=_describe_failure
+    )
 
 
 # `PianoTranscription.transcribe(audio, midi_path)` の呼び出し面。テストで

@@ -641,7 +641,7 @@ def test_transcribe_stage_raises_if_piano_stem_missing(tmp_path: Path) -> None:
     project_id = "proj_test"
     _setup_project_with_valid_source(tmp_path, project_id)
 
-    with pytest.raises(ValueError, match="piano stem not found"):
+    with pytest.raises(ValueError, match="no transcribable stems"):
         dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
 
 
@@ -2075,3 +2075,157 @@ def test_transcribe_stage_skips_when_stem_originally_had_zero_notes(
     # 2回目実行: vocals が 0 ノートであっても手動削除ではないため正常にスキップされること
     dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
     assert call_counts == {"piano": 1, "vocals": 1}
+
+
+def test_transcribe_stage_with_guitar_stem_creates_guitar_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#56: guitar.wav がある場合、Score IR に Guitar パート(staves=1, G clef, midi_program=25)が生成されること。"""
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+    from app.pipeline.transcribe.guitar import GUITAR_ALGO_VERSION
+
+    project_id = "proj_guitar"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "guitar.wav")
+
+    fake_guitar_notes = [
+        NoteEvent(
+            onset_sec=0.0, duration_sec=0.5, midi=52, velocity=80, ghost_candidate=False
+        ),
+        NoteEvent(
+            onset_sec=0.0, duration_sec=0.5, midi=57, velocity=85, ghost_candidate=False
+        ),
+    ]
+
+    monkeypatch.setattr(
+        dsp_main,
+        "run_guitar_transcription",
+        lambda _p, **_k: TranscriptionResult(notes=fake_guitar_notes, pedals=[]),
+    )
+
+    dsp_main.run_transcribe_stage("job_guitar", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score_optional(project_id)
+    assert score is not None
+    guitar_part = score.find_part("guitar")
+    assert guitar_part is not None
+    assert guitar_part.name == "Guitar"
+    assert guitar_part.midi_program == 25
+    assert guitar_part.staves == 1
+    assert len(guitar_part.clefs) == 1
+    assert guitar_part.clefs[0].sign == "G"
+    assert guitar_part.clefs[0].line == 2
+    assert len(guitar_part.notes) == 2
+    assert {n.midi for n in guitar_part.notes} == {52, 57}
+    assert all(n.voice == 1 and n.staff == 1 for n in guitar_part.notes)
+
+    meta_path = storage.stage_metadata_path(tmp_path, project_id, "transcribe")
+    meta = storage.read_json(meta_path)
+    assert meta["versions"].get("guitar_transcription") == GUITAR_ALGO_VERSION
+    assert "onnxruntime" in meta["versions"]
+
+
+def test_transcribe_stage_with_other_stem_creates_other_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#56: other.wav がある場合、Score IR に Other パート(staves=1, G clef)が生成されること。"""
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_other"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "other.wav")
+
+    fake_other_notes = [
+        NoteEvent(
+            onset_sec=0.0, duration_sec=0.5, midi=64, velocity=75, ghost_candidate=False
+        ),
+    ]
+
+    monkeypatch.setattr(
+        dsp_main,
+        "run_guitar_transcription",
+        lambda _p, **_k: TranscriptionResult(notes=fake_other_notes, pedals=[]),
+    )
+
+    dsp_main.run_transcribe_stage("job_other", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score_optional(project_id)
+    assert score is not None
+    other_part = score.find_part("other")
+    assert other_part is not None
+    assert other_part.name == "Other"
+    assert other_part.staves == 1
+    assert len(other_part.notes) == 1
+    assert other_part.notes[0].midi == 64
+
+
+def test_transcribe_stage_with_all_five_stems(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Piano + Bass + Vocals + Guitar + Other の5ステム同時採譜およびサマリーメッセージの検証(#56)。"""
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_five_stems"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    for stem in ["piano", "bass", "vocals", "guitar", "other"]:
+        _write_stub_wav(storage.stems_dir(tmp_path, project_id) / f"{stem}.wav")
+
+    def _single_note(midi: int):
+        def _mock(_p, **_k):
+            return TranscriptionResult(
+                notes=[
+                    NoteEvent(
+                        onset_sec=0.0,
+                        duration_sec=0.5,
+                        midi=midi,
+                        velocity=70,
+                        ghost_candidate=False,
+                    )
+                ],
+                pedals=[],
+            )
+
+        return _mock
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _single_note(60))
+    monkeypatch.setattr(dsp_main, "run_bass_transcription", _single_note(36))
+    monkeypatch.setattr(dsp_main, "run_vocals_transcription", _single_note(69))
+
+    # guitar/otherは同じ`run_guitar_transcription`関数を共有するため、渡された
+    # ステムパスから呼び出し元を判別してノートを出し分ける(#56)。
+    def _mock_guitar_or_other(stem_path: Path, **_k):
+        midi = 52 if "guitar" in stem_path.name else 64
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=midi,
+                    velocity=70,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_guitar_transcription", _mock_guitar_or_other)
+
+    emitted = []
+    monkeypatch.setattr(dsp_main, "emit", lambda p: emitted.append(p))
+
+    dsp_main.run_transcribe_stage("job_all5", project_id, tmp_path, {})
+
+    service = ScoreService(workspace_dir=tmp_path)
+    score = service.read_score(project_id)
+    guitar_part = score.find_part("guitar")
+    other_part = score.find_part("other")
+    assert score.find_part("piano") is not None
+    assert score.find_part("bass") is not None
+    assert score.find_part("vocals") is not None
+    assert guitar_part is not None
+    assert other_part is not None
+    assert guitar_part.notes[0].midi == 52
+    assert other_part.notes[0].midi == 64
+
+    final_msg = emitted[-1]["message"]
+    assert "5 notes (1 piano, 1 bass, 1 vocals, 1 guitar, 1 other)" in final_msg
