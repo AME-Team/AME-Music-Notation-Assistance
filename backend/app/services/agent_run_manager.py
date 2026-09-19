@@ -27,7 +27,9 @@ from typing import Any, Final
 
 from app.agent.provider import (
     AgentEvent,
+    AgentEventKind,
     AgentProvider,
+    AgentRunStatus,
     AgentTask,
     McpServerSpec,
 )
@@ -198,6 +200,7 @@ class AgentRunManager:
         if run_id in self._cancel_requested:
             self._cancel_requested.discard(run_id)
             self.agent_run_service.update_status(run_id, "cancelled")
+            await self._publish_terminal_event(run_id, status="cancelled", error=None)
             await self._close_subscribers(run_id)
             self._forget_oldest_terminal_runs_if_over_capacity(run_id)
             return
@@ -214,6 +217,7 @@ class AgentRunManager:
             )
         except Exception as exc:  # noqa: BLE001 - ワークスペース構築失敗はrunをfailedにする
             self.agent_run_service.update_status(run_id, "failed", error=str(exc))
+            await self._publish_terminal_event(run_id, status="failed", error=str(exc))
             await self._close_subscribers(run_id)
             self._forget_oldest_terminal_runs_if_over_capacity(run_id)
             return
@@ -254,6 +258,7 @@ class AgentRunManager:
             handle = await provider.start(task)
         except Exception as exc:  # noqa: BLE001 - provider.start()自体の失敗もfailed化する
             self.agent_run_service.update_status(run_id, "failed", error=str(exc))
+            await self._publish_terminal_event(run_id, status="failed", error=str(exc))
             await self._close_subscribers(run_id)
             self._forget_oldest_terminal_runs_if_over_capacity(run_id)
             return
@@ -298,6 +303,7 @@ class AgentRunManager:
         except Exception as exc:  # noqa: BLE001 - stream()/result()の想定外例外もfailed化する
             if run_id not in self._cancel_requested:
                 self.agent_run_service.update_status(run_id, "failed", error=str(exc))
+                await self._publish_terminal_event(run_id, status="failed", error=str(exc))
         finally:
             self._cancel_requested.discard(run_id)
             await self._close_subscribers(run_id)
@@ -363,6 +369,31 @@ class AgentRunManager:
         self._event_history.setdefault(run_id, []).append(event)
         for queue in self._subscribers.get(run_id, []):
             await queue.put(event)
+
+    async def _publish_terminal_event(
+        self, run_id: str, *, status: AgentRunStatus, error: str | None
+    ) -> None:
+        """`provider.stream()`を一度も駆動できずrunが終端化する経路向けの合成終端イベント。
+
+        `_drive_run`のワークスペース構築/`provider.start()`失敗、開始前キャンセル、
+        `stream()`/`result()`の想定外例外はいずれも`update_status()`のみでrunを
+        終端化しており、`AgentEvent`を一切publishしていなかった。この場合
+        `_event_history`が空のまま`subscribe()`が呼ばれると、`run["status"]`が
+        既に終端のため即座に`None`センチネルが積まれ、SSE購読者は0イベントで
+        接続が閉じたことしか観測できない — `kind`がdone/error/cancelledの
+        いずれでもないため、フロントエンド(#51 AgentConsole)の終端判定
+        (`subscribeAgentEvents`のisTerminal)に引っかからず、無限に再接続を
+        試み続ける(実運用でscore未生成のprojectに対しrunを起動して発見)。
+        `provider.stream()`経由の通常終了(`kind`がdone/error/cancelled)と
+        同じ形の終端イベントを必ず1件publishすることで、この契約を揃える。
+        """
+        kind: AgentEventKind = (
+            "cancelled" if status == "cancelled" else "error" if status == "failed" else "done"
+        )
+        payload: dict[str, Any] = {"status": status}
+        if error is not None:
+            payload["error"] = error
+        await self._publish(run_id, AgentEvent(run_id=run_id, seq=0, kind=kind, payload=payload))
 
     async def _close_subscribers(self, run_id: str) -> None:
         for queue in self._subscribers.get(run_id, []):

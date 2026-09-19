@@ -12,6 +12,8 @@ import { useBeatmap } from "../hooks/useBeatmap";
 import { usePeaks } from "../hooks/usePeaks";
 import { useProject } from "../hooks/useProjects";
 import { useJobStore } from "../stores/jobStore";
+import { AgentConsole } from "./AgentConsole";
+import { AgentTaskLauncher } from "./AgentTaskLauncher";
 import { AudioPlayer } from "./AudioPlayer";
 import { BeatGridEditor } from "./BeatGridEditor";
 import { BeatGridOverlay } from "./BeatGridOverlay";
@@ -59,6 +61,9 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   const isExporting = exportingFormat !== null;
   // #41: 直近のL1整音run_id。DiffPanelはこれが設定されている間だけ表示する。
   const [activeRefineRunId, setActiveRefineRunId] = useState<string | null>(null);
+  // #51: 直近のL2エージェントrun_id。AgentConsole/DiffPanel(source="agent")は
+  // これが設定されている間だけ表示する(L1のactiveRefineRunIdと同じパターン)。
+  const [activeAgentRunId, setActiveAgentRunId] = useState<string | null>(null);
 
   const {
     data: peaks,
@@ -332,6 +337,21 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
           projectId={projectId}
           runId={activeRefineRunId}
           onDismiss={() => setActiveRefineRunId(null)}
+        />
+      )}
+
+      <AgentTaskLauncher projectId={projectId} onRunStarted={setActiveAgentRunId} />
+
+      {activeAgentRunId && (
+        <AgentConsole runId={activeAgentRunId} onDismiss={() => setActiveAgentRunId(null)} />
+      )}
+
+      {activeAgentRunId && (
+        <DiffPanel
+          projectId={projectId}
+          runId={activeAgentRunId}
+          source="agent"
+          onDismiss={() => setActiveAgentRunId(null)}
         />
       )}
 

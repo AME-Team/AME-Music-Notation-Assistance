@@ -459,3 +459,83 @@ export async function getAgentReport(runId: string): Promise<AgentReportResponse
   const resp = await apiFetch(`/api/agent/runs/${runId}/report`);
   return (await resp.json()) as AgentReportResponse;
 }
+
+export type AgentProviderInfo = components["schemas"]["AgentProviderInfo"];
+export type TaskDefinitionResponse = components["schemas"]["TaskDefinitionResponse"];
+export type AgentRunStatusResponse = components["schemas"]["AgentRunStatusResponse"];
+export type CreateAgentRunRequest = components["schemas"]["CreateAgentRunRequest"];
+export type CreateAgentRunResponse = components["schemas"]["CreateAgentRunResponse"];
+export type CancelResponse = components["schemas"]["CancelResponse"];
+
+/** #51 AgentTaskLauncher: プロバイダ一覧(#42)。 */
+export async function listAgentProviders(): Promise<AgentProviderInfo[]> {
+  const resp = await apiFetch("/api/agent/providers");
+  return (await resp.json()) as AgentProviderInfo[];
+}
+
+/** #51 AgentTaskLauncher: 標準タスク定義一覧(§8.7)。 */
+export async function listAgentTasks(): Promise<TaskDefinitionResponse[]> {
+  const resp = await apiFetch("/api/agent/tasks");
+  return (await resp.json()) as TaskDefinitionResponse[];
+}
+
+/** #51 AgentTaskLauncher: L2エージェントrunを起動する(§11.3)。202時点ではまだ`running`。 */
+export async function createAgentRun(
+  projectId: string,
+  body: CreateAgentRunRequest,
+): Promise<CreateAgentRunResponse> {
+  const resp = await apiFetch(`/api/projects/${projectId}/agent/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return (await resp.json()) as CreateAgentRunResponse;
+}
+
+/** #51 AgentConsole: run状態のポーリング用フォールバック(SSE接続前/再接続時)。 */
+export async function getAgentRunStatus(runId: string): Promise<AgentRunStatusResponse> {
+  const resp = await apiFetch(`/api/agent/runs/${runId}`);
+  return (await resp.json()) as AgentRunStatusResponse;
+}
+
+/** #51 AgentConsole: キャンセルボタン(FR-23)。ステージング領域は破棄され`current.json`は無変更。 */
+export async function cancelAgentRun(runId: string): Promise<CancelResponse> {
+  const resp = await apiFetch(`/api/agent/runs/${runId}/cancel`, { method: "POST" });
+  return (await resp.json()) as CancelResponse;
+}
+
+/**
+ * #51: エージェントrunのステージング差分(`/api/agent/runs/{run_id}/diff`系)。
+ * `getDiff`/`acceptDiff`/`rejectDiff`(#41, L1整音)はプロジェクトスコープの
+ * `/api/projects/{id}/refine/runs/{run_id}/diff`を叩く別エンドポイント群のため、
+ * L2エージェントrun(#46)向けにこの3関数を分けて用意する(URL形状が異なるだけで
+ * リクエスト/レスポンスの型はrefine版と共通)。
+ */
+export async function getAgentDiff(runId: string): Promise<DiffResponse> {
+  const resp = await apiFetch(`/api/agent/runs/${runId}/diff`);
+  return (await resp.json()) as DiffResponse;
+}
+
+export async function acceptAgentDiff(
+  runId: string,
+  scope: ScopeRequest = {},
+): Promise<AcceptResponse> {
+  const resp = await apiFetch(`/api/agent/runs/${runId}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(scope),
+  });
+  return (await resp.json()) as AcceptResponse;
+}
+
+export async function rejectAgentDiff(
+  runId: string,
+  scope: ScopeRequest = {},
+): Promise<RejectResponse> {
+  const resp = await apiFetch(`/api/agent/runs/${runId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(scope),
+  });
+  return (await resp.json()) as RejectResponse;
+}
