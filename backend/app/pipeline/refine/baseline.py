@@ -163,6 +163,14 @@ def _assign_voice_single_staff(notes: list[RefineNoteInput]) -> dict[int, tuple[
     voice=1のみを使うが、guitar/otherは和音を弾きうるため、これが無いと
     同一onset_tickの複数ノートが全てvoice=1へ潰れ、MusicXML上不正な重複
     ノートになりうる(#56 Gate2レビュー指摘への対応)。
+
+    **既知の制約(#128 Gate2レビュー指摘)**: グループ化は`onset_tick`の完全一致
+    でのみ行う。開始タイミングが異なるが持続時間が重なる音(アルペジオ、
+    サステインしたまま次の音が鳴るケース等)は別グループとして扱われ、
+    それぞれ独立にvoice=1へ割り当てられうるため、同一voice内で時間的に
+    重複するノートが残る可能性がある。この制約は`_assign_staff_and_voice`
+    (#26, M2)が実装当初から持つものをそのまま引き継いでおり、ピアノにも
+    同様に当てはまる。区間(interval)ベースのvoice再割当は#130で対応予定。
     """
     groups: dict[int, list[RefineNoteInput]] = {}
     for note in notes:
