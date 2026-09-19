@@ -640,6 +640,96 @@ def test_opencode_server_cleanup_stale_process(tmp_path: Path) -> None:
     assert not state_file.exists(), "stale state file should be removed"
 
 
+def test_is_opencode_process_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 正常ケース: cmdlineにopencodeが含まれる場合
+    class _FakePath:
+        def __init__(self, content: str, exists: bool = True) -> None:
+            self._content = content
+            self._exists = exists
+
+        def exists(self) -> bool:
+            return self._exists
+
+        def read_text(self, *args: Any, **kwargs: Any) -> str:
+            return self._content
+
+    # opencodeプロセスの場合
+    monkeypatch.setattr(
+        opencode_module, "Path", lambda p: _FakePath("opencode serve --port 0")
+    )
+    assert opencode_module._is_opencode_process(1234) is True
+
+    # 無関係なプロセスの場合(PID再利用事故防止)
+    monkeypatch.setattr(
+        opencode_module, "Path", lambda p: _FakePath("python -m pytest")
+    )
+    assert opencode_module._is_opencode_process(5678) is False
+
+    # プロセスが存在しない場合
+    monkeypatch.setattr(
+        opencode_module,
+        "Path",
+        lambda p: _FakePath("", exists=False) if "/proc/" in str(p) else Path(p),
+    )
+    monkeypatch.setattr(
+        opencode_module.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Res", (), {"stdout": ""})(),
+    )
+    assert opencode_module._is_opencode_process(999999) is False
+
+
+def test_cleanup_stale_process_does_not_kill_unrelated_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = OpenCodeServer(workspace_dir=tmp_path)
+    state_file = tmp_path / ".opencode_server.json"
+    state_file.write_text(json.dumps({"pid": 1111, "port": 12345}), encoding="utf-8")
+
+    terminated: list[int] = []
+    monkeypatch.setattr(server, "_terminate_pid", lambda pid: terminated.append(pid))
+    # PID 1111はopencodeではないとする
+    monkeypatch.setattr(opencode_module, "_is_opencode_process", lambda pid: False)
+
+    server.cleanup_stale_process()
+
+    assert terminated == [], "_terminate_pid must NOT be called on unrelated process"
+    assert not state_file.exists(), "stale state file should still be cleaned up"
+
+
+def test_cleanup_stale_process_terminates_verified_opencode_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = OpenCodeServer(workspace_dir=tmp_path)
+    state_file = tmp_path / ".opencode_server.json"
+    state_file.write_text(json.dumps({"pid": 2222, "port": 12345}), encoding="utf-8")
+
+    terminated: list[int] = []
+    monkeypatch.setattr(server, "_terminate_pid", lambda pid: terminated.append(pid))
+    # PID 2222はopencodeプロセスと判定
+    monkeypatch.setattr(opencode_module, "_is_opencode_process", lambda pid: True)
+
+    server.cleanup_stale_process()
+
+    assert terminated == [2222], (
+        "_terminate_pid must be called for verified opencode PID"
+    )
+    assert not state_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_get_base_url_runs_in_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = OpenCodeServer(workspace_dir=tmp_path)
+    monkeypatch.setattr(server, "ensure_running", lambda: "http://127.0.0.1:4567")
+    provider = OpenCodeProvider(server=server)
+
+    # _get_base_url が非同期コンテキストでブロックせず正常に取得できること
+    url = await provider._get_base_url()
+    assert url == "http://127.0.0.1:4567"
+
+
 def test_opencode_server_start_raises_when_binary_not_found(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -677,13 +767,30 @@ def test_opencode_server_start_raises_on_premature_exit(
         server.start()
 
 
-def test_opencode_server_stop_removes_state_file(tmp_path: Path) -> None:
+def test_opencode_server_stop_removes_state_file_and_terminates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     server = OpenCodeServer(workspace_dir=tmp_path)
     state_file = tmp_path / ".opencode_server.json"
     state_file.write_text(json.dumps({"pid": 12345, "port": 5000}), encoding="utf-8")
 
+    terminated: list[int] = []
+    monkeypatch.setattr(server, "_terminate_pid", lambda pid: terminated.append(pid))
+
+    class _FakeRunningProc:
+        pid = 12345
+
+        def poll(self) -> None:
+            return None
+
+        def wait(self, timeout: float = 1.0) -> None:
+            pass
+
+    server._proc = _FakeRunningProc()  # type: ignore[assignment]
     server.stop()
     assert not state_file.exists()
+    assert terminated == [12345], "stop must call _terminate_pid to kill process tree"
+    assert server._proc is None
 
 
 def test_resolve_opencode_path_respects_custom_and_env(

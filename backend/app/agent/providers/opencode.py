@@ -212,6 +212,46 @@ def generate_opencode_json(task: AgentTask, run_id: str) -> dict[str, Any]:
     return opencode_cfg
 
 
+def _is_opencode_process(pid: int) -> bool:
+    """PIDが実際にopencodeプロセスであるかを検証する(R-13)。
+
+    OSによるPID再利用で無関係な別プロセスを誤ってkillする事故を防ぐ。
+    """
+    if sys.platform == "win32":
+        try:
+            res = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+                check=False,
+            )
+            return "opencode" in res.stdout.lower()
+        except Exception:
+            return False
+
+    cmdline_path = Path(f"/proc/{pid}/cmdline")
+    if cmdline_path.exists():
+        try:
+            cmdline = cmdline_path.read_text(encoding="utf-8", errors="replace")
+            return "opencode" in cmdline
+        except Exception:
+            return False
+
+    # /proc が存在しないPOSIX環境(macOS等)のフォールバック
+    try:
+        res = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+            check=False,
+        )
+        return "opencode" in res.stdout.lower()
+    except Exception:
+        return False
+
+
 class OpenCodeServer:
     """`opencode serve` プロセスのライフサイクルマネージャ(R-13)。
 
@@ -256,7 +296,7 @@ class OpenCodeServer:
             raw = self.state_path.read_text(encoding="utf-8")
             data = json.loads(raw)
             pid = data.get("pid")
-            if isinstance(pid, int) and pid > 0:
+            if isinstance(pid, int) and pid > 0 and _is_opencode_process(pid):
                 self._terminate_pid(pid)
         except Exception:
             pass
@@ -265,7 +305,7 @@ class OpenCodeServer:
                 self.state_path.unlink()
 
     def _terminate_pid(self, pid: int) -> None:
-        """PIDが存在していればSIGTERM(Windowsはtaskkill)、必要に応じてSIGKILLで停止する。"""
+        """PIDおよびその子プロセスツリー(score-mcp等)を確実に停止する(R-13)。"""
         if sys.platform == "win32":
             with contextlib.suppress(Exception):
                 subprocess.run(
@@ -281,9 +321,23 @@ class OpenCodeServer:
         except OSError:
             return  # プロセスは存在しない
 
-        # プロセスが存在するので停止を試みる
+        # POSIX: 子プロセス(score-mcp)の孤児化を防ぐためプロセスグループへシグナルを送る
         try:
-            os.kill(pid, signal.SIGTERM)
+            pgid = os.getpgid(pid)
+        except OSError:
+            pgid = pid
+
+        # 自身のプロセスグループを誤爆しないよう保護
+        use_pgid = pgid > 1 and pgid != os.getpgrp()
+
+        def _send_signal(sig: int) -> None:
+            if use_pgid:
+                os.killpg(pgid, sig)
+            else:
+                os.kill(pid, sig)
+
+        try:
+            _send_signal(signal.SIGTERM)
             for _ in range(20):
                 time.sleep(0.1)
                 try:
@@ -291,7 +345,7 @@ class OpenCodeServer:
                 except OSError:
                     return
             # まだ生きていればSIGKILL
-            os.kill(pid, signal.SIGKILL)
+            _send_signal(signal.SIGKILL)
         except OSError:
             pass
 
@@ -328,14 +382,17 @@ class OpenCodeServer:
                 self.host,
             ]
 
+            popen_kwargs: dict[str, Any] = {
+                "stdout": log_file,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+                "cwd": str(self.workspace_dir),
+            }
+            if sys.platform != "win32":
+                popen_kwargs["start_new_session"] = True
+
             try:
-                self._proc = subprocess.Popen(
-                    cmd,
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    cwd=str(self.workspace_dir),
-                )
+                self._proc = subprocess.Popen(cmd, **popen_kwargs)
             except Exception as exc:
                 log_file.close()
                 raise OpenCodeServerStartError(f"failed to spawn opencode serve: {exc}") from exc
@@ -391,18 +448,13 @@ class OpenCodeServer:
             return self._base_url
 
     def stop(self) -> None:
-        """サーバプロセスを停止し、残骸を掃除する。"""
+        """サーバプロセスおよびその子プロセスを停止し、残骸を掃除する。"""
         with self._lock:
             if self._proc is not None:
-                try:
-                    self._proc.terminate()
-                    try:
-                        self._proc.wait(timeout=3.0)
-                    except subprocess.TimeoutExpired:
-                        self._proc.kill()
-                        self._proc.wait(timeout=2.0)
-                except Exception:
-                    pass
+                pid = self._proc.pid
+                self._terminate_pid(pid)
+                with contextlib.suppress(Exception):
+                    self._proc.wait(timeout=1.0)
                 self._proc = None
 
             with contextlib.suppress(Exception):
@@ -469,7 +521,7 @@ class OpenCodeProvider:
             return self.base_url
         if self.server:
             # サーバ起動失敗時はフォールバックせず明示的な例外を送出する(§8.9)
-            return self.server.ensure_running()
+            return await asyncio.to_thread(self.server.ensure_running)
         raise OpenCodeProviderError("No server or base_url configured for OpenCodeProvider")
 
     async def start(self, task: AgentTask) -> AgentRunHandle:
