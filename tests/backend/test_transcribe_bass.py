@@ -155,6 +155,21 @@ def test_segment_notes_flags_short_and_quiet_notes_as_ghost() -> None:
     assert notes[1].ghost_candidate is True
 
 
+def test_segment_notes_single_note_evaluates_ghost_candidate() -> None:
+    """#124 レビュー指摘: 単一ノートのみ存在する場合でも ghost_candidate が正しく判定されること。"""
+    sr = 22050
+    hop = 512
+
+    # 1音のみ(2フレーム ~ 46ms < 60ms)
+    f0 = np.array([np.nan, 82.4, 82.4, np.nan])
+    audio = np.full(len(f0) * hop, 0.5)
+
+    notes = _segment_notes_from_f0(f0, audio, sr, hop_length=hop)
+    assert len(notes) == 1
+    # 46ms < 60ms なので ghost_candidate が True になること
+    assert notes[0].ghost_candidate is True
+
+
 def test_run_bass_transcription_with_mock_transcriber(tmp_path: Path) -> None:
     audio_path = tmp_path / "dummy_bass.wav"
     _write_sine_wav(audio_path, [(82.41, 0.5)], duration=0.2)

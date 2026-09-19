@@ -124,8 +124,8 @@ def _resolve_monophonic_overlaps(notes: list[NoteEvent]) -> list[NoteEvent]:
     先行ノートの終了時刻が後続ノートの開始時刻を越えている場合、
     後続ノートの開始時刻までトリミングする。
     """
-    if len(notes) <= 1:
-        return notes
+    if not notes:
+        return []
 
     # 開始時刻でソート
     sorted_notes = sorted(notes, key=lambda n: n.onset_sec)
