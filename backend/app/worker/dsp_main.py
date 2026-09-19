@@ -421,7 +421,13 @@ def _transcribe_artifacts_exist(
     if score is None:
         return False
 
-    recorded_counts = meta.get("note_counts", {}) if meta else {}
+    recorded_counts: dict[str, int] = {}
+    if meta:
+        extra = meta.get("extra")
+        if isinstance(extra, dict) and "note_counts" in extra:
+            recorded_counts = extra["note_counts"]
+        elif "note_counts" in meta:
+            recorded_counts = meta["note_counts"]
 
     for stem_name, required in [
         (PIANO_STEM_NAME, require_piano),

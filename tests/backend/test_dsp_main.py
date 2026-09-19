@@ -2070,7 +2070,7 @@ def test_transcribe_stage_skips_when_stem_originally_had_zero_notes(
     meta_path = storage.stage_metadata_path(tmp_path, project_id, "transcribe")
     assert meta_path.exists()
     meta = storage.read_json(meta_path)
-    assert meta.get("note_counts") == {"piano": 1, "vocals": 0}
+    assert meta.get("extra", {}).get("note_counts") == {"piano": 1, "vocals": 0}
 
     # 2回目実行: vocals が 0 ノートであっても手動削除ではないため正常にスキップされること
     dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})

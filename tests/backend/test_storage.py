@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from app.infra import storage
 
 
@@ -195,3 +194,39 @@ def test_should_skip_stage_false_when_metadata_file_is_a_list(
     storage.write_json(meta_path, [1, 2, 3])  # 不正な形式(dictであるべき)
 
     assert storage.should_skip_stage(tmp_path, "proj_a", "separate", "h1") is False
+
+
+def test_write_stage_metadata_stores_extra_under_reserved_namespace(
+    tmp_path: Path,
+) -> None:
+    storage.ensure_project_layout(tmp_path, "proj_a")
+    storage.write_stage_metadata(
+        tmp_path,
+        "proj_a",
+        "transcribe",
+        params_hash="h1",
+        provider_versions={},
+        extra={"note_counts": {"piano": 10}},
+    )
+    meta = storage.read_json(
+        storage.stage_metadata_path(tmp_path, "proj_a", "transcribe")
+    )
+    assert meta["extra"] == {"note_counts": {"piano": 10}}
+    assert meta["stage"] == "transcribe"
+
+
+def test_write_stage_metadata_raises_on_reserved_key_collision(
+    tmp_path: Path,
+) -> None:
+    storage.ensure_project_layout(tmp_path, "proj_a")
+    with pytest.raises(
+        ValueError, match="extra cannot overwrite reserved metadata keys"
+    ):
+        storage.write_stage_metadata(
+            tmp_path,
+            "proj_a",
+            "transcribe",
+            params_hash="h1",
+            provider_versions={},
+            extra={"stage": "hacked"},
+        )

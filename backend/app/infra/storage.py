@@ -167,6 +167,9 @@ def stage_metadata_path(workspace_dir: Path, project_id: str, stage: str) -> Pat
     return project_dir(workspace_dir, project_id) / "analysis" / f"{stage}.meta.json"
 
 
+RESERVED_STAGE_METADATA_KEYS = frozenset({"stage", "params_hash", "versions", "artifact_names"})
+
+
 def write_stage_metadata(
     workspace_dir: Path,
     project_id: str,
@@ -193,7 +196,11 @@ def write_stage_metadata(
     if artifact_names is not None:
         meta["artifact_names"] = artifact_names
     if extra:
-        meta.update(extra)
+        overlapping = set(extra.keys()) & RESERVED_STAGE_METADATA_KEYS
+        if overlapping:
+            msg = f"extra cannot overwrite reserved metadata keys: {sorted(overlapping)}"
+            raise ValueError(msg)
+        meta["extra"] = dict(extra)
     write_json(stage_metadata_path(workspace_dir, project_id, stage), meta)
 
 
