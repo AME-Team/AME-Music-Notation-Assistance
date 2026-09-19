@@ -175,6 +175,7 @@ def write_stage_metadata(
     params_hash: str,
     provider_versions: dict,
     artifact_names: list[str] | None = None,
+    extra: dict | None = None,
 ) -> None:
     """NFR-11: 実行パラメータ・使用モデル・プロバイダのバージョンを成果物メタデータに記録する。
 
@@ -191,6 +192,8 @@ def write_stage_metadata(
     meta: dict = {"stage": stage, "params_hash": params_hash, "versions": provider_versions}
     if artifact_names is not None:
         meta["artifact_names"] = artifact_names
+    if extra:
+        meta.update(extra)
     write_json(stage_metadata_path(workspace_dir, project_id, stage), meta)
 
 

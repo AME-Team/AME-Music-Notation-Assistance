@@ -95,10 +95,13 @@ def _resolve_monophonic_overlaps(notes: list[NoteEvent]) -> list[NoteEvent]:
         if i + 1 < len(sorted_notes):
             next_onset = sorted_notes[i + 1].onset_sec
             if offset > next_onset:
-                offset = max(next_onset, onset + MIN_DURATION_FLOOR_SEC)
+                offset = max(next_onset, onset)
 
-        new_duration = max(offset - onset, MIN_DURATION_FLOOR_SEC)
-        ghost = is_ghost_candidate(new_duration, cur.velocity)
+        # 切り上げ前の実測デュレーションで ghost_candidate を判定し、
+        # 保存用デュレーションのみ MIN_DURATION_FLOOR_SEC でクランプする(#125 レビュー指摘)
+        raw_duration = max(0.0, offset - onset)
+        ghost = is_ghost_candidate(raw_duration, cur.velocity)
+        new_duration = max(raw_duration, MIN_DURATION_FLOOR_SEC)
         resolved.append(
             NoteEvent(
                 onset_sec=onset,
@@ -137,8 +140,9 @@ def segment_vocal_notes_from_f0(
 
     def _flush_note(start_frame: int, end_frame: int, midi_pitch: int) -> None:
         start_sec = start_frame * frame_dur
-        end_sec = max((end_frame + 1) * frame_dur, start_sec + MIN_DURATION_FLOOR_SEC)
-        duration_sec = end_sec - start_sec
+        end_sec = (end_frame + 1) * frame_dur
+        raw_duration = max(0.0, end_sec - start_sec)
+        duration_sec = max(raw_duration, MIN_DURATION_FLOOR_SEC)
 
         start_sample = int(start_frame * hop_length)
         end_sample = min(int((end_frame + 1) * hop_length), len(audio))

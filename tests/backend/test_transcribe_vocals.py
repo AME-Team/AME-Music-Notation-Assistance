@@ -135,6 +135,27 @@ def test_resolve_monophonic_overlaps_trims_overlap() -> None:
     assert abs(resolved[1].onset_sec - 0.8) < 1e-6
 
 
+def test_resolve_monophonic_overlaps_evaluates_ghost_on_raw_duration() -> None:
+    """重複解消で先行ノートが短縮された際、MIN_DURATION_FLOOR_SEC クランプ前の実測デュレーションで ghost 判定されること(#55, #125 レビュー指摘)。"""
+    notes = [
+        NoteEvent(
+            onset_sec=0.0, duration_sec=1.0, midi=60, velocity=80, ghost_candidate=False
+        ),
+        NoteEvent(
+            onset_sec=0.02,
+            duration_sec=1.0,
+            midi=62,
+            velocity=80,
+            ghost_candidate=False,
+        ),
+    ]
+    resolved = _resolve_monophonic_overlaps(notes)
+    assert len(resolved) == 2
+    # 次ノート開始が 0.02s のため raw_duration は 0.02s (< 0.06s) -> ghost_candidate=True
+    assert resolved[0].ghost_candidate is True
+    assert abs(resolved[0].duration_sec - 0.02) < 1e-6
+
+
 def test_run_vocals_transcription_with_mock(tmp_path: Path) -> None:
     """モックトランスクライバを用いた実行フローの検証。"""
     audio_path = tmp_path / "dummy_vocals.wav"

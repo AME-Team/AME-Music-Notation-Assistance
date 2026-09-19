@@ -2025,3 +2025,53 @@ def test_transcribe_stage_skip_rejected_when_vocals_notes_deleted(
     # 再実行: スキップが拒否されて全パート再採譜されること
     dsp_main.run_transcribe_stage("job3", project_id, tmp_path, {})
     assert call_counts == {"piano": 2, "bass": 2, "vocals": 2}
+
+
+def test_transcribe_stage_skips_when_stem_originally_had_zero_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """無音ステム(採譜結果0件)が存在する場合、2回目実行で正常にスキップされること(#55, #125 レビュー指摘)。"""
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_silent_vocals"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "vocals.wav")
+
+    call_counts = {"piano": 0, "vocals": 0}
+
+    def _mock_piano(_p, **_k):
+        call_counts["piano"] += 1
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=60,
+                    velocity=70,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    def _mock_silent_vocals(_p, **_k):
+        call_counts["vocals"] += 1
+        return TranscriptionResult(notes=[], pedals=[])
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _mock_piano)
+    monkeypatch.setattr(dsp_main, "run_vocals_transcription", _mock_silent_vocals)
+
+    # 初回実行
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    assert call_counts == {"piano": 1, "vocals": 1}
+
+    # stage_metadata に note_counts が記録されていることを確認
+    meta_path = storage.stage_metadata_path(tmp_path, project_id, "transcribe")
+    assert meta_path.exists()
+    meta = storage.read_json(meta_path)
+    assert meta.get("note_counts") == {"piano": 1, "vocals": 0}
+
+    # 2回目実行: vocals が 0 ノートであっても手動削除ではないため正常にスキップされること
+    dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
+    assert call_counts == {"piano": 1, "vocals": 1}

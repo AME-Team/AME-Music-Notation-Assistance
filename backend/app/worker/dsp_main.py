@@ -408,28 +408,40 @@ def _transcribe_artifacts_exist(
     require_piano: bool = False,
     require_bass: bool = False,
     require_vocals: bool = False,
+    meta: dict[str, Any] | None = None,
 ) -> bool:
-    """`should_skip_stage` の `artifacts_exist` 用(#24/#54/#55, #124 レビュー指摘):
+    """`should_skip_stage` の `artifacts_exist` 用(#24/#54/#55, #124/#125 レビュー指摘):
 
     Score IR自体、または存在する各ステムに対応するパートのノートが(手動削除等で)
-    無くなっていればスキップを拒否する(AND条件: 存在する全パートでノートが存在すること)。
-    M1の分離/ビート推定ステージと同じ保護パターン。
+    無くなっていればスキップを拒否する(AND条件)。
+    ただし、メタデータに記録された採譜当時のノート数が 0 のステム(無音ステム)は、
+    0 件のままで正常スキップを許可する(#125 レビュー指摘)。
     """
     score = ScoreService(workspace_dir=workspace_dir).read_score_optional(project_id)
     if score is None:
         return False
-    if require_piano:
-        piano_part = score.find_part(PIANO_STEM_NAME)
-        if piano_part is None or len(piano_part.notes) == 0:
+
+    recorded_counts = meta.get("note_counts", {}) if meta else {}
+
+    for stem_name, required in [
+        (PIANO_STEM_NAME, require_piano),
+        (BASS_STEM_NAME, require_bass),
+        (VOCALS_STEM_NAME, require_vocals),
+    ]:
+        if not required:
+            continue
+        part = score.find_part(stem_name)
+        if part is None:
             return False
-    if require_bass:
-        bass_part = score.find_part(BASS_STEM_NAME)
-        if bass_part is None or len(bass_part.notes) == 0:
-            return False
-    if require_vocals:
-        vocals_part = score.find_part(VOCALS_STEM_NAME)
-        if vocals_part is None or len(vocals_part.notes) == 0:
-            return False
+        if stem_name in recorded_counts:
+            # 当時1音以上採譜されていたのに現在0音なら手動削除とみなし再採譜
+            if recorded_counts[stem_name] > 0 and len(part.notes) == 0:
+                return False
+        else:
+            # メタデータ未記録時の後方互換: 1音以上を必須
+            if len(part.notes) == 0:
+                return False
+
     return True
 
 
@@ -518,6 +530,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
             require_piano=has_piano,
             require_bass=has_bass,
             require_vocals=has_vocals,
+            meta=_meta,
         ),
     ):
         emit(
@@ -668,12 +681,24 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     # 無効化する。自ステージのstage_metadataを書く前に呼ぶこと。
     _invalidate_downstream_or_reset(workspace_dir, project_id, "transcribe")
     _reset_undo_history_or_warn(workspace_dir, project_id)
+    note_counts: dict[str, int] = {}
+    if has_piano:
+        p = score.find_part(PIANO_STEM_NAME)
+        note_counts[PIANO_STEM_NAME] = len(p.notes) if p else 0
+    if has_bass:
+        b = score.find_part(BASS_STEM_NAME)
+        note_counts[BASS_STEM_NAME] = len(b.notes) if b else 0
+    if has_vocals:
+        v = score.find_part(VOCALS_STEM_NAME)
+        note_counts[VOCALS_STEM_NAME] = len(v.notes) if v else 0
+
     storage.write_stage_metadata(
         workspace_dir,
         project_id,
         "transcribe",
         params_hash=hash_value,
         provider_versions=provider_versions,
+        extra={"note_counts": note_counts},
     )
     if not has_bass and not has_vocals:
         msg = f"{new_piano_notes_count} notes, {piano_pedals_count} pedal events"
