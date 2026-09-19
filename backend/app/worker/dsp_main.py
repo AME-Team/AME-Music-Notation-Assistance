@@ -873,19 +873,37 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     )
 
 
+def _part_needs_quantize(part: Part) -> bool:
+    """`part`がquantizeステージの処理対象か(アクティブノードまたはペダルを持つか)。
+
+    `_quantize_artifacts_exist`と`run_quantize_stage`の両方が対象パート判定に
+    使う単一の真実源(#128 Gate2レビュー指摘: 別々に判定条件を書いていたため
+    両者が食い違い、ノート全削除+ペダル残存パートのペダルが処理対象から漏れて
+    tickが永久に未設定のまま残る回帰を招いた)。
+    """
+    active_notes = [n for n in part.notes if n.status != "deleted"]
+    return bool(active_notes) or bool(part.pedals)
+
+
 def _quantize_artifacts_exist(workspace_dir: Path, project_id: str) -> bool:
-    """`should_skip_stage` の `artifacts_exist` 用(#25/#26/#56)。
+    """`should_skip_stage` の `artifacts_exist` 用(#25/#26/#56/#128)。
 
     Score IR自体が無ければスキップを拒否する。存在する各パート
-    (`QUANTIZABLE_STEM_NAMES`のうちノートを持つもの)について、量子化または
-    L0が未完了(`onset_tick`が未設定、または非userノートで`spelling`が未設定の
-    まま残っている)状態も再実行させる(手動でのscore/current.json編集や、
-    以前の実行が途中で中断した場合の保護。#25-M2レビュー指摘: `onset_tick`だけを
-    見ると、L0が未適用のまま(spelling等が欠けたまま)でもスキップしてしまい、
-    本ステージのdocstringが謳う「常にエクスポート可能な状態」を守れない)。
+    (`QUANTIZABLE_STEM_NAMES`のうちノートまたはペダルを持つもの)について、
+    量子化またはL0が未完了(`onset_tick`が未設定、または非userノートで
+    `spelling`が未設定のまま残っている)状態も再実行させる(手動での
+    score/current.json編集や、以前の実行が途中で中断した場合の保護。#25-M2
+    レビュー指摘: `onset_tick`だけを見ると、L0が未適用のまま(spelling等が
+    欠けたまま)でもスキップしてしまい、本ステージのdocstringが謳う
+    「常にエクスポート可能な状態」を守れない)。ペダルの`start_tick`/
+    `stop_tick`が未設定のままの場合も同様に再実行させる(#128 Gate2レビュー
+    指摘: ノート設定直後・ペダルのtick変換前にプロセスが中断すると、
+    ノートだけを見る判定ではその中断を検出できず、ペダルのtickが未設定の
+    まま永久にスキップされ続けてしまう)。
 
-    ノートを持つ対象パートが1つも無い場合はFalseを返す(#56: `run_quantize_stage`
-    本体の「処理対象パートが無ければエラー」という分岐へ確実に流すため)。
+    ノートもペダルも持たない対象パートしか無い場合はFalseを返す(#56:
+    `run_quantize_stage`本体の「処理対象パートが無ければエラー」という
+    分岐へ確実に流すため)。
     """
     score = ScoreService(workspace_dir=workspace_dir).read_score_optional(project_id)
     if score is None:
@@ -896,14 +914,16 @@ def _quantize_artifacts_exist(workspace_dir: Path, project_id: str) -> bool:
         part = score.find_part(stem_name)
         if part is None:
             continue
-        active_notes = [n for n in part.notes if n.status != "deleted"]
-        if not active_notes:
+        if not _part_needs_quantize(part):
             continue
         found_any = True
+        active_notes = [n for n in part.notes if n.status != "deleted"]
         if not all(
             n.onset_tick is not None and (n.provenance == "user" or n.spelling is not None)
             for n in active_notes
         ):
+            return False
+        if any(p.start_tick is None or p.stop_tick is None for p in part.pedals):
             return False
     return found_any
 
@@ -975,16 +995,16 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     # レビューと同種の注意点): onset_tick/duration_tick/spelling等はこのステージ
     # 自身が書き込む出力なので含めない。含めると自分の前回出力のせいで毎回
     # ハッシュが変わり続け、スキップが永久に効かなくなってしまう。
-    # `part.notes`(削除済み含む)ではなくアクティブノートの有無で対象パートを
-    # 判定する(#128レビュー指摘: 全ノート削除済みのパートを対象に含めると、
-    # `_quantize_artifacts_exist`(アクティブノートで判定)との食い違いにより
-    # 毎回スキップ不能になり無限に再実行され続ける)。
+    # 対象パート判定(アクティブノートまたはペダルを持つか)は`_quantize_artifacts_exist`
+    # と共有の`_part_needs_quantize`を使う(#128レビュー指摘: 別々の条件式に
+    # なっていたため食い違い、ノート全削除+ペダル残存パートのペダルが処理対象から
+    # 漏れてtickが永久に未設定のまま残る回帰を招いた)。
     active_notes_by_part_id: dict[str, list[Note]] = {}
     parts_snapshot: dict[str, dict[str, Any]] = {}
     for _stem_name, part in candidate_parts:
-        active_notes = [n for n in part.notes if n.status != "deleted"]
-        if not active_notes:
+        if not _part_needs_quantize(part):
             continue
+        active_notes = [n for n in part.notes if n.status != "deleted"]
         active_notes_by_part_id[part.id] = active_notes
         parts_snapshot[part.id] = {
             "notes": [
@@ -1001,13 +1021,13 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
             ],
             "pedals": [{"start_sec": p.start_sec, "stop_sec": p.stop_sec} for p in part.pedals],
         }
-    parts_with_notes = [
+    parts_to_process = [
         (stem_name, part)
         for stem_name, part in candidate_parts
         if part.id in active_notes_by_part_id
     ]
-    if not parts_with_notes:
-        raise ValueError("no part has notes; run the transcribe stage first")
+    if not parts_to_process:
+        raise ValueError("no part has notes or pedals; run the transcribe stage first")
 
     hash_payload = json.dumps(
         {
@@ -1061,7 +1081,7 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         [n.midi % 12 for n in all_active_notes if n.provenance != "user"]
     )
 
-    for stem_name, part in parts_with_notes:
+    for stem_name, part in parts_to_process:
         active_notes = active_notes_by_part_id[part.id]
         refine_inputs = [
             RefineNoteInput(
@@ -1146,7 +1166,7 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     total_notes = len(all_active_notes)
     parts_summary = ", ".join(
         f"{len(active_notes_by_part_id[part.id])} {part.id}"
-        for _stem_name, part in parts_with_notes
+        for _stem_name, part in parts_to_process
     )
     emit(
         {

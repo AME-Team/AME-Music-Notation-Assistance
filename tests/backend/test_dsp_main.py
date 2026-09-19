@@ -1125,6 +1125,59 @@ def test_quantize_stage_sets_pedal_ticks(
     assert part.pedals[0].stop_tick == 960
 
 
+def test_quantize_stage_quantizes_pedals_even_when_all_notes_deleted(
+    tmp_path: Path,
+) -> None:
+    """回帰(#128 Gate2レビュー指摘): ノートが全て削除済みでもペダルが残っている
+
+    パートは処理対象から除外されず、pedal.start_tick/stop_tickが設定される
+    こと。「アクティブノートを持つパートのみ処理」という絞り込み条件が
+    ペダルを見落とし、当該パートのペダルが永久に未量子化のまま残る回帰が
+    あった。
+    """
+    from app.domain.score import Clef, Note, Part, Pedal, ScoreIR, SourceInfo
+
+    project_id = "proj_deleted_notes_with_pedal"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_beatmap(tmp_path, project_id)
+
+    service = ScoreService(workspace_dir=tmp_path)
+    score = ScoreIR(
+        project_id=project_id,
+        source=SourceInfo(filename="song.wav", duration_sec=2.0, sample_rate=8000),
+    )
+    part = Part(
+        id="piano",
+        name="Piano",
+        midi_program=0,
+        staves=2,
+        clefs=[Clef(staff=1, sign="G", line=2), Clef(staff=2, sign="F", line=4)],
+    )
+    part.notes.append(
+        Note(
+            id=score.allocate_note_id(),
+            onset_sec=0.0,
+            duration_sec=0.5,
+            midi=60,
+            velocity=90,
+            provenance="amt",
+            status="deleted",
+        )
+    )
+    part.pedals.append(Pedal(start_sec=0.5, stop_sec=1.0))
+    score.parts.append(part)
+    service.write_score(project_id, score)
+
+    dsp_main.run_quantize_stage("job1", project_id, tmp_path, {})
+
+    updated_part = service.read_score(project_id).find_part("piano")
+    assert updated_part is not None
+    assert len(updated_part.pedals) == 1
+    # 120bpm・4/4: 0.5s=1拍=480tick、1.0s=2拍=960tick。
+    assert updated_part.pedals[0].start_tick == 480
+    assert updated_part.pedals[0].stop_tick == 960
+
+
 def test_quantize_stage_skips_when_input_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
