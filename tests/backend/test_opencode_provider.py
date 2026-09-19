@@ -640,8 +640,9 @@ def test_opencode_server_cleanup_stale_process(tmp_path: Path) -> None:
     assert not state_file.exists(), "stale state file should be removed"
 
 
-def test_is_opencode_process_detection(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 正常ケース: cmdlineにopencodeが含まれる場合
+def test_is_opencode_process_detection_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(opencode_module.sys, "platform", "linux")
+
     class _FakePath:
         def __init__(self, content: str, exists: bool = True) -> None:
             self._content = content
@@ -653,30 +654,55 @@ def test_is_opencode_process_detection(monkeypatch: pytest.MonkeyPatch) -> None:
         def read_text(self, *args: Any, **kwargs: Any) -> str:
             return self._content
 
-    # opencodeプロセスの場合
+    # 1. opencodeプロセスの場合(/proc経由)
     monkeypatch.setattr(
         opencode_module, "Path", lambda p: _FakePath("opencode serve --port 0")
     )
     assert opencode_module._is_opencode_process(1234) is True
 
-    # 無関係なプロセスの場合(PID再利用事故防止)
+    # 2. 無関係なプロセスの場合(PID再利用事故防止)
     monkeypatch.setattr(
         opencode_module, "Path", lambda p: _FakePath("python -m pytest")
     )
     assert opencode_module._is_opencode_process(5678) is False
 
-    # プロセスが存在しない場合
-    monkeypatch.setattr(
-        opencode_module,
-        "Path",
-        lambda p: _FakePath("", exists=False) if "/proc/" in str(p) else Path(p),
-    )
+    # 3. /proc が存在せず ps コマンドで判定する場合
+    monkeypatch.setattr(opencode_module, "Path", lambda p: _FakePath("", exists=False))
     monkeypatch.setattr(
         opencode_module.subprocess,
         "run",
-        lambda *args, **kwargs: type("Res", (), {"stdout": ""})(),
+        lambda *args, **kwargs: type("Res", (), {"stdout": "opencode serve"})(),
     )
-    assert opencode_module._is_opencode_process(999999) is False
+    assert opencode_module._is_opencode_process(1234) is True
+
+    monkeypatch.setattr(
+        opencode_module.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Res", (), {"stdout": "bash"})(),
+    )
+    assert opencode_module._is_opencode_process(1234) is False
+
+
+def test_is_opencode_process_detection_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(opencode_module.sys, "platform", "win32")
+
+    monkeypatch.setattr(
+        opencode_module.subprocess,
+        "run",
+        lambda *args, **kwargs: type(
+            "Res", (), {"stdout": "opencode.exe 1234 Console"}
+        )(),
+    )
+    assert opencode_module._is_opencode_process(1234) is True
+
+    monkeypatch.setattr(
+        opencode_module.subprocess,
+        "run",
+        lambda *args, **kwargs: type(
+            "Res", (), {"stdout": "notepad.exe 5678 Console"}
+        )(),
+    )
+    assert opencode_module._is_opencode_process(5678) is False
 
 
 def test_cleanup_stale_process_does_not_kill_unrelated_pid(
