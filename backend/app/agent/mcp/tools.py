@@ -284,11 +284,12 @@ def score_query(
 def score_context(ctx: ToolContext) -> dict[str, Any]:
     """調・拍子・テンポマップ・コード進行をまとめて返す。副作用なし。"""
     score = _load_working_score(ctx)
+    chords = ScoreService.ensure_chords(score)
     return {
         "key_signatures": [k.model_dump(mode="json") for k in score.key_signatures],
         "time_signatures": [t.model_dump(mode="json") for t in score.time_signatures],
         "tempo_map": [t.model_dump(mode="json") for t in score.tempo_map],
-        "chords": [c.model_dump(mode="json") for c in score.chords],
+        "chords": [c.model_dump(mode="json") for c in chords],
     }
 
 
@@ -510,5 +511,6 @@ def score_apply_ops(ctx: ToolContext, *, ops: list[dict[str, Any]]) -> dict[str,
     if new_violations:
         return {"ok": False, "violations": _violations_to_dicts(new_violations)}
 
+    ScoreService.ensure_chords(working, force_recompute=True)
     _write_staging(ctx, working)
     return {"ok": True, "violations": [], "run_id": ctx.run_id}

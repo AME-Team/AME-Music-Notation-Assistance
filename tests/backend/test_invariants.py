@@ -7,9 +7,6 @@
 
 from __future__ import annotations
 
-from hypothesis import given
-from hypothesis import strategies as st
-
 from app.domain.invariants import (
     Decision,
     ValidationNote,
@@ -18,6 +15,8 @@ from app.domain.invariants import (
 )
 from app.domain.pitch import midi_to_spelling
 from app.domain.score import Spelling
+from hypothesis import given
+from hypothesis import strategies as st
 
 
 def _note(

@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import agent, diff, export, jobs, media, projects, refine, score
+from app.api import agent, diff, export, jobs, media, projects, refine, revisions, score
 from app.config import Settings, load_settings
 from app.services.agent_run_manager import AgentRunManager
 from app.services.agent_run_service import AgentRunService
@@ -101,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(export.router)
     app.include_router(refine.router)
     app.include_router(diff.router)
+    app.include_router(revisions.router)
     app.include_router(agent.router)
     app.include_router(agent.project_router)
 

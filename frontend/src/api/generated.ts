@@ -539,6 +539,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Revisions */
+        get: operations["list_revisions_api_projects__project_id__revisions_get"];
+        put?: never;
+        /** Create Revision */
+        post: operations["create_revision_api_projects__project_id__revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/revisions/{revision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Revision */
+        get: operations["get_revision_api_projects__project_id__revisions__revision_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Revision */
+        delete: operations["delete_revision_api_projects__project_id__revisions__revision_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/revisions/{revision_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Revision */
+        post: operations["restore_revision_api_projects__project_id__revisions__revision_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/revisions/{revision_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Revision Diff */
+        get: operations["get_revision_diff_api_projects__project_id__revisions__revision_id__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agent/providers": {
         parameters: {
             query?: never;
@@ -955,6 +1025,16 @@ export interface components {
             /** Run Id */
             run_id: string;
         };
+        /**
+         * CreateRevisionRequest
+         * @description #59: 名前付きリビジョン作成リクエスト(FR-15)。
+         */
+        CreateRevisionRequest: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+        };
         /** DiffResponse */
         DiffResponse: {
             /** Run Id */
@@ -1290,6 +1370,54 @@ export interface components {
             /** Reverted Note Ids */
             reverted_note_ids: number[];
             remaining_diff: components["schemas"]["DiffResponse"];
+        };
+        /**
+         * RestoreRevisionResponse
+         * @description #59: リビジョン復元レスポンス(FR-15)。
+         */
+        RestoreRevisionResponse: {
+            /** Project Id */
+            project_id: string;
+            /** Revision Id */
+            revision_id: string;
+            /** Restored At */
+            restored_at: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * RevisionDiffResponse
+         * @description #59: リビジョン間差分レスポンス(FR-15)。
+         */
+        RevisionDiffResponse: {
+            /** Project Id */
+            project_id: string;
+            /** Revision Id */
+            revision_id: string;
+            /** Base Revision Id */
+            base_revision_id: string | null;
+            /** Parts */
+            parts: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * RevisionResponse
+         * @description #59: リビジョンメタデータレスポンス(FR-15)。
+         */
+        RevisionResponse: {
+            /** Id */
+            id: string;
+            /** Project Id */
+            project_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Op Count */
+            op_count: number;
+            /** Created At */
+            created_at: string;
         };
         /** RunStageRequest */
         RunStageRequest: {
@@ -2306,6 +2434,201 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RejectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_revisions_api_projects__project_id__revisions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_revision_api_projects__project_id__revisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRevisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_revision_api_projects__project_id__revisions__revision_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_revision_api_projects__project_id__revisions__revision_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_revision_api_projects__project_id__revisions__revision_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_revision_diff_api_projects__project_id__revisions__revision_id__diff_get: {
+        parameters: {
+            query?: {
+                /** @description 比較元リビジョンID(未指定時は現行スコア) */
+                base_revision_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionDiffResponse"];
                 };
             };
             /** @description Validation Error */

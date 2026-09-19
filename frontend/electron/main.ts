@@ -1,8 +1,17 @@
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { type BackendHandle, startBackend } from "./backend";
+import {
+  attachWebContentsLogger,
+  getLogsDir,
+  initLogger,
+  logger,
+  setupGlobalErrorHandlers,
+} from "./logger";
 import { buildMenu } from "./menu";
 import { loadWindowState, trackWindowState } from "./window-state";
+
+setupGlobalErrorHandlers();
 
 // #77: 単一インスタンス制御(2重起動でバックエンド/ポートが衝突するのを防ぐ)。
 const gotLock = app.requestSingleInstanceLock();
@@ -32,18 +41,29 @@ function createWindow(): BrowserWindow {
     },
   });
 
+  // レンダラープロセスのコンソールログ・クラッシュログをファイルに集約
+  attachWebContentsLogger(win.webContents);
+
   // NFR-17: リモートコンテンツを一切読み込まない(全てローカルバンドル)。
+  // 開発時(DEV_SERVER_URL)は Vite の Fast Refresh (Preamble) インラインスクリプトおよび
+  // HMR WebSocket を許可し、本番時は 'self' の厳格な設定を維持する。
+  const isDev = Boolean(DEV_SERVER_URL);
+  const scriptSrc = isDev ? "'self' 'unsafe-inline'" : "'self'";
+  const connectSrc = isDev
+    ? "'self' http://127.0.0.1:* ws://127.0.0.1:* ws://localhost:* http://localhost:* blob:"
+    : "'self' http://127.0.0.1:* ws://127.0.0.1:* blob:";
+
   win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         "Content-Security-Policy": [
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+          `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; ` +
             "img-src 'self' data: blob:; media-src 'self' blob: http://127.0.0.1:*; " +
             // #27: `<a download href="blob:...">.click()`(エクスポートのファイル
             // 保存)はChromiumではconnect-srcの対象になる(img-src/media-srcの
             // blob:許可だけでは足りない、実機検証で判明)。
-            "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* blob:",
+            `connect-src ${connectSrc}`,
         ],
       },
     });
@@ -61,8 +81,10 @@ function createWindow(): BrowserWindow {
   win.once("ready-to-show", () => win.show());
 
   if (DEV_SERVER_URL) {
+    logger.info("main", `Loading dev server URL: ${DEV_SERVER_URL}`);
     void win.loadURL(DEV_SERVER_URL);
   } else {
+    logger.info("main", "Loading production bundle index.html");
     void win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
 
@@ -114,12 +136,17 @@ function registerIpcHandlers(): void {
   ipcMain.on("window:maximize", () => mainWindow?.maximize());
   ipcMain.on("window:unmaximize", () => mainWindow?.unmaximize());
   ipcMain.handle("window:is-maximized", () => mainWindow?.isMaximized() ?? false);
+  ipcMain.handle("logs:open-dir", async () => {
+    await shell.openPath(getLogsDir());
+  });
 }
 
 async function stopBackendAndQuit(): Promise<void> {
   if (backend) {
+    logger.info("main", "Stopping Python backend...");
     await backend.stop();
     backend = null;
+    logger.info("main", "Python backend stopped.");
   }
 }
 
@@ -131,11 +158,14 @@ app.on("second-instance", () => {
 });
 
 app.whenReady().then(async () => {
+  await initLogger();
+  logger.info("main", "AME Music Notation Assistance starting...");
   Menu.setApplicationMenu(buildMenu());
   registerIpcHandlers();
   mainWindow = createWindow();
 
   backend = await startBackend((status, detail) => {
+    logger.info("main", `Backend status: ${status}${detail ? ` (${detail})` : ""}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("backend:status", status, detail);
     }

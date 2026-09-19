@@ -7,15 +7,14 @@ V-4(ピッチクラス一致)/V-5(オクターブ整合)の検証ロジック(§
 
 from __future__ import annotations
 
-from hypothesis import given
-from hypothesis import strategies as st
-
 from app.domain.pitch import (
     is_spelling_consistent_with_midi,
     midi_to_spelling,
     spelling_to_midi,
 )
 from app.domain.score import PitchStep, Spelling
+from hypothesis import given
+from hypothesis import strategies as st
 
 _STEP_VALUES = ("C", "D", "E", "F", "G", "A", "B")
 

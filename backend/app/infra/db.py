@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     error             TEXT,
     created_at        TEXT NOT NULL
 );
+
+-- #59: リビジョン管理 (FR-15, §10.3)
+CREATE TABLE IF NOT EXISTS revisions (
+    id             TEXT PRIMARY KEY,
+    project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name           TEXT NOT NULL,
+    description    TEXT,
+    op_count       INTEGER NOT NULL DEFAULT 0,
+    score_snapshot TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revisions_project ON revisions(project_id);
 """
 
 _lock = threading.Lock()

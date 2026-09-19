@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from app.domain.score_ops import NoteOp
@@ -107,3 +109,39 @@ class ScoreOpsRequest(BaseModel):
     """#31: `POST /score/ops`。配列で一括適用する(`domain/score_ops.py`参照)。"""
 
     ops: list[NoteOp] = Field(min_length=1)
+
+
+class CreateRevisionRequest(BaseModel):
+    """#59: 名前付きリビジョン作成リクエスト(FR-15)。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+
+
+class RevisionResponse(BaseModel):
+    """#59: リビジョンメタデータレスポンス(FR-15)。"""
+
+    id: str
+    project_id: str
+    name: str
+    description: str | None
+    op_count: int
+    created_at: str
+
+
+class RevisionDiffResponse(BaseModel):
+    """#59: リビジョン間差分レスポンス(FR-15)。"""
+
+    project_id: str
+    revision_id: str
+    base_revision_id: str | None
+    parts: dict[str, Any]
+
+
+class RestoreRevisionResponse(BaseModel):
+    """#59: リビジョン復元レスポンス(FR-15)。"""
+
+    project_id: str
+    revision_id: str
+    restored_at: str
+    message: str

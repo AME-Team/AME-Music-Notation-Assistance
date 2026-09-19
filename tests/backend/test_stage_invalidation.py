@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from app.domain.stages import downstream_of
 from app.infra import storage
 from app.services.stage_invalidation import invalidate_downstream

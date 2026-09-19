@@ -11,7 +11,6 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 
 import pytest
-
 from app.pipeline.export.midi import render_midi
 from app.pipeline.export.musicxml import ExportError, render_musicxml
 from app.pipeline.export.musicxml import (

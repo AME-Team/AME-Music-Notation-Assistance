@@ -1316,6 +1316,315 @@
         }
       }
     },
+    "/api/projects/{project_id}/revisions": {
+      "post": {
+        "tags": [
+          "revisions"
+        ],
+        "summary": "Create Revision",
+        "operationId": "create_revision_api_projects__project_id__revisions_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRevisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "revisions"
+        ],
+        "summary": "List Revisions",
+        "operationId": "list_revisions_api_projects__project_id__revisions_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RevisionResponse"
+                  },
+                  "title": "Response List Revisions Api Projects  Project Id  Revisions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/revisions/{revision_id}": {
+      "get": {
+        "tags": [
+          "revisions"
+        ],
+        "summary": "Get Revision",
+        "operationId": "get_revision_api_projects__project_id__revisions__revision_id__get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "revisions"
+        ],
+        "summary": "Delete Revision",
+        "operationId": "delete_revision_api_projects__project_id__revisions__revision_id__delete",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/revisions/{revision_id}/restore": {
+      "post": {
+        "tags": [
+          "revisions"
+        ],
+        "summary": "Restore Revision",
+        "operationId": "restore_revision_api_projects__project_id__revisions__revision_id__restore_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Revision Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreRevisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/revisions/{revision_id}/diff": {
+      "get": {
+        "tags": [
+          "revisions"
+        ],
+        "summary": "Get Revision Diff",
+        "operationId": "get_revision_diff_api_projects__project_id__revisions__revision_id__diff_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Revision Id"
+            }
+          },
+          {
+            "name": "base_revision_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "比較元リビジョンID(未指定時は現行スコア)",
+              "title": "Base Revision Id"
+            },
+            "description": "比較元リビジョンID(未指定時は現行スコア)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionDiffResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/agent/providers": {
       "get": {
         "tags": [
@@ -2216,6 +2525,34 @@
         ],
         "title": "CreateAgentRunResponse"
       },
+      "CreateRevisionRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CreateRevisionRequest",
+        "description": "#59: 名前付きリビジョン作成リクエスト(FR-15)。"
+      },
       "DiffResponse": {
         "properties": {
           "run_id": {
@@ -2966,6 +3303,118 @@
           "remaining_diff"
         ],
         "title": "RejectResponse"
+      },
+      "RestoreRevisionResponse": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "revision_id": {
+            "type": "string",
+            "title": "Revision Id"
+          },
+          "restored_at": {
+            "type": "string",
+            "title": "Restored At"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "revision_id",
+          "restored_at",
+          "message"
+        ],
+        "title": "RestoreRevisionResponse",
+        "description": "#59: リビジョン復元レスポンス(FR-15)。"
+      },
+      "RevisionDiffResponse": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "revision_id": {
+            "type": "string",
+            "title": "Revision Id"
+          },
+          "base_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Revision Id"
+          },
+          "parts": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "revision_id",
+          "base_revision_id",
+          "parts"
+        ],
+        "title": "RevisionDiffResponse",
+        "description": "#59: リビジョン間差分レスポンス(FR-15)。"
+      },
+      "RevisionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "op_count": {
+            "type": "integer",
+            "title": "Op Count"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "description",
+          "op_count",
+          "created_at"
+        ],
+        "title": "RevisionResponse",
+        "description": "#59: リビジョンメタデータレスポンス(FR-15)。"
       },
       "RunStageRequest": {
         "properties": {

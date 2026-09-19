@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from app.pipeline.refine.key_estimation import estimate_key
 from app.pipeline.refine.l1_chunker import ChunkInput
+from app.services.score_service import ScoreService
 
 if TYPE_CHECKING:
     from app.domain.score import ScoreIR
@@ -103,6 +104,13 @@ def build_song_context_message(score: ScoreIR, part_id: str) -> str:
         f"- 拍子: {', '.join(time_signatures)}",
         f"- テンポ: {', '.join(tempos)}",
     ]
+    chords = ScoreService.ensure_chords(score)
+    if chords:
+        chords_summary = ", ".join(f"m.{c.bar}:{c.symbol}" for c in chords[:8])
+        if len(chords) > 8:
+            chords_summary += " ..."
+        lines.append(f"- コード進行: {chords_summary}")
+
     return "\n".join(lines)
 
 

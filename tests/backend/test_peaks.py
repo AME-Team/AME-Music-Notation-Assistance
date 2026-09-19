@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-
 from app.infra import storage
 from app.pipeline.peaks import compute_peaks
 

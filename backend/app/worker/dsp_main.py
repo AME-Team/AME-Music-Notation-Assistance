@@ -899,6 +899,13 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
             pedal.start_tick = start_tick
             pedal.stop_tick = stop_tick
 
+    # #57 FR-16: コード進行の自動推定とScoreIR.chordsへの格納
+    # 下記の楽観的並行性チェック(raw_now != raw_before)を通過後、直後の
+    # score_service.write_score(project_id, score) (922行目)によって
+    # score/current.json へ永続化される。ScoreService.ensure_chords() を
+    # 用いて score.chords を最新ノート情報から確定させておく。
+    ScoreService.ensure_chords(score, force_recompute=True)
+
     raw_now = storage.read_json(score_path) if score_path.exists() else None
     if raw_now != raw_before:
         emit(

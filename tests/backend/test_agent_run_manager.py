@@ -563,6 +563,60 @@ async def test_voicing_fix_embeds_scope_in_prompt_and_uses_task_budget(
     assert provider.received_task.timeout_sec == 600
 
 
+@pytest.mark.parametrize(
+    (
+        "task_type",
+        "expected_substring",
+        "expected_turns",
+        "expected_tokens",
+        "expected_timeout",
+        "user_prompt",
+    ),
+    [
+        ("ghost-sweep", "ghost-sweep専用の作業手順", 25, 250_000, 750, None),
+        ("repeat-alignment", "repeat-alignment専用の作業手順", 30, 300_000, 900, None),
+        ("export-qa", "export-qa専用の作業手順", 30, 300_000, 900, None),
+        (
+            "investigate",
+            "investigate専用の作業手順",
+            40,
+            400_000,
+            1200,
+            "小節12のコードを確認して",
+        ),
+    ],
+)
+async def test_remaining_standard_tasks_use_dedicated_prompts_and_budgets(
+    tmp_path: Path,
+    task_type: str,
+    expected_substring: str,
+    expected_turns: int,
+    expected_tokens: int,
+    expected_timeout: int,
+    user_prompt: str | None,
+) -> None:
+    _create_project(tmp_path, "proj_1")
+    provider = _RecordingProvider()
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"recording": provider},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1",
+        task_type=task_type,
+        provider_name="recording",
+        prompt=user_prompt,
+    )
+    await _drain(manager, run_id)
+
+    assert provider.received_task is not None
+    assert expected_substring in provider.received_task.prompt
+    assert provider.received_task.max_turns == expected_turns
+    assert provider.received_task.max_tokens_budget == expected_tokens
+    assert provider.received_task.timeout_sec == expected_timeout
+
+
 async def test_generic_task_falls_back_to_agent_task_defaults(tmp_path: Path) -> None:
     """`prompt_template`/`max_tokens_budget`/`timeout_sec`が未設定のタスク
 

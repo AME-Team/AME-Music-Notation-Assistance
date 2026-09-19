@@ -87,6 +87,11 @@ def score_ops_log_path(workspace_dir: Path, project_id: str) -> Path:
     return project_dir(workspace_dir, project_id) / "score" / "ops.jsonl"
 
 
+def score_revisions_log_path(workspace_dir: Path, project_id: str) -> Path:
+    """#59: リビジョン操作(復元など)の追記専用監査ログ。"""
+    return project_dir(workspace_dir, project_id) / "score" / "revisions.jsonl"
+
+
 def score_undo_state_path(workspace_dir: Path, project_id: str) -> Path:
     """#32: Undo/Redoの2本のスタック(`done`/`undone`)の永続化先。"""
     return project_dir(workspace_dir, project_id) / "score" / "undo_state.json"
