@@ -268,6 +268,33 @@ class _BrokenStreamProvider:
         )
 
 
+class _PartiallyBrokenStreamProvider:
+    """`stream()`が数件のイベントをyieldしてから例外を送出するフェイクプロバイダ。
+
+    `_BrokenStreamProvider`と異なり`_event_history`が空でない状態で終端化する
+    経路(Gate2レビュー指摘・LOWの回帰テスト用): 合成終端イベントの`seq`を0に
+    固定すると、既にpublish済みのseq 0のイベントと重複してしまう。
+    """
+
+    name = "partially-broken"
+
+    async def start(self, task: AgentTask) -> AgentRunHandle:
+        return AgentRunHandle(run_id="internal-partially-broken")
+
+    async def stream(self, run_id: str) -> AsyncIterator[AgentEvent]:
+        yield AgentEvent(run_id=run_id, seq=0, kind="thinking", payload={"text": "..."})
+        yield AgentEvent(run_id=run_id, seq=1, kind="tool_use", payload={"input": {}})
+        raise RuntimeError("boom: unexpected provider bug mid-stream")
+
+    async def cancel(self, run_id: str) -> None:
+        pass
+
+    async def result(self, run_id: str) -> AgentResult:
+        raise AssertionError(
+            "result() should not be called since stream() raised first"
+        )
+
+
 async def test_provider_stream_exception_marks_run_failed_and_closes_subscribers(
     tmp_path: Path,
 ) -> None:
@@ -301,6 +328,29 @@ async def test_provider_stream_exception_marks_run_failed_and_closes_subscribers
     assert run["status"] == "failed"
     assert run["error"] is not None
     assert "boom" in run["error"]
+
+
+async def test_terminal_event_after_partial_stream_gets_a_non_duplicate_seq(
+    tmp_path: Path,
+) -> None:
+    """Gate2レビュー指摘(LOW)の回帰テスト: `stream()`がseq 0/1のイベントを
+
+    publish済みの状態で例外送出しても、合成終端イベントのseqが0に固定
+    されず(既存イベントと重複せず)単調増加を保つことを確認する。
+    """
+    _create_project(tmp_path, "proj_1")
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"partially-broken": _PartiallyBrokenStreamProvider()},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1", task_type="refine-part", provider_name="partially-broken"
+    )
+    events = await _drain(manager, run_id)
+
+    assert [e.kind for e in events] == ["thinking", "tool_use", "error"]
+    assert [e.seq for e in events] == [0, 1, 2]
 
 
 async def test_workspace_construction_failure_publishes_terminal_event(

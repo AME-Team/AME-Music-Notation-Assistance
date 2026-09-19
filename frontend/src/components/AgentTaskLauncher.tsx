@@ -30,7 +30,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
   const [partId, setPartId] = useState("");
   const [barStart, setBarStart] = useState("");
   const [barEnd, setBarEnd] = useState("");
-  const [provider, setProvider] = useState("claude");
+  const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [budget, setBudget] = useState("");
   const [isLaunching, setIsLaunching] = useState(false);
@@ -42,12 +42,31 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
     }
   }, [tasks, taskType]);
 
+  // Gate2レビュー指摘(LOW): providerの初期値を"claude"に固定すると、一覧に
+  // claudeが無い/configured=falseの場合でも<select>の値だけがそのまま残り、
+  // disabledなoptionを選んだ状態のまま送信できてしまう(HTMLのdisabled optionは
+  // 選択済みの値を消さない)。providers取得後、現在の選択が未設定(未取得)か
+  // configuredでない場合は最初のconfigured providerへ切り替える。
+  useEffect(() => {
+    if (providers.length === 0) return;
+    const current = providers.find((p) => p.name === provider);
+    if (current?.configured) return;
+    const firstConfigured = providers.find((p) => p.configured);
+    if (firstConfigured) setProvider(firstConfigured.name);
+  }, [providers, provider]);
+
   const selectedTask = tasks.find((t) => t.id === taskType);
   const isInvestigate = taskType === INVESTIGATE_TASK_ID;
   const scopeRequired = selectedTask?.requires_scope === true;
+  const selectedProvider = providers.find((p) => p.name === provider);
+  const providerReady = selectedProvider?.configured === true;
 
   async function handleLaunch() {
     setError(null);
+    if (!providerReady) {
+      setError("選択中のプロバイダは未設定です。設定済みのプロバイダを選択してください。");
+      return;
+    }
     if (isInvestigate && prompt.trim().length === 0) {
       setError("自然言語での指示を入力してください(このタスクは指示が必須です)。");
       return;
@@ -211,7 +230,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
       <button
         type="button"
         onClick={() => void handleLaunch()}
-        disabled={isLaunching || !taskType}
+        disabled={isLaunching || !taskType || !providerReady}
         className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-50"
       >
         {isLaunching ? "起動中..." : "エージェントを実行"}

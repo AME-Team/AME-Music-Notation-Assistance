@@ -170,10 +170,19 @@ export function AgentConsole({ runId, onDismiss }: AgentConsoleProps) {
   const track = useAgentRunStore((s) => s.track);
   const run = useAgentRunStore((s) => s.runs[runId]);
   const cancel = useAgentRunStore((s) => s.cancel);
+  const dismiss = useAgentRunStore((s) => s.dismiss);
 
+  // Gate2レビュー指摘(MIDDLE): このコンポーネントがアンマウントされても(親が
+  // onDismissでactiveAgentRunIdをnullにした場合を含む)track()が購読した
+  // SSE接続とrunsストアのイベント履歴(仮想スクロール前提で数千件になりうる)が
+  // 解放されないままだった。runIdの変化またはアンマウント時に必ずdismissし、
+  // unsubscribers/runsエントリを破棄する。
   useEffect(() => {
     track(runId);
-  }, [runId, track]);
+    return () => {
+      dismiss(runId);
+    };
+  }, [runId, track, dismiss]);
 
   const parentRef = useRef<HTMLDivElement>(null);
   // 新規イベント到着時、ユーザーが末尾付近を見ている間だけ自動追従する

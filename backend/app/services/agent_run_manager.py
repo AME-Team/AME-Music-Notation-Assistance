@@ -386,6 +386,13 @@ class AgentRunManager:
         試み続ける(実運用でscore未生成のprojectに対しrunを起動して発見)。
         `provider.stream()`経由の通常終了(`kind`がdone/error/cancelled)と
         同じ形の終端イベントを必ず1件publishすることで、この契約を揃える。
+
+        `seq`は`_event_history`に既に積まれているイベント数から採番する(Gate2
+        レビュー指摘・LOW): `stream()`/`result()`が想定外例外を送出する経路では、
+        例外前に`provider.stream()`がseq 0..Nのイベントを既にpublish済みの
+        ことがあり、ここを`seq=0`で固定すると「seqは単調増加」という契約が
+        崩れ重複する。ワークスペース構築失敗等、1件もpublishされていない経路
+        では`_event_history`が空のため従来通りseq=0になる。
         """
         kind: AgentEventKind = (
             "cancelled" if status == "cancelled" else "error" if status == "failed" else "done"
@@ -393,7 +400,8 @@ class AgentRunManager:
         payload: dict[str, Any] = {"status": status}
         if error is not None:
             payload["error"] = error
-        await self._publish(run_id, AgentEvent(run_id=run_id, seq=0, kind=kind, payload=payload))
+        seq = len(self._event_history.get(run_id, []))
+        await self._publish(run_id, AgentEvent(run_id=run_id, seq=seq, kind=kind, payload=payload))
 
     async def _close_subscribers(self, run_id: str) -> None:
         for queue in self._subscribers.get(run_id, []):
