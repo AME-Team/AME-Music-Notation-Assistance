@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 from app.pipeline.transcribe.bass import (
+    BASS_ALGO_VERSION,
     LPF_CUTOFF_HZ,
     _resolve_monophonic_overlaps,
     _segment_notes_from_f0,
@@ -14,9 +15,13 @@ from app.pipeline.transcribe.bass import (
     check_and_correct_octave_error,
     run_bass_transcription,
 )
-from app.pipeline.transcribe.piano import (
+from app.pipeline.transcribe.common import (
+    GHOST_MIN_DURATION_SEC,
+    GHOST_MIN_VELOCITY,
+    MIN_DURATION_FLOOR_SEC,
     NoteEvent,
     TranscriptionResult,
+    is_ghost_candidate,
 )
 
 
@@ -182,3 +187,24 @@ def test_run_bass_transcription_with_real_pipeline(tmp_path: Path) -> None:
     midis = [n.midi for n in result.notes]
     assert 40 in midis or 39 in midis or 41 in midis
     assert result.pedals == []
+
+
+def test_transcribe_common_contract_and_ghost_candidate() -> None:
+    """共通モジュール common.py の定数契約および is_ghost_candidate の挙動確認。"""
+    assert GHOST_MIN_DURATION_SEC == 0.06
+    assert GHOST_MIN_VELOCITY == 25
+    assert MIN_DURATION_FLOOR_SEC == 0.001
+
+    # 両方閾値以上 -> False
+    assert is_ghost_candidate(0.1, 50) is False
+    # duration のみ短い -> True
+    assert is_ghost_candidate(0.04, 50) is True
+    # velocity のみ小さい -> True
+    assert is_ghost_candidate(0.1, 20) is True
+    # 両方小さい -> True
+    assert is_ghost_candidate(0.01, 10) is True
+
+
+def test_bass_algo_version_is_defined() -> None:
+    assert isinstance(BASS_ALGO_VERSION, str)
+    assert len(BASS_ALGO_VERSION.split(".")) >= 2

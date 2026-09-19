@@ -32,7 +32,7 @@ from app.pipeline.beat import run_beat_estimation
 from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_pedal_ticks
 from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
-from app.pipeline.transcribe.bass import run_bass_transcription
+from app.pipeline.transcribe.bass import BASS_ALGO_VERSION, run_bass_transcription
 from app.pipeline.transcribe.piano import run_piano_transcription
 from app.services import score_undo, stage_invalidation
 from app.services.score_service import ScoreService
@@ -477,8 +477,10 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         librosa_version = _package_version("librosa")
         scipy_version = _package_version("scipy")
         hash_dict["bass_audio_fingerprint"] = audio_fingerprint(bass_stem_path)
+        hash_dict["bass_algo_version"] = BASS_ALGO_VERSION
         hash_dict["bass_librosa_version"] = librosa_version
         hash_dict["bass_scipy_version"] = scipy_version
+        provider_versions["bass_transcription"] = BASS_ALGO_VERSION
         provider_versions["librosa"] = librosa_version
         provider_versions["scipy"] = scipy_version
 

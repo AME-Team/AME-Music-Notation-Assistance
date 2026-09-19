@@ -1779,3 +1779,40 @@ def test_transcribe_stage_skip_rejected_when_one_part_notes_deleted(
     # 再実行: ピアノノートが欠落しているためスキップが拒否され再採譜されること
     dsp_main.run_transcribe_stage("job3", project_id, tmp_path, {})
     assert call_counts == {"piano": 2, "bass": 2}
+
+
+def test_transcribe_stage_records_bass_algo_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#124 レビュー指摘: bass_algo_version が provider_versions およびハッシュに反映されること。"""
+    from app.pipeline.transcribe.bass import BASS_ALGO_VERSION
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_bass_ver"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+
+    def _mock_bass(_p, **_k):
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=36,
+                    velocity=80,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_bass_transcription", _mock_bass)
+
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+
+    meta_path = storage.stage_metadata_path(tmp_path, project_id, "transcribe")
+    assert meta_path.exists()
+    meta = storage.read_json(meta_path)
+    assert meta["versions"].get("bass_transcription") == BASS_ALGO_VERSION
+    assert "librosa" in meta["versions"]
+    assert "scipy" in meta["versions"]

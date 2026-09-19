@@ -16,21 +16,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import scipy.signal
 
-from app.pipeline.transcribe.piano import (
-    _MIN_DURATION_FLOOR_SEC,
-    GHOST_MIN_DURATION_SEC,
-    GHOST_MIN_VELOCITY,
+from app.pipeline.transcribe.common import (
+    MIN_DURATION_FLOOR_SEC,
     NoteEvent,
     TranscriptionResult,
+    is_ghost_candidate,
 )
 
-if TYPE_CHECKING:
-    pass
+# ベースAMTのアルゴリズム版数。パラメータやロジック更新時にインクリメントする(#124 レビュー指摘)。
+BASS_ALGO_VERSION = "1.0.0"
 
 INPUT_SAMPLE_RATE = 22050
 LPF_CUTOFF_HZ = 500.0
@@ -141,10 +139,10 @@ def _resolve_monophonic_overlaps(notes: list[NoteEvent]) -> list[NoteEvent]:
         if i + 1 < len(sorted_notes):
             next_onset = sorted_notes[i + 1].onset_sec
             if offset > next_onset:
-                offset = max(next_onset, onset + _MIN_DURATION_FLOOR_SEC)
+                offset = max(next_onset, onset + MIN_DURATION_FLOOR_SEC)
 
-        new_duration = max(offset - onset, _MIN_DURATION_FLOOR_SEC)
-        ghost = new_duration < GHOST_MIN_DURATION_SEC or cur.velocity < GHOST_MIN_VELOCITY
+        new_duration = max(offset - onset, MIN_DURATION_FLOOR_SEC)
+        ghost = is_ghost_candidate(new_duration, cur.velocity)
         resolved.append(
             NoteEvent(
                 onset_sec=onset,
@@ -182,7 +180,7 @@ def _segment_notes_from_f0(
 
     def _flush_note(start_frame: int, end_frame: int, midi_pitch: int) -> None:
         start_sec = start_frame * frame_dur
-        end_sec = max((end_frame + 1) * frame_dur, start_sec + _MIN_DURATION_FLOOR_SEC)
+        end_sec = max((end_frame + 1) * frame_dur, start_sec + MIN_DURATION_FLOOR_SEC)
         duration_sec = end_sec - start_sec
 
         # 区間の RMS エネルギーを計算してベロシティ(1〜127)へマッピング
@@ -198,14 +196,15 @@ def _segment_notes_from_f0(
         else:
             velocity = 64
 
-        ghost = duration_sec < GHOST_MIN_DURATION_SEC or velocity < GHOST_MIN_VELOCITY
+        # ghost判定は後続の _resolve_monophonic_overlaps で重複解消後の
+        # 最終デュレーションに対して一元評価されるため、ここでは仮値 False とする(#124 レビュー指摘)
         notes.append(
             NoteEvent(
                 onset_sec=start_sec,
                 duration_sec=duration_sec,
                 midi=midi_pitch,
                 velocity=velocity,
-                ghost_candidate=ghost,
+                ghost_candidate=False,
             )
         )
 
