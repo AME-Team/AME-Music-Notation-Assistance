@@ -10,7 +10,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import soundfile as sf
-
 from app.pipeline.beat import build_beatmap, run_beat_estimation
 
 

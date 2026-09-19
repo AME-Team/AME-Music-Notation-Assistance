@@ -12,8 +12,8 @@ from app.domain.score import (
     Note,
     Part,
     ScoreIR,
-    Spelling,
     SourceInfo,
+    Spelling,
     Tie,
     TimeSignatureEntry,
 )

@@ -87,6 +87,70 @@ staff1、MIDI<60はstaff2、同時発音は音高が高い順にvoice1,2,3,4、�
 まとめる。
 """
 
+_REFINE_PART_PROMPT_TEMPLATE = """\
+refine-part専用の作業手順:
+
+1. 対象パート(TASK.mdのスコープに指定されたpart)について mcp__score__score_context および \
+mcp__score__score_stats を呼び、パート全体の調・音域・オンセット・声部構造を把握する。
+2. パート全体を小節ブロックごとに mcp__score__score_query で取得し、\
+notation_rules.md の規則に沿って声部割り当て・大譜表配分・重複ノートの解消を順次確認する。
+3. 修正が必要な箇所があれば mcp__score__score_apply_ops で修正し、各修正後に \
+mcp__score__score_validate(scope={"part_id": <part_id>}) で新たな違反がないか確認する。
+4. パート全体の通し整音結果(修正箇所・改善点・残存課題)を report.md にまとめる。
+"""
+
+_REPEAT_ALIGNMENT_PROMPT_TEMPLATE = """\
+repeat-alignment専用の作業手順:
+
+1. mcp__score__score_context で曲の全体構造(調・拍子・テンポ)を把握する。
+2. mcp__score__score_stats(part=<part_id>, metric="onset") や mcp__score__score_query \
+を用いて、曲中で同一または類似のリズムパターン・フレーズが繰り返されている\
+小節区間(Aメロの1回目と2回目、サビ等)を検出する。
+3. 検出した繰り返し区間同士の記譜(声部割り当て、異名同音表記の整合、タイの扱い)を比較する。
+4. 意図しない表記の揺らぎや声部割り当ての不一致があれば、mcp__score__score_apply_ops で\
+一方の記譜スタイルに統一する。
+5. 検出した繰り返し区間の一覧と、揃えた記譜の内容を report.md にまとめる。
+"""
+
+_GHOST_SWEEP_PROMPT_TEMPLATE = """\
+ghost-sweep専用の作業手順:
+
+1. 対象パート(または全パート)について mcp__score__score_stats(part=<part_id>, metric="velocity") \
+および metric="pitch_range" でベロシティ分布・音域を把握する。
+2. ベロシティのヒストグラムや統計情報から、この楽曲の演奏ノイズフロアおよび\
+ゴーストノート(意図しない微弱音・極短音)の閾値を決定する。
+3. 必要に応じて Bash 環境で Python スクリプトを実行し、より詳細な統計や\
+クラスタリング分析を行って閾値の妥当性を確認する。
+4. ゴーストノート候補を mcp__score__score_query で確認し、不適切なノートに対して\
+mcp__score__score_apply_ops(ops=[{"type": "note.update", "note_ids": [...], \
+"flags": ["ghost_candidate"]}]) または適切な修正を適用する。
+5. 判定基準と適用結果を report.md に詳細に記録する。
+"""
+
+_EXPORT_QA_PROMPT_TEMPLATE = """\
+export-qa専用の作業手順:
+
+1. 各パートについて mcp__score__score_render(scope={"part_id": <part_id>}, format="musicxml") \
+を実行し、MusicXML の生成を試行する。
+2. 出力された MusicXML 文字列や生成時の警告・エラーを確認し、\
+記譜上の不整合(小節内の拍数の過不足、不正なタイの接続、音域外記譜など)を特定する。
+3. mcp__score__score_validate(scope={"part_id": <part_id>}) も併せて実行し、検証違反を確認する。
+4. 発見した記譜上の問題を mcp__score__score_apply_ops で修正する。
+5. 修正後に再度 render と validate を実行し、問題が解消されたことを確認する。
+6. 検出された問題点と修正内容、最終的な MusicXML の検証状態を report.md に報告する。
+"""
+
+_INVESTIGATE_PROMPT_TEMPLATE = """\
+investigate専用の作業手順:
+
+1. TASK.md に記載されたユーザーの調査・修正依頼の指示内容を注意深く確認する。
+2. 必要に応じて mcp__score__* の各ツール(context, query, stats, validate, render, apply_ops) \
+やワークスペース内のファイルを活用して調査を進める。
+3. スコアの修正を伴う指示の場合は、mcp__score__score_apply_ops を通じて変更を適用し、\
+適用後に必ず mcp__score__score_validate でスコアの健全性を検証する。
+4. 調査結果・修正内容・ユーザーへの回答を report.md にわかりやすく整理して報告する。
+"""
+
 
 @dataclass(frozen=True)
 class TaskDefinition:
@@ -143,6 +207,9 @@ STANDARD_TASKS: tuple[TaskDefinition, ...] = (
         tools=("query", "stats", "apply_ops"),
         turns_min=15,
         turns_max=30,
+        max_tokens_budget=300_000,
+        timeout_sec=900,
+        prompt_template=_REPEAT_ALIGNMENT_PROMPT_TEMPLATE,
     ),
     TaskDefinition(
         id="ghost-sweep",
@@ -150,6 +217,9 @@ STANDARD_TASKS: tuple[TaskDefinition, ...] = (
         tools=("stats", "Bash(python)", "apply_ops"),
         turns_min=10,
         turns_max=25,
+        max_tokens_budget=250_000,
+        timeout_sec=750,
+        prompt_template=_GHOST_SWEEP_PROMPT_TEMPLATE,
     ),
     TaskDefinition(
         id="voicing-fix",
@@ -169,6 +239,9 @@ STANDARD_TASKS: tuple[TaskDefinition, ...] = (
         tools=("render", "apply_ops", "validate"),
         turns_min=15,
         turns_max=30,
+        max_tokens_budget=300_000,
+        timeout_sec=900,
+        prompt_template=_EXPORT_QA_PROMPT_TEMPLATE,
     ),
     TaskDefinition(
         id="investigate",
@@ -176,6 +249,9 @@ STANDARD_TASKS: tuple[TaskDefinition, ...] = (
         tools=("全ツール",),
         turns_min=None,
         turns_max=40,
+        max_tokens_budget=400_000,
+        timeout_sec=1200,
+        prompt_template=_INVESTIGATE_PROMPT_TEMPLATE,
     ),
 )
 

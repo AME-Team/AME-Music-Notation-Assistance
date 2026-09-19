@@ -11,13 +11,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
 from app.config import Settings
 from app.domain.score import Clef, Note, Part, ScoreIR, SourceInfo
 from app.infra import storage
 from app.pipeline.refine.l1_client import L1ChunkCallResult, L1ChunkResponse
 from app.services.score_service import ScoreService
+from fastapi.testclient import TestClient
 
 
 def _create_project(client: TestClient, tiny_wav_bytes: bytes) -> str:

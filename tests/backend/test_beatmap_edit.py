@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.pipeline.beat import build_beatmap
 from app.pipeline.beatmap_edit import (
     apply_bpm_override,

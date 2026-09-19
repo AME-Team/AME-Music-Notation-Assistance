@@ -11,13 +11,12 @@ import hashlib
 import json
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.config import Settings
 from app.domain.score import Clef, Note, Part, ScoreIR, SourceInfo
 from app.infra import storage
 from app.services.agent_run_service import AgentRunService
 from app.services.score_service import ScoreService
+from fastapi.testclient import TestClient
 
 _RUN_ID = "run_staging_test_01"
 

@@ -103,6 +103,17 @@ def build_song_context_message(score: ScoreIR, part_id: str) -> str:
         f"- 拍子: {', '.join(time_signatures)}",
         f"- テンポ: {', '.join(tempos)}",
     ]
+    chords = score.chords
+    if not chords:
+        from app.pipeline.harmony import estimate_chords_for_score
+
+        chords = estimate_chords_for_score(score)
+    if chords:
+        chords_summary = ", ".join(f"m.{c.bar}:{c.symbol}" for c in chords[:8])
+        if len(chords) > 8:
+            chords_summary += " ..."
+        lines.append(f"- コード進行: {chords_summary}")
+
     return "\n".join(lines)
 
 

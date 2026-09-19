@@ -284,11 +284,16 @@ def score_query(
 def score_context(ctx: ToolContext) -> dict[str, Any]:
     """調・拍子・テンポマップ・コード進行をまとめて返す。副作用なし。"""
     score = _load_working_score(ctx)
+    chords = score.chords
+    if not chords:
+        from app.pipeline.harmony import estimate_chords_for_score
+
+        chords = estimate_chords_for_score(score)
     return {
         "key_signatures": [k.model_dump(mode="json") for k in score.key_signatures],
         "time_signatures": [t.model_dump(mode="json") for t in score.time_signatures],
         "tempo_map": [t.model_dump(mode="json") for t in score.tempo_map],
-        "chords": [c.model_dump(mode="json") for c in score.chords],
+        "chords": [c.model_dump(mode="json") for c in chords],
     }
 
 

@@ -195,6 +195,10 @@ def build_chunks(
     time_signatures = score_dict["time_signatures"]
     tempo_map = score_dict["tempo_map"]
     chords = score_dict["chords"]
+    if not chords:
+        from app.pipeline.harmony import estimate_chords_for_score
+
+        chords = [c.model_dump(mode="json") for c in estimate_chords_for_score(score)]
     part = next(p for p in score_dict["parts"] if p["id"] == part_id)
     notes = [n for n in part["notes"] if n["status"] != "deleted"]
     if not notes:

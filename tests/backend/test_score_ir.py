@@ -12,10 +12,6 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
-from pydantic import ValidationError
-
 from app.domain.migrations import (
     FutureSchemaVersionError,
     UnknownSchemaVersionError,
@@ -31,6 +27,9 @@ from app.domain.score import (
     SourceInfo,
     Spelling,
 )
+from hypothesis import given
+from hypothesis import strategies as st
+from pydantic import ValidationError
 
 _PROVENANCE_VALUES = get_args(NoteProvenance)
 _STATUS_VALUES = get_args(NoteStatus)

@@ -8,7 +8,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
-
 from app.pipeline.separate import (
     audio_fingerprint,
     params_hash,

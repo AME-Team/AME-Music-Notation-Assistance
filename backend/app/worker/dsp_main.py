@@ -29,6 +29,7 @@ from app.domain.migrations import migrate_to_current
 from app.domain.score import Clef, Note, Part, Pedal, ScoreIR, SnapCandidate, SourceInfo, Spelling
 from app.infra import storage
 from app.pipeline.beat import run_beat_estimation
+from app.pipeline.harmony import estimate_chords_for_score
 from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_pedal_ticks
 from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
@@ -898,6 +899,12 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         for pedal, (start_tick, stop_tick) in zip(part.pedals, pedal_ticks, strict=True):
             pedal.start_tick = start_tick
             pedal.stop_tick = stop_tick
+
+    # #57 FR-16: コード進行の自動推定とScoreIR.chordsへの格納
+    try:
+        score.chords = estimate_chords_for_score(score)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[dsp_main] warning: chord estimation failed: {exc}", file=sys.stderr)
 
     raw_now = storage.read_json(score_path) if score_path.exists() else None
     if raw_now != raw_before:

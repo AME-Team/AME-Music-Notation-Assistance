@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
-
 from app.pipeline.transcribe.piano import (
     GHOST_MIN_DURATION_SEC,
     GHOST_MIN_VELOCITY,

@@ -10,10 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi.testclient import TestClient
-
 from app.config import Settings
 from app.main import create_app
+from fastapi.testclient import TestClient
 
 TEST_TOKEN = "test-token-abc123"
 
