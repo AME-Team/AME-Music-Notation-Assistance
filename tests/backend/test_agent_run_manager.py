@@ -21,6 +21,7 @@ from app.infra import db, storage
 from app.services.agent_run_manager import (
     AgentRunManager,
     MissingPromptError,
+    MissingScopeError,
     UnknownProviderError,
     UnknownTaskTypeError,
 )
@@ -130,6 +131,34 @@ async def test_create_run_requires_prompt_for_investigate(tmp_path: Path) -> Non
         await manager.create_run(
             project_id="proj_1", task_type="investigate", provider_name="dummy"
         )
+
+
+async def test_create_run_requires_scope_for_voicing_fix(tmp_path: Path) -> None:
+    """Gate2レビュー指摘(MIDDLE)の回帰テスト: `requires_scope=True`のタスク
+
+    (voicing-fix)に`scope`が無い場合、サイレントに(スコープ抜きの不完全な
+    指示のまま)起動せず`MissingScopeError`でfail-fastすることを確認する。
+    """
+    _create_project(tmp_path, "proj_1")
+    manager = _manager(tmp_path)
+    with pytest.raises(MissingScopeError):
+        await manager.create_run(
+            project_id="proj_1", task_type="voicing-fix", provider_name="dummy"
+        )
+
+
+async def test_create_run_accepts_voicing_fix_with_scope(tmp_path: Path) -> None:
+    _create_project(tmp_path, "proj_1")
+    manager = _manager(tmp_path)
+    run_id = await manager.create_run(
+        project_id="proj_1",
+        task_type="voicing-fix",
+        provider_name="dummy",
+        scope={"part_id": "piano", "bars": [1, 4]},
+    )
+    await _drain(manager, run_id)
+    run = manager.agent_run_service.get_run(run_id)
+    assert run["status"] == "completed"
 
 
 async def test_create_run_propagates_project_not_found(tmp_path: Path) -> None:

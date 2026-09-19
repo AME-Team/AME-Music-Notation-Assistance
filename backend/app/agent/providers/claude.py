@@ -158,6 +158,12 @@ def _resolve_run_id(task: AgentTask) -> str | None:
     `ToolContext.run_id`にのみ依存するため、無条件に「最初に見つかった
     config["run_id"]」を採用すると、将来score以外のspecが混在した場合や
     順序が変わった場合に無関係な値を拾ってこのバグが再発しうる)。
+
+    **契約(Gate2レビュー指摘・LOW)**: `config["run_id"]`を指定する呼び出し元は、
+    プロセス内でその値が(同時に生存している他のrunと)一意であることを保証する
+    責任を負う。ここで採用したrun_idが既に`self._runs`に存在する場合、
+    `start()`は`ClaudeAgentProviderError`を送出してfail-fastする
+    (サイレントな状態上書きを避けるため)。
     """
     for spec in task.mcp_servers:
         if spec.kind != "in_process" or spec.name != SERVER_NAME:
@@ -312,6 +318,17 @@ class ClaudeAgentProvider:
 
     async def start(self, task: AgentTask) -> AgentRunHandle:
         run_id = _resolve_run_id(task) or str(uuid.uuid4())
+        # Gate2レビュー指摘(LOW): `config["run_id"]`(外部指定)を無条件に採用する
+        # ため、呼び出し元が同一run_idを重複して渡すと`self._runs`のキーが衝突し、
+        # 既存runの状態を無言で上書きしてしまう。一意性は呼び出し元の契約
+        # (`_resolve_run_id`のdocstring参照)だが、違反時はサイレントな上書きより
+        # fail-fastの方が安全なため、ここで検出して例外にする。自己採番
+        # (`uuid.uuid4()`)側は衝突が天文学的に起こらないため対象外で構わない。
+        if run_id in self._runs:
+            raise ClaudeAgentProviderError(
+                f"run_id {run_id!r} is already in use; McpServerSpec.config['run_id'] "
+                "must be unique per run (the caller is responsible for uniqueness)"
+            )
         # `mcp_servers`の構成不備(`ClaudeAgentProviderError`)はrunを
         # `self._runs`へ登録する前に検出する(モジュールdocstring参照)。
         mcp_servers = _build_mcp_servers(task, run_id)

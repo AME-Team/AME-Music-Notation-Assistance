@@ -107,6 +107,12 @@ class TaskDefinition:
     max_tokens_budget: int | None = None
     timeout_sec: int | None = None
     prompt_template: str | None = None
+    # Gate2レビュー指摘(MIDDLE): voicing-fixのように「対象範囲」が作業の前提
+    # そのものであるタスクで、呼び出し元が`scope`を指定し忘れた場合にサイレントに
+    # (スコープ抜きの不完全な指示のまま)起動して予算を浪費するのを防ぐ。
+    # `AgentRunManager.create_run`が`investigate`の`MissingPromptError`と同じ
+    # パターンでfail-fastする。
+    requires_scope: bool = False
 
 
 STANDARD_TASKS: tuple[TaskDefinition, ...] = (
@@ -155,6 +161,7 @@ STANDARD_TASKS: tuple[TaskDefinition, ...] = (
         max_tokens_budget=200_000,
         timeout_sec=600,
         prompt_template=_VOICING_FIX_PROMPT_TEMPLATE,
+        requires_scope=True,
     ),
     TaskDefinition(
         id="export-qa",

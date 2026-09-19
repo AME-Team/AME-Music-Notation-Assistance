@@ -712,3 +712,36 @@ async def test_resolve_run_id_ignores_non_score_server_specs(
     )
     handle = await provider.start(task)
     assert handle.run_id == "correct-run-id"
+
+
+async def test_start_rejects_duplicate_config_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(LOW)の回帰テスト: 呼び出し元が同一の
+
+    `config["run_id"]`を重複して渡した場合、既存runの状態をサイレントに
+    上書きせず`ClaudeAgentProviderError`でfail-fastすることを確認する。
+    """
+    fake_cls = _make_fake_client_cls(_HAPPY_SCRIPT)
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+
+    provider = claude_provider.ClaudeAgentProvider()
+
+    def _task() -> AgentTask:
+        return AgentTask(
+            task_type="test",
+            project_id="proj-1",
+            prompt="do it",
+            workspace=tmp_path,
+            mcp_servers=[
+                McpServerSpec(
+                    name="score",
+                    kind="in_process",
+                    config={"workspace_dir": str(tmp_path), "run_id": "run_dup"},
+                )
+            ],
+        )
+
+    await provider.start(_task())
+    with pytest.raises(claude_provider.ClaudeAgentProviderError):
+        await provider.start(_task())

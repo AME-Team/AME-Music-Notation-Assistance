@@ -58,6 +58,15 @@ class MissingPromptError(ValueError):
     """`task_type="investigate"`(自然言語の自由指示、§8.7)に`prompt`が無い場合。"""
 
 
+class MissingScopeError(ValueError):
+    """`task_def.requires_scope=True`(#50: voicing-fix等、対象範囲が作業の
+
+    前提そのものであるタスク)に`scope`が無い場合。`MissingPromptError`
+    (investigate)と同じfail-fastパターン — 未指定のまま起動すると
+    スコープ抜きの不完全な指示で予算を浪費するだけになる(Gate2レビュー指摘)。
+    """
+
+
 def _compose_prompt(
     task_def: TaskDefinition, user_prompt: str | None, scope: dict[str, Any] | None
 ) -> str:
@@ -137,6 +146,8 @@ class AgentRunManager:
             raise UnknownTaskTypeError(task_type)
         if task_def.id == "investigate" and not prompt:
             raise MissingPromptError("task_type='investigate' requires a non-empty prompt")
+        if task_def.requires_scope and not scope:
+            raise MissingScopeError(f"task_type={task_type!r} requires a non-empty scope")
         provider = self.providers.get(provider_name)
         if provider is None:
             raise UnknownProviderError(provider_name)
