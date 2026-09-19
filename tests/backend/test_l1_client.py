@@ -12,7 +12,6 @@ import subprocess
 from unittest.mock import patch
 
 import pytest
-
 from app.pipeline.refine.l1_chunker import (
     ChunkBars,
     ChunkContext,
@@ -98,7 +97,8 @@ def test_call_l1_chunk_returns_parsed_output_and_usage() -> None:
     assert "--json-schema" in cmd
     assert "--allowedTools" in cmd
     assert "StructuredOutput" in cmd
-    assert "--restricted" in cmd
+    # CLIバージョン差異による失敗を防ぐため --restricted は付与しない(#122)。
+    assert "--restricted" not in cmd
     # 楽曲コンテキスト+チャンクJSONはコマンドライン引数ではなく標準入力経由
     # (#104 Gate2レビュー指摘: Windowsのコマンドライン長上限を回避するため)。
     assert "context" not in cmd
