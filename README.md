@@ -18,42 +18,101 @@ workspace/   実行時生成データ(.gitignore対象)。SQLite・プロジェ�
 `backend/app/domain/` は外部ライブラリに一切依存しない(§5.2)。Score IR・編集オペレーション・
 検証ロジックは将来ここに実装し、単体テストを厚くする方針を維持すること。
 
-## クイックスタート(Windows)
+## アプリの起動手順 (Windows)
 
-初回セットアップ(`uv sync` / `npm install`)からアプリ起動まで、リポジトリ直下の
-[`start.bat`](start.bat) をダブルクリックする(またはコマンドプロンプトで実行する)だけで
-1コマンドで完了する。事前に [`uv`](https://docs.astral.sh/uv/) と Node.js は導入しておくこと。
+本アプリは **Electron が起動時に Python バックエンドを自動的に子プロセスとして起動・管理する設計** になっています。そのため、**バックエンドを手動で起動する必要はありません**。
 
-## セットアップ
+### 1. 最も簡単な起動方法 (ワンクリック / 推奨)
 
-### バックエンド
+リポジトリ直下の [`start.bat`](start.bat) をダブルクリックする（またはコマンドプロンプト / PowerShell から実行する）だけで、初回セットアップからアプリ起動までが自動で行われます。
 
-```bash
-uv python install 3.12
+- 事前準備:
+  - [`uv`](https://docs.astral.sh/uv/) (Python 3.12 パッケージマネージャ)
+  - [Node.js](https://nodejs.org/) (LTS)
+- 起動方法:
+  ```cmd
+  .\start.bat
+  ```
+  初回実行時は自動的にバックエンドの `uv sync` とフロントエンドの `npm install` が実行され、続いて Electron アプリとバックエンドが立ち上がります。
+
+---
+
+### 2. コマンドラインからの起動手順 (日常の開発・実行)
+
+#### 初回セットアップ (初回のみ)
+
+```cmd
+:: 1. バックエンドの依存関係インストール
 cd backend
 uv sync
-uv run pytest ../tests/backend   # または repo 直下から: uv run --project backend pytest
-uv run ruff check . ../tests/backend
-```
 
-依存は §13(設計書)の確定版スタックを固定しているが、実インストール検証の結果 2 点だけ
-バージョンを変更している。理由は [`backend/DEPENDENCY_NOTES.md`](backend/DEPENDENCY_NOTES.md)
-を参照(`torch`/`torchaudio` を 2.13.0→2.10.0 に、`piano_transcription_inference` に
-`audioread` を追加)。
-
-### フロントエンド
-
-```bash
-cd frontend
+:: 2. フロントエンドの依存関係インストール
+cd ..\frontend
 npm install
-npm run typegen     # backend/openapi.json → src/api/generated.ts (要: 事前に export_openapi.py 実行)
-npm run dev          # Vite dev server + Electron を同時起動
-npm run build        # renderer(Vite) + electron(tsc) をビルド
-npm start             # ビルド後に Electron を起動
 ```
 
-**パッケージマネージャは npm を採用**(pnpm は未導入。corepack を追加する複雑さを避けた)。
-**Lint/Format は Biome を採用**(eslint+prettier の二重設定を避けるため単一ツールに統一)。
+#### アプリ起動コマンド
+
+セットアップ後は、**以下のコマンドだけでアプリ全体（フロントエンド + バックエンド）が起動します**:
+
+```cmd
+cd frontend
+npm run dev
+```
+
+> **内部で何が起きるか**:
+> 1. Vite 開発サーバー (`localhost:5173`) が起動します。
+> 2. Electron メインプロセスが起動します。
+> 3. Electron がバックグラウンドで Python バックエンド (`uv run --project backend python -m app.main`) を空きポートで自動 spawn します。
+> 4. ヘルスチェック疎通確認後、アプリウィンドウが表示されます。
+> 5. アプリウィンドウを閉じると、Python プロセスも自動的に終了・クリーンアップされます。
+
+---
+
+### 3. 本番ビルド版での起動確認
+
+```cmd
+cd frontend
+npm run build
+npm start
+```
+
+---
+
+### 4. 開発者向け個別コマンド (単体テスト・API単体起動など)
+
+バックエンド単体でのテストや API 動作確認を行いたい場合のみ、以下を使用します:
+
+- **バックエンドの単体テスト**:
+  ```bash
+  cd backend
+  uv run pytest ../tests/backend
+  ```
+- **バックエンドの静的検査**:
+  ```bash
+  cd backend
+  uv run ruff check . ../tests/backend
+  ```
+- **バックエンドの単体起動 (API のみ確認・Swagger UI 閲覧時など)**:
+  ```bash
+  cd backend
+  uv run python -m app.main --port 8000
+  ```
+  起動後、ブラウザで `http://127.0.0.1:8000/docs` を開くと Swagger UI を確認できます。
+
+**備考**:
+- パッケージマネージャは npm を採用 (pnpm は未導入)。
+- フロントエンドの Lint/Format は Biome を採用 (`npm run lint` / `npm run format`)。
+- バックエンドの依存関係の詳細・注意点は [`backend/DEPENDENCY_NOTES.md`](backend/DEPENDENCY_NOTES.md) を参照。
+
+## ログ出力と保存期間
+
+Electron アプリ実行時のログ (メインプロセス、画面コンソール、Python バックエンドの stdout/stderr) は日付別ログファイルに自動出力されます。
+
+- **保存場所**: `%APPDATA%\ame-frontend\logs\` (`app.getPath("userData")/logs/`)
+- **ファイル名形式**: `app-YYYY-MM-DD.log`
+- **保存期間**: **1 週間 (7 日間)**。ログ肥大化を防止するため、7 日を超過した古いログファイルは起動時に自動削除されます。
+- **ログフォルダの確認方法**: アプリメニューの **[ヘルプ] → [ログフォルダを開く]** からエクスプローラーで直接開くことができます。
 
 ## OpenAPI → TypeScript 型生成(NFR-09)
 

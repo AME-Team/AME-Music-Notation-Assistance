@@ -1,4 +1,5 @@
 import { Menu, type MenuItemConstructorOptions, shell } from "electron";
+import { getLogsDir } from "./logger";
 
 /** ネイティブメニュー(#15)。M0 では最小限(標準ロールのみ)。 */
 export function buildMenu(): Menu {
@@ -34,6 +35,13 @@ export function buildMenu(): Menu {
     {
       label: "ヘルプ",
       submenu: [
+        {
+          label: "ログフォルダを開く",
+          click: () => {
+            void shell.openPath(getLogsDir());
+          },
+        },
+        { type: "separator" },
         {
           label: "リポジトリを開く",
           click: () =>

@@ -3,6 +3,7 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 import treeKill from "tree-kill";
+import { logger } from "./logger";
 import { generateToken, getFreePort } from "./port";
 
 /**
@@ -111,15 +112,24 @@ export async function startBackend(
     await writeFile(lockPath(), JSON.stringify({ pid: child.pid, port }), "utf-8");
   }
 
+  child.stdout?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf-8").trimEnd();
+    if (text) logger.info("backend", text);
+  });
+
   child.stderr?.on("data", (chunk: Buffer) => {
-    console.error(`[backend] ${chunk.toString("utf-8")}`);
+    const text = chunk.toString("utf-8").trimEnd();
+    if (text) logger.warn("backend", text);
   });
 
   const baseUrl = `http://127.0.0.1:${port}`;
+  logger.info("backend", `Waiting for backend health check at ${baseUrl}...`);
   const ready = await waitForHealth(baseUrl, child);
   if (!ready) {
+    logger.error("backend", "Backend failed to start (health check timed out)");
     onStatus("error", "backend failed to start (health check timed out)");
   } else {
+    logger.info("backend", "Backend is healthy and ready");
     onStatus("ready");
   }
 
