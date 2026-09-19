@@ -1562,3 +1562,257 @@ def test_force_rerun_with_failed_invalidation_resets_own_metadata_for_retry(
     )
     assert call_count == 1  # metaが削除されていたためスキップされず再実行された
     assert not storage.stage_metadata_path(tmp_path, project_id, "transcribe").exists()
+
+
+def test_transcribe_stage_with_bass_stem_creates_bass_part(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#54: bass.wav がある場合、Score IR に Bass パート(staves=1, clefs=[F4], midi_program=33)が生成されること。"""
+    from app.pipeline.transcribe.piano import NoteEvent, TranscriptionResult
+
+    project_id = "proj_bass"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+
+    fake_bass_notes = [
+        NoteEvent(
+            onset_sec=0.0, duration_sec=0.5, midi=40, velocity=80, ghost_candidate=False
+        ),
+        NoteEvent(
+            onset_sec=0.5, duration_sec=0.5, midi=43, velocity=85, ghost_candidate=False
+        ),
+    ]
+
+    monkeypatch.setattr(
+        dsp_main,
+        "run_bass_transcription",
+        lambda _p, **_k: TranscriptionResult(notes=fake_bass_notes, pedals=[]),
+    )
+
+    dsp_main.run_transcribe_stage("job_bass", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score_optional(project_id)
+    assert score is not None
+    bass_part = score.find_part("bass")
+    assert bass_part is not None
+    assert bass_part.name == "Bass"
+    assert bass_part.midi_program == 33
+    assert bass_part.staves == 1
+    assert len(bass_part.clefs) == 1
+    assert bass_part.clefs[0].sign == "F"
+    assert bass_part.clefs[0].line == 4
+    assert len(bass_part.notes) == 2
+    assert bass_part.notes[0].midi == 40
+    assert bass_part.notes[1].midi == 43
+
+
+def test_transcribe_stage_with_both_piano_and_bass_stems(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#54: piano.wav と bass.wav の両方がある場合、両パートが Score IR に生成されること。"""
+    from app.pipeline.transcribe.piano import NoteEvent, TranscriptionResult
+
+    project_id = "proj_both"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        lambda _p, **_k: TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=60,
+                    velocity=70,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        ),
+    )
+    monkeypatch.setattr(
+        dsp_main,
+        "run_bass_transcription",
+        lambda _p, **_k: TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=36,
+                    velocity=80,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        ),
+    )
+
+    dsp_main.run_transcribe_stage("job_both", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score_optional(project_id)
+    assert score is not None
+    piano_part = score.find_part("piano")
+    bass_part = score.find_part("bass")
+    assert piano_part is not None
+    assert bass_part is not None
+    assert len(piano_part.notes) == 1
+    assert len(bass_part.notes) == 1
+
+
+def test_transcribe_stage_bass_octave_shift_integration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#54 / R-6: 生成された Bass パートに対して PartTransposeOctaveOp(part_id="bass") が適用できること。"""
+    from app.domain.score_ops import PartTransposeOctaveOp
+    from app.pipeline.transcribe.piano import NoteEvent, TranscriptionResult
+    from app.services import score_ops
+
+    project_id = "proj_bass_shift"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+
+    fake_bass_notes = [
+        NoteEvent(
+            onset_sec=0.0, duration_sec=0.5, midi=40, velocity=80, ghost_candidate=False
+        ),
+    ]
+    monkeypatch.setattr(
+        dsp_main,
+        "run_bass_transcription",
+        lambda _p, **_k: TranscriptionResult(notes=fake_bass_notes, pedals=[]),
+    )
+
+    dsp_main.run_transcribe_stage("job_shift", project_id, tmp_path, {})
+
+    score_service = ScoreService(workspace_dir=tmp_path)
+    score = score_service.read_score(project_id)
+    bass_part = score.find_part("bass")
+    assert bass_part is not None
+    assert bass_part.notes[0].midi == 40
+
+    # 1オクターブ上にシフト
+    score_ops.apply_ops(
+        score,
+        [PartTransposeOctaveOp(part_id="bass", direction="up")],
+        beat_anchors=[],
+    )
+    bass_part = score.find_part("bass")
+    assert bass_part is not None
+    assert bass_part.notes[0].midi == 52
+
+    # 1オクターブ下にシフト
+    score_ops.apply_ops(
+        score,
+        [PartTransposeOctaveOp(part_id="bass", direction="down")],
+        beat_anchors=[],
+    )
+    bass_part = score.find_part("bass")
+    assert bass_part is not None
+    assert bass_part.notes[0].midi == 40
+
+
+def test_transcribe_stage_skip_rejected_when_one_part_notes_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#124 レビュー指摘: 両ステムが存在する状態で片方のノートだけ削除された場合、スキップが拒否されて再採譜されること。"""
+    from app.pipeline.transcribe.piano import NoteEvent, TranscriptionResult
+
+    project_id = "proj_both_delete"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+
+    call_counts = {"piano": 0, "bass": 0}
+
+    def _mock_piano(_p, **_k):
+        call_counts["piano"] += 1
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=60,
+                    velocity=70,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    def _mock_bass(_p, **_k):
+        call_counts["bass"] += 1
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=36,
+                    velocity=80,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _mock_piano)
+    monkeypatch.setattr(dsp_main, "run_bass_transcription", _mock_bass)
+
+    # 初回実行
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    assert call_counts == {"piano": 1, "bass": 1}
+
+    # 入力不変ならスキップされること
+    dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
+    assert call_counts == {"piano": 1, "bass": 1}
+
+    # ピアノパートのノートだけを削除した状態を作る
+    score_service = ScoreService(workspace_dir=tmp_path)
+    score = score_service.read_score(project_id)
+    piano_part = score.find_part("piano")
+    assert piano_part is not None
+    piano_part.notes = []
+    score_service.write_score(project_id, score)
+
+    # 再実行: ピアノノートが欠落しているためスキップが拒否され再採譜されること
+    dsp_main.run_transcribe_stage("job3", project_id, tmp_path, {})
+    assert call_counts == {"piano": 2, "bass": 2}
+
+
+def test_transcribe_stage_records_bass_algo_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#124 レビュー指摘: bass_algo_version が provider_versions およびハッシュに反映されること。"""
+    from app.pipeline.transcribe.bass import BASS_ALGO_VERSION
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_bass_ver"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+
+    def _mock_bass(_p, **_k):
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=36,
+                    velocity=80,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_bass_transcription", _mock_bass)
+
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+
+    meta_path = storage.stage_metadata_path(tmp_path, project_id, "transcribe")
+    assert meta_path.exists()
+    meta = storage.read_json(meta_path)
+    assert meta["versions"].get("bass_transcription") == BASS_ALGO_VERSION
+    assert "librosa" in meta["versions"]
+    assert "scipy" in meta["versions"]

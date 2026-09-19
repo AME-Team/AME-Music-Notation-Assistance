@@ -15,9 +15,38 @@ ByteDance Piano Transcription(`piano_transcription_inference`)を使用する。
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from app.pipeline.transcribe.common import (
+    GHOST_MIN_DURATION_SEC,
+    GHOST_MIN_VELOCITY,
+    MIN_DURATION_FLOOR_SEC,
+    NoteEvent,
+    PedalEvent,
+    TranscriptionResult,
+    is_ghost_candidate,
+)
+
+# 外部・内部の後方互換性のためのエイリアス
+_MIN_DURATION_FLOOR_SEC = MIN_DURATION_FLOOR_SEC
+
+__all__ = [
+    "DEFAULT_CHECKPOINT_PATH",
+    "GHOST_MIN_DURATION_SEC",
+    "GHOST_MIN_VELOCITY",
+    "INPUT_SAMPLE_RATE",
+    "MIN_CHECKPOINT_SIZE_BYTES",
+    "MIN_DURATION_FLOOR_SEC",
+    "NoteEvent",
+    "PedalEvent",
+    "PianoTranscriber",
+    "TranscriptionResult",
+    "_MIN_DURATION_FLOOR_SEC",
+    "ensure_checkpoint",
+    "is_ghost_candidate",
+    "run_piano_transcription",
+]
 
 if TYPE_CHECKING:
     import numpy as np
@@ -101,47 +130,9 @@ def ensure_checkpoint(path: Path = DEFAULT_CHECKPOINT_PATH) -> Path:
     return path
 
 
-# 共通後処理のしきい値(#24)。design §7.4 のL0 ghost判定
-# (confidence<0.35 かつ duration<60ms かつ velocity<25、3条件すべてのAND)とは
-# 別に、Stage 3自身はduration/velocityそれぞれ単独の条件(いずれか一方を
-# 満たせばフラグを立てる、より広く網をかける粗いフィルタ)として位置づける。
-# `confidence` はpiano_transcription_inferenceがノート単位で公開していない
-# (ライブラリのpost-processorが内部の閾値判定で既にest_note_eventsへ採用する
-# か否かを決めており、その確信度はAPIとして出てこない)ため、AMT由来のノートは
-# 既定 `confidence=1.0` とする(既知の制約: L0のghost判定式のconfidence項は
-# 現状AMT由来ノートに対しては事実上働かない。#26実装時にも同じ前提を引き継ぐ)。
-GHOST_MIN_DURATION_SEC = 0.06
-GHOST_MIN_VELOCITY = 25
-
-# 生成物にゼロ長ノートを書き込むと `domain.score.Note`(duration_sec>0)の
-# 不変条件に違反するため、モデルが極端な(onset==offset等の)出力をした場合の
-# 最終防波堤として使う最小値。
-_MIN_DURATION_FLOOR_SEC = 0.001
-
 # `PianoTranscription.transcribe(audio, midi_path)` の呼び出し面。テストで
 # モックできるよう抽象化する(`pipeline/beat.py` の `BeatTracker` と同形)。
 PianoTranscriber = Callable[["np.ndarray"], dict[str, Any]]
-
-
-@dataclass(frozen=True)
-class NoteEvent:
-    onset_sec: float
-    duration_sec: float
-    midi: int
-    velocity: int
-    ghost_candidate: bool
-
-
-@dataclass(frozen=True)
-class PedalEvent:
-    start_sec: float
-    stop_sec: float
-
-
-@dataclass(frozen=True)
-class TranscriptionResult:
-    notes: list[NoteEvent]
-    pedals: list[PedalEvent]
 
 
 def _load_audio_16k_mono(audio_path: Path) -> np.ndarray:
@@ -154,9 +145,9 @@ def _load_audio_16k_mono(audio_path: Path) -> np.ndarray:
 def _to_note_event(raw_event: dict[str, Any]) -> NoteEvent:
     onset = float(raw_event["onset_time"])
     offset = float(raw_event["offset_time"])
-    duration = max(offset - onset, _MIN_DURATION_FLOOR_SEC)
+    duration = max(offset - onset, MIN_DURATION_FLOOR_SEC)
     velocity = int(raw_event["velocity"])
-    ghost = duration < GHOST_MIN_DURATION_SEC or velocity < GHOST_MIN_VELOCITY
+    ghost = is_ghost_candidate(duration, velocity)
     return NoteEvent(
         onset_sec=onset,
         duration_sec=duration,
