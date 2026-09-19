@@ -3155,6 +3155,11 @@
           "turns_max": {
             "type": "integer",
             "title": "Turns Max"
+          },
+          "requires_scope": {
+            "type": "boolean",
+            "title": "Requires Scope",
+            "default": false
           }
         },
         "type": "object",

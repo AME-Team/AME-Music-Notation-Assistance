@@ -116,6 +116,10 @@ class TaskDefinitionResponse(BaseModel):
     tools: tuple[str, ...]
     turns_min: int | None
     turns_max: int
+    # #51 AgentTaskLauncher: `requires_scope=True`のタスク(voicing-fix等)を
+    # フロントエンドが`task_type`文字列のハードコードなしに判別できるよう、
+    # `TaskDefinition.requires_scope`(#50)をそのまま公開する。
+    requires_scope: bool = False
 
 
 def _event_to_sse_payload(event: AgentEvent) -> dict[str, Any]:
@@ -157,7 +161,12 @@ def list_task_definitions() -> list[TaskDefinitionResponse]:
     """#49: 標準タスク定義一覧(設計書§8.7)。"""
     return [
         TaskDefinitionResponse(
-            id=t.id, purpose=t.purpose, tools=t.tools, turns_min=t.turns_min, turns_max=t.turns_max
+            id=t.id,
+            purpose=t.purpose,
+            tools=t.tools,
+            turns_min=t.turns_min,
+            turns_max=t.turns_max,
+            requires_scope=t.requires_scope,
         )
         for t in STANDARD_TASKS
     ]

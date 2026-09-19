@@ -49,6 +49,24 @@ def _create_project(workspace_dir: Path, project_id: str) -> None:
     ScoreService(workspace_dir).write_score(project_id, score)
 
 
+def _create_project_without_score(workspace_dir: Path, project_id: str) -> None:
+    """#51: quantizeまで未実行で`score/current.json`が無いprojectを再現する
+
+    (実際のUI操作(アップロード直後にAgentTaskLauncherから即runを起動)で
+    到達する状態。`_create_project`は常にScoreServiceでスコアを書き込むため、
+    既存のテストは`create_workspace()`の`ScoreNotFoundError`経路を一度も
+    通していなかった)。
+    """
+    storage.ensure_project_layout(workspace_dir, project_id)
+    conn = db.get_connection(workspace_dir / "db.sqlite3")
+    conn.execute(
+        "INSERT INTO projects(id, name, original_filename, audio_format, created_at) "
+        "VALUES (?, 'Test', 'song.wav', 'wav', '2026-01-01T00:00:00Z')",
+        (project_id,),
+    )
+    conn.commit()
+
+
 def _manager(workspace_dir: Path) -> AgentRunManager:
     return AgentRunManager(
         workspace_dir=workspace_dir,
@@ -200,6 +218,17 @@ async def test_cancel_before_drive_run_starts_produces_no_provider_events(
     run = manager.agent_run_service.get_run(run_id)
     assert run["status"] == "cancelled"
 
+    # #51: provider.start()すら呼ばないこの経路でも、終端契約を満たす合成の
+    # cancelledイベントが1件publishされていること(以前はAgentEventを一切
+    # publishしておらず、遅れて購読したSSEクライアントは0イベントのまま
+    # 接続が閉じたとしか観測できなかった)。
+    queue = manager.subscribe(run_id)
+    event = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert event is not None
+    assert event.kind == "cancelled"
+    terminator = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert terminator is None
+
 
 async def test_cancel_after_completion_raises_value_error(tmp_path: Path) -> None:
     _create_project(tmp_path, "proj_1")
@@ -239,6 +268,33 @@ class _BrokenStreamProvider:
         )
 
 
+class _PartiallyBrokenStreamProvider:
+    """`stream()`が数件のイベントをyieldしてから例外を送出するフェイクプロバイダ。
+
+    `_BrokenStreamProvider`と異なり`_event_history`が空でない状態で終端化する
+    経路(Gate2レビュー指摘・LOWの回帰テスト用): 合成終端イベントの`seq`を0に
+    固定すると、既にpublish済みのseq 0のイベントと重複してしまう。
+    """
+
+    name = "partially-broken"
+
+    async def start(self, task: AgentTask) -> AgentRunHandle:
+        return AgentRunHandle(run_id="internal-partially-broken")
+
+    async def stream(self, run_id: str) -> AsyncIterator[AgentEvent]:
+        yield AgentEvent(run_id=run_id, seq=0, kind="thinking", payload={"text": "..."})
+        yield AgentEvent(run_id=run_id, seq=1, kind="tool_use", payload={"input": {}})
+        raise RuntimeError("boom: unexpected provider bug mid-stream")
+
+    async def cancel(self, run_id: str) -> None:
+        pass
+
+    async def result(self, run_id: str) -> AgentResult:
+        raise AssertionError(
+            "result() should not be called since stream() raised first"
+        )
+
+
 async def test_provider_stream_exception_marks_run_failed_and_closes_subscribers(
     tmp_path: Path,
 ) -> None:
@@ -253,15 +309,81 @@ async def test_provider_stream_exception_marks_run_failed_and_closes_subscribers
     )
 
     # subscribe()はまだバックグラウンドタスクが走っていない時点で呼ぶため、
-    # ライブqueueに登録される。ここでNoneが届く(=ハングしない)ことを確認する。
+    # ライブqueueに登録される。stream()が一度もイベントをyieldせず例外送出しても、
+    # 終端契約を満たす合成のerrorイベントが1件届いてから(#51で発見: 以前は
+    # 何も届かずNoneのみで即クローズしていた — SSE購読者は0イベントで
+    # 接続が閉じたとしか観測できず、フロントエンドの終端判定に引っかからないまま
+    # 無限に再接続していた)、Noneで購読が閉じる(=ハングしない)ことを確認する。
     queue = manager.subscribe(run_id)
     event = await asyncio.wait_for(queue.get(), timeout=5.0)
-    assert event is None
+    assert event is not None
+    assert event.kind == "error"
+    assert event.payload["status"] == "failed"
+    assert "boom" in event.payload["error"]
+
+    terminator = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert terminator is None
 
     run = manager.agent_run_service.get_run(run_id)
     assert run["status"] == "failed"
     assert run["error"] is not None
     assert "boom" in run["error"]
+
+
+async def test_terminal_event_after_partial_stream_gets_a_non_duplicate_seq(
+    tmp_path: Path,
+) -> None:
+    """Gate2レビュー指摘(LOW)の回帰テスト: `stream()`がseq 0/1のイベントを
+
+    publish済みの状態で例外送出しても、合成終端イベントのseqが0に固定
+    されず(既存イベントと重複せず)単調増加を保つことを確認する。
+    """
+    _create_project(tmp_path, "proj_1")
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"partially-broken": _PartiallyBrokenStreamProvider()},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1", task_type="refine-part", provider_name="partially-broken"
+    )
+    events = await _drain(manager, run_id)
+
+    assert [e.kind for e in events] == ["thinking", "tool_use", "error"]
+    assert [e.seq for e in events] == [0, 1, 2]
+
+
+async def test_workspace_construction_failure_publishes_terminal_event(
+    tmp_path: Path,
+) -> None:
+    """#51で実際に発見: quantize未実行(score無し)のprojectへrunを起動すると
+
+    `create_workspace()`が`ScoreNotFoundError`を送出しworkspace構築前に
+    runがfailed化するが、`AgentEvent`が一切publishされていなかった。この場合
+    `subscribe()`は`_event_history`が空のまま即座にNoneを積むため、SSE購読者は
+    0イベントで接続が閉じたことしか観測できず、AgentConsole(フロントエンド)は
+    終了理由を一切表示できないまま無限に再接続し続けていた(ブラウザでの
+    手動確認で発見: `イベントを待機しています...`のまま止まって見える)。
+    """
+    _create_project_without_score(tmp_path, "proj_no_score")
+    manager = _manager(tmp_path)
+
+    run_id = await manager.create_run(
+        project_id="proj_no_score", task_type="refine-part", provider_name="dummy"
+    )
+
+    queue = manager.subscribe(run_id)
+    event = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert event is not None
+    assert event.kind == "error"
+    assert event.payload["status"] == "failed"
+    assert event.payload["error"]  # ScoreNotFoundErrorのメッセージ
+
+    terminator = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert terminator is None
+
+    run = manager.agent_run_service.get_run(run_id)
+    assert run["status"] == "failed"
 
 
 class _PausableProvider:

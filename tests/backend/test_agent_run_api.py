@@ -165,3 +165,8 @@ async def test_list_task_definitions(async_client: httpx.AsyncClient) -> None:
         "export-qa",
         "investigate",
     }
+    # #51: AgentTaskLauncherがtask_typeのハードコードなしにスコープ必須タスクを
+    # 判別できるよう、requires_scopeがTaskDefinition側の値をそのまま反映すること。
+    by_id = {t["id"]: t for t in tasks}
+    assert by_id["voicing-fix"]["requires_scope"] is True
+    assert by_id["consistency-pass"]["requires_scope"] is False

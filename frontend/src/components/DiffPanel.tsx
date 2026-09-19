@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { NoteChangeResponse } from "../api/client";
+import { useAgentDiff } from "../hooks/useAgentDiff";
 import { useAgentReport } from "../hooks/useAgentReport";
 import { useDiff } from "../hooks/useDiff";
 
@@ -7,6 +8,12 @@ interface DiffPanelProps {
   projectId: string;
   runId: string;
   onDismiss: () => void;
+  /**
+   * #51: L1整音(`/api/projects/{id}/refine/runs/{run_id}/diff`、既定)か
+   * L2エージェントrun(`/api/agent/runs/{run_id}/diff`、#46)かで差分の
+   * 取得元エンドポイントが異なる。承認/却下UIとreport.md表示は共通。
+   */
+  source?: "refine" | "agent";
 }
 
 interface SpellingLike {
@@ -74,8 +81,10 @@ const CHANGE_TYPE_BADGE: Record<NoteChangeResponse["change_type"], string> = {
  * `useDiff`が`useScore`のキャッシュを更新するため、ScorePreview/PianoRollは
  * 自動的に再描画される(このコンポーネント自身が明示的に再読み込みを指示する必要はない)。
  */
-export function DiffPanel({ projectId, runId, onDismiss }: DiffPanelProps) {
-  const { diff, isLoading, error, accept, reject } = useDiff(projectId, runId);
+export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: DiffPanelProps) {
+  const refineDiff = useDiff(projectId, source === "refine" ? runId : null);
+  const agentDiff = useAgentDiff(projectId, source === "agent" ? runId : null);
+  const { diff, isLoading, error, accept, reject } = source === "agent" ? agentDiff : refineDiff;
   const { report } = useAgentReport(runId);
 
   const changesByBar = useMemo(() => {

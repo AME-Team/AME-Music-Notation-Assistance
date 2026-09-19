@@ -1361,6 +1361,11 @@ export interface components {
             turns_min: number | null;
             /** Turns Max */
             turns_max: number;
+            /**
+             * Requires Scope
+             * @default false
+             */
+            requires_scope: boolean;
         };
         /** TempoMapEntry */
         TempoMapEntry: {
