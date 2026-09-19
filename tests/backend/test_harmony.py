@@ -485,3 +485,89 @@ def test_mcp_score_context_fallback(tmp_path: Path) -> None:
     assert "chords" in res
     assert len(res["chords"]) >= 1
     assert res["chords"][0]["symbol"] == "C"
+
+
+def test_estimate_chords_sustained_notes_across_bars() -> None:
+    # m.1 に全音符(1920 ticks)の C major
+    # さらにそのうちの音が m.2 の途中まで持続(2880 ticks)している場合
+    divisions = 480
+    notes = [
+        # C, E, G が tick 0 から tick 2880 (m.1 全体 + m.2 の前半2拍) まで持続
+        Note(
+            id=1,
+            onset_sec=0.0,
+            duration_sec=3.0,
+            onset_tick=0,
+            duration_tick=2880,
+            midi=48,
+            velocity=80,
+            voice=1,
+            staff=2,
+            provenance="amt",
+        ),
+        Note(
+            id=2,
+            onset_sec=0.0,
+            duration_sec=3.0,
+            onset_tick=0,
+            duration_tick=2880,
+            midi=60,
+            velocity=80,
+            voice=1,
+            staff=1,
+            provenance="amt",
+        ),
+        Note(
+            id=3,
+            onset_sec=0.0,
+            duration_sec=3.0,
+            onset_tick=0,
+            duration_tick=2880,
+            midi=64,
+            velocity=80,
+            voice=1,
+            staff=1,
+            provenance="amt",
+        ),
+        Note(
+            id=4,
+            onset_sec=0.0,
+            duration_sec=3.0,
+            onset_tick=0,
+            duration_tick=2880,
+            midi=67,
+            velocity=80,
+            voice=1,
+            staff=1,
+            provenance="amt",
+        ),
+    ]
+    score = ScoreIR(
+        project_id="proj_sustained",
+        source=SourceInfo(filename="test.wav", duration_sec=6.0, sample_rate=44100),
+        divisions=divisions,
+        time_signatures=[TimeSignatureEntry(bar=1, numerator=4, denominator=4)],
+        parts=[
+            Part(
+                id="piano",
+                name="Piano",
+                midi_program=0,
+                staves=2,
+                clefs=[
+                    Clef(staff=1, sign="G", line=2),
+                    Clef(staff=2, sign="F", line=4),
+                ],
+                notes=notes,
+            )
+        ],
+        next_note_id=5,
+    )
+
+    chords = estimate_chords_for_score(score)
+    # m.1 に C が推定され、m.2 にも持続音によって C が推定される
+    m1_chords = [c for c in chords if c.bar == 1]
+    m2_chords = [c for c in chords if c.bar == 2]
+    assert len(m1_chords) >= 1
+    assert m1_chords[0].symbol == "C"
+    assert len(m2_chords) >= 1
+    assert m2_chords[0].symbol == "C"

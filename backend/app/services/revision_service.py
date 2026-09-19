@@ -170,8 +170,8 @@ class RevisionService:
         # Undo/Redoスタックをリセット(#32, §10.4)
         score_undo.reset_undo_state(storage.score_undo_state_path(self.workspace_dir, project_id))
 
-        # 監査ログ(ops.jsonl)に復元操作を追記
-        ops_path = storage.score_ops_log_path(self.workspace_dir, project_id)
+        # リビジョン操作監査ログ(score/revisions.jsonl)に復元操作を追記
+        log_path = storage.score_revisions_log_path(self.workspace_dir, project_id)
         entry = {
             "op": "revision.restore",
             "revision_id": rev.id,
@@ -180,8 +180,8 @@ class RevisionService:
             "ts": datetime.now(UTC).isoformat(),
         }
         try:
-            ops_path.parent.mkdir(parents=True, exist_ok=True)
-            with ops_path.open("a", encoding="utf-8") as f:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except OSError:
             pass

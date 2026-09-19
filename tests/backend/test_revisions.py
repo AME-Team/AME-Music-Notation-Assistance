@@ -112,11 +112,11 @@ def test_revision_service_lifecycle(tmp_path: Path) -> None:
     assert piano_current is not None
     assert len(piano_current.notes) == 3
 
-    # 監査ログ(ops.jsonl)に記録されていること
-    ops_path = storage.score_ops_log_path(tmp_path, project_id)
-    assert ops_path.exists()
-    ops_content = ops_path.read_text(encoding="utf-8")
-    assert "revision.restore" in ops_content
+    # 監査ログ(revisions.jsonl)に記録されていること
+    rev_log_path = storage.score_revisions_log_path(tmp_path, project_id)
+    assert rev_log_path.exists()
+    rev_log_content = rev_log_path.read_text(encoding="utf-8")
+    assert "revision.restore" in rev_log_content
 
     # 削除
     service.delete_revision(project_id, rev2.id)

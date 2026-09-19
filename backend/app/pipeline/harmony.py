@@ -6,14 +6,10 @@ Score IR 内の全パート(ピアノ・ベース・ボーカル等)のノート
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from app.domain.pitch import midi_to_spelling
 from app.domain.score import ChordEntry, ScoreIR
 from app.pipeline.refine.key_estimation import estimate_key
-from app.pipeline.time_signature import tick_to_bar_beat, time_signature_at_bar
-
-if TYPE_CHECKING:
-    from app.domain.score import Note
+from app.pipeline.time_signature import time_signature_at_bar
 
 # 代表的なコード構成音テンプレート(ルートからの半音オフセット)
 CHORD_TEMPLATES: dict[str, tuple[int, ...]] = {
@@ -28,14 +24,15 @@ CHORD_TEMPLATES: dict[str, tuple[int, ...]] = {
     "m7b5": (0, 3, 6, 10),  # Half-diminished 7th
 }
 
-# 調号に応じた音名表記(シャープ系 / フラット系)
-SHARP_PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-FLAT_PITCH_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
-
 
 def get_pitch_name(pitch_class: int, fifths: int = 0) -> str:
-    pc = pitch_class % 12
-    return FLAT_PITCH_NAMES[pc] if fifths < 0 else SHARP_PITCH_NAMES[pc]
+    """ピッチクラス(0〜11)を調号(fifths)に応じた音名文字列に変換する。
+
+    `app.domain.pitch.midi_to_spelling` を再利用し、音名ロジックの一貫性を保つ。
+    """
+    spelling = midi_to_spelling(60 + (pitch_class % 12), fifths=fifths)
+    accidental = "#" * spelling.alter if spelling.alter > 0 else "b" * (-spelling.alter)
+    return f"{spelling.step}{accidental}"
 
 
 def estimate_chord_from_notes(
@@ -54,7 +51,7 @@ def estimate_chord_from_notes(
     for midi, weight, is_bass in notes:
         if weight <= 0:
             continue
-        # ベースパートの音、または低音域(MIDI < 50)はベース音として重み付け
+        # ベースパートの音、または低音域(MIDI < 48)はベース音として重み付け
         boost = 2.0 if (is_bass or midi < 48) else 1.0
         chroma[midi % 12] += weight * boost
         if midi < lowest_midi:
@@ -109,8 +106,21 @@ def estimate_chord_from_notes(
     return symbol, round(confidence, 2)
 
 
+def _sec_to_ticks(sec: float, tempo_map: list[dict], divisions: int) -> int:
+    """秒から近似 tick を計算する(tempo_map を考慮)。"""
+    bpm = 120.0
+    if tempo_map:
+        bpm = tempo_map[0].get("bpm", 120.0)
+    ticks_per_sec = (bpm / 60.0) * divisions
+    return max(0, int(sec * ticks_per_sec))
+
+
 def estimate_chords_for_score(score: ScoreIR) -> list[ChordEntry]:
-    """ScoreIRの全パートのノートから小節・拍ごとのコード進行を推定する。"""
+    """ScoreIRの全パートのノートから小節・拍ごとのコード進行を推定する。
+
+    各ノートの発音区間 [onset_tick, onset_tick + duration_tick) と小節・半区間の
+    重なり(overlap)を按分集計するため、持続音やタイで継続する和音も正確に反映される。
+    """
     if not score.parts:
         return []
 
@@ -119,103 +129,120 @@ def estimate_chords_for_score(score: ScoreIR) -> list[ChordEntry]:
     if score.key_signatures:
         fifths = score.key_signatures[0].fifths
     else:
-        # パート全体のピッチクラスから推定
         all_pcs = [n.midi % 12 for p in score.parts for n in p.notes if n.status != "deleted"]
         if all_pcs:
             fifths = estimate_key(all_pcs).fifths
 
     time_signatures = [ts.model_dump(mode="json") for ts in score.time_signatures]
+    tempo_map = [t.model_dump(mode="json") for t in score.tempo_map]
     divisions = score.divisions
 
-    # 全ノートを小節・拍にマッピング
-    # (part_id, note, bar, beat, duration_beat)
-    annotated_notes: list[tuple[str, Note, int, float, float]] = []
-    max_bar = 1
+    # 全ノートの (part_id, midi, start_tick, end_tick) を集約
+    note_intervals: list[tuple[str, int, int, int]] = []
+    max_tick = 0
 
     for part in score.parts:
         for note in part.notes:
             if note.status == "deleted":
                 continue
             if note.onset_tick is not None:
-                bar, beat = tick_to_bar_beat(
-                    note.onset_tick, time_signatures=time_signatures, divisions=divisions
-                )
-                _, denominator = time_signature_at_bar(time_signatures, bar)
-                pulse_ticks = divisions * 4 / denominator
-                duration_beat = (note.duration_tick or divisions) / pulse_ticks
+                start_tick = note.onset_tick
+                dur_tick = note.duration_tick or divisions
             else:
-                # クオンタイズ前フォールバック
-                # 4/4 120bpm 想定 (0.5秒 = 1拍)
-                beat_float = note.onset_sec / 0.5
-                bar = int(beat_float // 4) + 1
-                beat = (beat_float % 4) + 1.0
-                duration_beat = max(0.25, note.duration_sec / 0.5)
+                start_tick = _sec_to_ticks(note.onset_sec, tempo_map, divisions)
+                dur_tick = max(
+                    divisions // 4, _sec_to_ticks(note.duration_sec, tempo_map, divisions)
+                )
 
-            annotated_notes.append((part.id, note, bar, beat, duration_beat))
-            if bar > max_bar:
-                max_bar = bar
+            end_tick = start_tick + dur_tick
+            note_intervals.append((part.id, note.midi, start_tick, end_tick))
+            if end_tick > max_tick:
+                max_tick = end_tick
 
-    if not annotated_notes:
+    if not note_intervals:
         return []
+
+    # 小節境界の tick を計算
+    # 各小節 m の [start_tick, end_tick) をマッピング
+    bar_boundaries: list[tuple[int, int, int, int, int]] = []  # (bar, num, den, bar_start, bar_end)
+    current_tick = 0
+    bar = 1
+    while current_tick < max_tick or bar == 1:
+        num, den = time_signature_at_bar(time_signatures, bar)
+        pulse_ticks = int(divisions * 4 / den)
+        bar_ticks = pulse_ticks * num
+        next_tick = current_tick + bar_ticks
+        bar_boundaries.append((bar, num, den, current_tick, next_tick))
+        current_tick = next_tick
+        bar += 1
 
     entries: list[ChordEntry] = []
 
-    for bar in range(1, max_bar + 1):
-        num, den = time_signature_at_bar(time_signatures, bar)
+    for m_bar, num, den, bar_start, bar_end in bar_boundaries:
         bar_beats = float(num)
-
-        # この小節に属するノート(小節内で開始するか、小節内にまたがっているノート)
-        bar_notes = [an for an in annotated_notes if an[2] == bar]
-        if not bar_notes:
-            continue
+        pulse_ticks = int(divisions * 4 / den)
 
         # 4拍以上の場合は2分割(前半・後半)でコード変化を検出
         if bar_beats >= 4.0:
             split_beat = 1.0 + (bar_beats / 2.0)
+            mid_tick = bar_start + int(pulse_ticks * (bar_beats / 2.0))
+
             notes_first_half: list[tuple[int, float, bool]] = []
             notes_second_half: list[tuple[int, float, bool]] = []
 
-            for part_id, note, _, beat, dur in bar_notes:
+            for part_id, midi, s_tick, e_tick in note_intervals:
                 is_bass = "bass" in part_id.lower()
-                weight = min(dur, bar_beats)
-                if beat < split_beat:
-                    notes_first_half.append((note.midi, weight, is_bass))
-                else:
-                    notes_second_half.append((note.midi, weight, is_bass))
+
+                # 前半区間 [bar_start, mid_tick) との重なり
+                ov1 = max(0, min(e_tick, mid_tick) - max(s_tick, bar_start))
+                if ov1 > 0:
+                    weight1 = ov1 / pulse_ticks
+                    notes_first_half.append((midi, weight1, is_bass))
+
+                # 後半区間 [mid_tick, bar_end) との重なり
+                ov2 = max(0, min(e_tick, bar_end) - max(s_tick, mid_tick))
+                if ov2 > 0:
+                    weight2 = ov2 / pulse_ticks
+                    notes_second_half.append((midi, weight2, is_bass))
 
             chord1 = estimate_chord_from_notes(notes_first_half, fifths)
             chord2 = estimate_chord_from_notes(notes_second_half, fifths)
 
             if chord1 and chord2:
                 if chord1[0] == chord2[0]:
-                    # 前半と後半で同一コードなら小節頭に1つ
                     entries.append(
-                        ChordEntry(bar=bar, beat=1.0, symbol=chord1[0], confidence=chord1[1])
+                        ChordEntry(bar=m_bar, beat=1.0, symbol=chord1[0], confidence=chord1[1])
                     )
                 else:
-                    # 異なるコードなら前半と後半に2つ
                     entries.append(
-                        ChordEntry(bar=bar, beat=1.0, symbol=chord1[0], confidence=chord1[1])
+                        ChordEntry(bar=m_bar, beat=1.0, symbol=chord1[0], confidence=chord1[1])
                     )
                     entries.append(
-                        ChordEntry(bar=bar, beat=split_beat, symbol=chord2[0], confidence=chord2[1])
+                        ChordEntry(
+                            bar=m_bar, beat=split_beat, symbol=chord2[0], confidence=chord2[1]
+                        )
                     )
             elif chord1:
                 entries.append(
-                    ChordEntry(bar=bar, beat=1.0, symbol=chord1[0], confidence=chord1[1])
+                    ChordEntry(bar=m_bar, beat=1.0, symbol=chord1[0], confidence=chord1[1])
                 )
             elif chord2:
                 entries.append(
-                    ChordEntry(bar=bar, beat=split_beat, symbol=chord2[0], confidence=chord2[1])
+                    ChordEntry(bar=m_bar, beat=split_beat, symbol=chord2[0], confidence=chord2[1])
                 )
         else:
-            # 3拍以下なら小節全体で1コード
-            notes_all = [
-                (note.midi, min(dur, bar_beats), "bass" in part_id.lower())
-                for part_id, note, _, _, dur in bar_notes
-            ]
+            # 3拍以下なら小節全体で重なりを集計
+            notes_all: list[tuple[int, float, bool]] = []
+            for part_id, midi, s_tick, e_tick in note_intervals:
+                ov = max(0, min(e_tick, bar_end) - max(s_tick, bar_start))
+                if ov > 0:
+                    weight = ov / pulse_ticks
+                    notes_all.append((midi, weight, "bass" in part_id.lower()))
+
             chord = estimate_chord_from_notes(notes_all, fifths)
             if chord:
-                entries.append(ChordEntry(bar=bar, beat=1.0, symbol=chord[0], confidence=chord[1]))
+                entries.append(
+                    ChordEntry(bar=m_bar, beat=1.0, symbol=chord[0], confidence=chord[1])
+                )
 
     return entries

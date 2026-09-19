@@ -5,9 +5,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api import deps
-from app.api.schemas import CreateRevisionRequest, RevisionDiffResponse, RevisionResponse
+from app.api.schemas import (
+    CreateRevisionRequest,
+    RestoreRevisionResponse,
+    RevisionDiffResponse,
+    RevisionResponse,
+)
 from app.config import Settings
-from app.domain.score import ScoreIR
 from app.services.project_service import ProjectService
 from app.services.revision_service import (
     RevisionNotFoundError,
@@ -81,16 +85,24 @@ def delete_revision(
         raise HTTPException(status_code=404, detail=f"revision {revision_id!r} not found") from exc
 
 
-@router.post("/{revision_id}/restore", response_model=ScoreIR)
+@router.post("/{revision_id}/restore", response_model=RestoreRevisionResponse)
 def restore_revision(
     project_id: str,
     revision_id: str,
     project_service: ProjectService = Depends(deps.get_project_service),
     revision_service: RevisionService = Depends(_get_revision_service),
-) -> ScoreIR:
+) -> RestoreRevisionResponse:
     deps.ensure_project_exists(project_id, project_service)
     try:
-        return revision_service.restore_revision(project_id, revision_id)
+        revision_service.restore_revision(project_id, revision_id)
+        from datetime import UTC, datetime
+
+        return RestoreRevisionResponse(
+            project_id=project_id,
+            revision_id=revision_id,
+            restored_at=datetime.now(UTC).isoformat(),
+            message=f"successfully restored revision {revision_id}",
+        )
     except RevisionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"revision {revision_id!r} not found") from exc
 

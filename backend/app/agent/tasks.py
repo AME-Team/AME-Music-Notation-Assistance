@@ -87,18 +87,6 @@ staff1、MIDI<60はstaff2、同時発音は音高が高い順にvoice1,2,3,4、�
 まとめる。
 """
 
-_REFINE_PART_PROMPT_TEMPLATE = """\
-refine-part専用の作業手順:
-
-1. 対象パート(TASK.mdのスコープに指定されたpart)について mcp__score__score_context および \
-mcp__score__score_stats を呼び、パート全体の調・音域・オンセット・声部構造を把握する。
-2. パート全体を小節ブロックごとに mcp__score__score_query で取得し、\
-notation_rules.md の規則に沿って声部割り当て・大譜表配分・重複ノートの解消を順次確認する。
-3. 修正が必要な箇所があれば mcp__score__score_apply_ops で修正し、各修正後に \
-mcp__score__score_validate(scope={"part_id": <part_id>}) で新たな違反がないか確認する。
-4. パート全体の通し整音結果(修正箇所・改善点・残存課題)を report.md にまとめる。
-"""
-
 _REPEAT_ALIGNMENT_PROMPT_TEMPLATE = """\
 repeat-alignment専用の作業手順:
 
@@ -204,7 +192,7 @@ STANDARD_TASKS: tuple[TaskDefinition, ...] = (
     TaskDefinition(
         id="repeat-alignment",
         purpose="繰り返し区間を検出し記譜を揃える",
-        tools=("query", "stats", "apply_ops"),
+        tools=("context", "query", "stats", "apply_ops", "validate"),
         turns_min=15,
         turns_max=30,
         max_tokens_budget=300_000,
@@ -214,7 +202,7 @@ STANDARD_TASKS: tuple[TaskDefinition, ...] = (
     TaskDefinition(
         id="ghost-sweep",
         purpose="統計からこの曲固有のゴースト閾値を決め適用",
-        tools=("stats", "Bash(python)", "apply_ops"),
+        tools=("query", "stats", "Bash(python)", "apply_ops"),
         turns_min=10,
         turns_max=25,
         max_tokens_budget=250_000,

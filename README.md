@@ -113,6 +113,22 @@ Score IR・エクスポートAPI(`api/score.py`/`api/export.py`):
 | GET | `/api/projects/{id}/score` | Score IR全体(採譜=transcribe未実行なら404)。`analysis/quantize.meta.json`が無効化されて`stale`(#29)な状態でも、`score/current.json`自体は削除されないため200で(古い可能性のある)Score IRを返す。呼び出し元は`GET /api/projects/{id}`が返す`stages.quantize.stale`で要再実行かどうかを判別すること。部分小節プレビュー(`/score/preview.musicxml`)はM2スコープ外、将来PRで対応予定 |
 | POST | `/api/projects/{id}/export` | `{format: "musicxml"\|"midi"}`。同期処理(モデル推論を伴わないためジョブ化しない)。生成物は`workspace/{id}/export/score.{musicxml,mid}`にも保存する |
 
+リビジョン管理API(`api/revisions.py`, #59, FR-15):
+
+| Method | Path | 説明 |
+| :--- | :--- | :--- |
+| POST | `/api/projects/{id}/revisions` | 現在のScore IRスナップショットから名前付きリビジョンを作成(`{name, description?}`) |
+| GET | `/api/projects/{id}/revisions` | リビジョン一覧取得(新しい順) |
+| GET | `/api/projects/{id}/revisions/{rev_id}` | リビジョン詳細取得 |
+| GET | `/api/projects/{id}/revisions/{rev_id}/diff` | 指定リビジョンと現在スコア(またはbase_revision_id)とのパート別ノート統計差分 |
+| POST | `/api/projects/{id}/revisions/{rev_id}/restore` | 指定リビジョンへスコアを復元(Undo/Redoスタックをクリアし、`score/revisions.jsonl`に監査ログ追記) |
+| DELETE | `/api/projects/{id}/revisions/{rev_id}` | リビジョンメタデータの削除 |
+
+コード進行自動推定(`pipeline/harmony.py`, #57, FR-16):
+- Stage 4(quantize)完了時に全パートのノート発音区間・持続音からピッチクラス分布(クロマベクトル)を集計し、ベース音優先重み付けと調号に沿ったテンプレートマッチングでコード進行を自動推定。
+- `ScoreIR.chords` に格納され、L1 チャンク文脈(`chord_hints`)、L1 楽曲全体プロンプト、および L2 MCP ツール `score_context` に自動注入される。
+
+
 DirectML Execution Provider の実測ベンチマーク(Q-13, #17)は別途対応予定(詳細は次節)。
 
 ## 既知の制約(Known Limitations)

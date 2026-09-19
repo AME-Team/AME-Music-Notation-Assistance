@@ -136,3 +136,12 @@ class RevisionDiffResponse(BaseModel):
     revision_id: str
     base_revision_id: str | None
     parts: dict[str, Any]
+
+
+class RestoreRevisionResponse(BaseModel):
+    """#59: リビジョン復元レスポンス(FR-15)。"""
+
+    project_id: str
+    revision_id: str
+    restored_at: str
+    message: str

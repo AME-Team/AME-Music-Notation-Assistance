@@ -948,9 +948,9 @@ export interface components {
             /** Downbeats Sec */
             downbeats_sec: number[];
             /** Time Signatures */
-            time_signatures: components["schemas"]["app__api__schemas__TimeSignatureEntry"][];
+            time_signatures: components["schemas"]["TimeSignatureEntry"][];
             /** Tempo Map */
-            tempo_map: components["schemas"]["app__api__schemas__TempoMapEntry"][];
+            tempo_map: components["schemas"]["TempoMapEntry"][];
             /** Confidence */
             confidence: number;
             /**
@@ -973,7 +973,7 @@ export interface components {
              * @default false
              */
             rotate_downbeat: boolean;
-            time_signature_override?: components["schemas"]["TimeSignatureEntry-Input"] | null;
+            time_signature_override?: components["schemas"]["TimeSignatureEntry"] | null;
         };
         /** Body_create_project_api_projects_post */
         Body_create_project_api_projects_post: {
@@ -991,29 +991,6 @@ export interface components {
             status: "cancelled";
             /** Project Id */
             project_id: string;
-        };
-        /** ChordEntry */
-        ChordEntry: {
-            /** Bar */
-            bar: number;
-            /** Beat */
-            beat: number;
-            /** Symbol */
-            symbol: string;
-            /** Confidence */
-            confidence: number;
-        };
-        /** Clef */
-        Clef: {
-            /** Staff */
-            staff: number;
-            /**
-             * Sign
-             * @enum {string}
-             */
-            sign: "G" | "F" | "C" | "percussion";
-            /** Line */
-            line: number;
         };
         /**
          * CreateAgentRunRequest
@@ -1119,73 +1096,6 @@ export interface components {
             created_at: string;
             /** Updated At */
             updated_at: string;
-        };
-        /** KeySignatureEntry */
-        KeySignatureEntry: {
-            /** Bar */
-            bar: number;
-            /** Fifths */
-            fifths: number;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "major" | "minor";
-        };
-        /** Note */
-        Note: {
-            /** Id */
-            id: number;
-            /** Onset Sec */
-            onset_sec: number;
-            /** Duration Sec */
-            duration_sec: number;
-            /** Onset Tick */
-            onset_tick?: number | null;
-            /** Duration Tick */
-            duration_tick?: number | null;
-            /** Midi */
-            midi: number;
-            /** Velocity */
-            velocity: number;
-            spelling?: components["schemas"]["Spelling"] | null;
-            /**
-             * Voice
-             * @default 1
-             */
-            voice: number;
-            /**
-             * Staff
-             * @default 1
-             */
-            staff: number;
-            tie?: components["schemas"]["Tie"];
-            /**
-             * Confidence
-             * @default 1
-             */
-            confidence: number;
-            /**
-             * Provenance
-             * @enum {string}
-             */
-            provenance: "amt" | "baseline" | "llm" | "agent" | "user";
-            /** Provenance Run Id */
-            provenance_run_id?: string | null;
-            /** Flags */
-            flags?: string[];
-            /**
-             * Status
-             * @default active
-             * @enum {string}
-             */
-            status: "active" | "deleted" | "muted";
-            /** Snap Candidates */
-            snap_candidates?: components["schemas"]["SnapCandidate"][];
-            /** Selected Snap */
-            selected_snap?: string | null;
-            /** Ai Reason */
-            ai_reason?: string | null;
         };
         /**
          * NoteAddOp
@@ -1343,28 +1253,6 @@ export interface components {
             /** Staff */
             staff?: number | null;
         };
-        /** Part */
-        Part: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Midi Program */
-            midi_program: number;
-            /** Stem Source */
-            stem_source?: string | null;
-            /**
-             * Staves
-             * @default 1
-             */
-            staves: number;
-            /** Clefs */
-            clefs?: components["schemas"]["Clef"][];
-            /** Notes */
-            notes?: components["schemas"]["Note"][];
-            /** Pedals */
-            pedals?: components["schemas"]["Pedal"][];
-        };
         /**
          * PartTransposeOctaveOp
          * @description パート内の全activeノートを±1オクターブ移調する(R-6軽減策)。
@@ -1391,23 +1279,6 @@ export interface components {
             sample_rate: number;
             /** Peaks */
             peaks: number[][];
-        };
-        /**
-         * Pedal
-         * @description ペダルイベント(#24)。§10.2のスキーマ本文には無いフィールドだが、
-         *
-         *     ByteDance Piano Transcriptionの出力(ペダルon/off)とMusicXML `<pedal>`(#27)の
-         *     両方に必要なため、パート単位で意図的に追加する(設計書からの拡張として記録)。
-         */
-        Pedal: {
-            /** Start Sec */
-            start_sec: number;
-            /** Stop Sec */
-            stop_sec: number;
-            /** Start Tick */
-            start_tick?: number | null;
-            /** Stop Tick */
-            stop_tick?: number | null;
         };
         /** Project */
         Project: {
@@ -1501,6 +1372,20 @@ export interface components {
             remaining_diff: components["schemas"]["DiffResponse"];
         };
         /**
+         * RestoreRevisionResponse
+         * @description #59: リビジョン復元レスポンス(FR-15)。
+         */
+        RestoreRevisionResponse: {
+            /** Project Id */
+            project_id: string;
+            /** Revision Id */
+            revision_id: string;
+            /** Restored At */
+            restored_at: string;
+            /** Message */
+            message: string;
+        };
+        /**
          * RevisionDiffResponse
          * @description #59: リビジョン間差分レスポンス(FR-15)。
          */
@@ -1565,107 +1450,12 @@ export interface components {
             bar_range?: number[] | null;
         };
         /**
-         * ScoreIR
-         * @description §10.2 準拠のトップレベルモデル。`services/score_service.py` がこれを
-         *
-         *     `score/current.json` として読み書きする。
-         */
-        ScoreIR: {
-            /**
-             * Schema Version
-             * @default 3
-             */
-            schema_version: number;
-            /** Project Id */
-            project_id: string;
-            source: components["schemas"]["SourceInfo"];
-            /**
-             * Divisions
-             * @default 480
-             */
-            divisions: number;
-            /** Tempo Map */
-            tempo_map?: components["schemas"]["app__domain__score__TempoMapEntry"][];
-            /** Time Signatures */
-            time_signatures?: components["schemas"]["app__domain__score__TimeSignatureEntry"][];
-            /** Key Signatures */
-            key_signatures?: components["schemas"]["KeySignatureEntry"][];
-            /** Chords */
-            chords?: components["schemas"]["ChordEntry"][];
-            /** Parts */
-            parts?: components["schemas"]["Part"][];
-            meta?: components["schemas"]["ScoreMeta"];
-            /**
-             * Next Note Id
-             * @default 1
-             */
-            next_note_id: number;
-        };
-        /**
-         * ScoreMeta
-         * @description §10.2 の `meta.stages`。各ステージの実行メタデータを緩く保持する。
-         *
-         *     L1/L2(M4/M5)まで含めた最終形は現時点で決め切らないため、値は `dict` のまま
-         *     許容し、詳細な構造化は各ステージの実装時に個別のヘルパで検証する。
-         */
-        ScoreMeta: {
-            /** Stages */
-            stages?: {
-                [key: string]: {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        /**
          * ScoreOpsRequest
          * @description #31: `POST /score/ops`。配列で一括適用する(`domain/score_ops.py`参照)。
          */
         ScoreOpsRequest: {
             /** Ops */
             ops: (components["schemas"]["NoteAddOp"] | components["schemas"]["NoteUpdateOp"] | components["schemas"]["NoteDeleteOp"] | components["schemas"]["NoteRestoreOp"] | components["schemas"]["NoteSplitOp"] | components["schemas"]["NoteMergeOp"] | components["schemas"]["PartTransposeOctaveOp"])[];
-        };
-        /**
-         * SnapCandidate
-         * @description Stage 4(#25)が生成する量子化候補。`id` は同一ノート内で一意な短い識別子
-         *
-         *     ("a","b","c",...)。AIやユーザーが `Note.selected_snap` でこれを指す。
-         */
-        SnapCandidate: {
-            /** Id */
-            id: string;
-            /** Resolution */
-            resolution: string;
-            /** Tick */
-            tick: number;
-            /** Score */
-            score: number;
-        };
-        /** SourceInfo */
-        SourceInfo: {
-            /** Filename */
-            filename: string;
-            /** Duration Sec */
-            duration_sec: number;
-            /** Sample Rate */
-            sample_rate: number;
-        };
-        /**
-         * Spelling
-         * @description 異名同音表記(§7.4)。`step`+`alter` のピッチクラスが `midi % 12` と一致すること
-         *
-         *     (V-4)、`octave` が MIDI 番号と整合すること(V-5、B#/Cbの境界を考慮)は
-         *     `domain.pitch` の検証ロジックで別途チェックする(モデル自体はデータ構造のみ)。
-         */
-        Spelling: {
-            /**
-             * Step
-             * @enum {string}
-             */
-            step: "C" | "D" | "E" | "F" | "G" | "A" | "B";
-            /** Alter */
-            alter: number;
-            /** Octave */
-            octave: number;
         };
         /** StageStatus */
         StageStatus: {
@@ -1705,21 +1495,17 @@ export interface components {
              */
             requires_scope: boolean;
         };
-        /** Tie */
-        Tie: {
-            /**
-             * Start
-             * @default false
-             */
-            start: boolean;
-            /**
-             * Stop
-             * @default false
-             */
-            stop: boolean;
+        /** TempoMapEntry */
+        TempoMapEntry: {
+            /** Bar */
+            bar: number;
+            /** Beat */
+            beat: number;
+            /** Bpm */
+            bpm: number;
         };
         /** TimeSignatureEntry */
-        "TimeSignatureEntry-Input": {
+        TimeSignatureEntry: {
             /** Bar */
             bar: number;
             /** Numerator */
@@ -1739,47 +1525,6 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
-        };
-        /** TempoMapEntry */
-        app__api__schemas__TempoMapEntry: {
-            /** Bar */
-            bar: number;
-            /** Beat */
-            beat: number;
-            /** Bpm */
-            bpm: number;
-        };
-        /** TimeSignatureEntry */
-        app__api__schemas__TimeSignatureEntry: {
-            /** Bar */
-            bar: number;
-            /** Numerator */
-            numerator: number;
-            /** Denominator */
-            denominator: number;
-        };
-        /**
-         * TempoMapEntry
-         * @description §10.2。`api.schemas.TempoMapEntry`(beatmap.json用)とは構造が似るが、
-         *
-         *     domain層をAPI層から独立させるため意図的に別定義とする(#23)。
-         */
-        app__domain__score__TempoMapEntry: {
-            /** Bar */
-            bar: number;
-            /** Beat */
-            beat: number;
-            /** Bpm */
-            bpm: number;
-        };
-        /** TimeSignatureEntry */
-        app__domain__score__TimeSignatureEntry: {
-            /** Bar */
-            bar: number;
-            /** Numerator */
-            numerator: number;
-            /** Denominator */
-            denominator: number;
         };
     };
     responses: never;
@@ -2848,7 +2593,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScoreIR"];
+                    "application/json": components["schemas"]["RestoreRevisionResponse"];
                 };
             };
             /** @description Validation Error */

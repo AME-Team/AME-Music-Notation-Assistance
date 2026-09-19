@@ -1538,7 +1538,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScoreIR"
+                  "$ref": "#/components/schemas/RestoreRevisionResponse"
                 }
               }
             }
@@ -2334,14 +2334,14 @@
           },
           "time_signatures": {
             "items": {
-              "$ref": "#/components/schemas/app__api__schemas__TimeSignatureEntry"
+              "$ref": "#/components/schemas/TimeSignatureEntry"
             },
             "type": "array",
             "title": "Time Signatures"
           },
           "tempo_map": {
             "items": {
-              "$ref": "#/components/schemas/app__api__schemas__TempoMapEntry"
+              "$ref": "#/components/schemas/TempoMapEntry"
             },
             "type": "array",
             "title": "Tempo Map"
@@ -2398,7 +2398,7 @@
           "time_signature_override": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TimeSignatureEntry-Input"
+                "$ref": "#/components/schemas/TimeSignatureEntry"
               },
               {
                 "type": "null"
@@ -2447,66 +2447,6 @@
           "project_id"
         ],
         "title": "CancelResponse"
-      },
-      "ChordEntry": {
-        "properties": {
-          "bar": {
-            "type": "integer",
-            "title": "Bar"
-          },
-          "beat": {
-            "type": "number",
-            "title": "Beat"
-          },
-          "symbol": {
-            "type": "string",
-            "title": "Symbol"
-          },
-          "confidence": {
-            "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
-            "title": "Confidence"
-          }
-        },
-        "type": "object",
-        "required": [
-          "bar",
-          "beat",
-          "symbol",
-          "confidence"
-        ],
-        "title": "ChordEntry"
-      },
-      "Clef": {
-        "properties": {
-          "staff": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Staff"
-          },
-          "sign": {
-            "type": "string",
-            "enum": [
-              "G",
-              "F",
-              "C",
-              "percussion"
-            ],
-            "title": "Sign"
-          },
-          "line": {
-            "type": "integer",
-            "title": "Line"
-          }
-        },
-        "type": "object",
-        "required": [
-          "staff",
-          "sign",
-          "line"
-        ],
-        "title": "Clef"
       },
       "CreateAgentRunRequest": {
         "properties": {
@@ -2758,198 +2698,6 @@
           "updated_at"
         ],
         "title": "Job"
-      },
-      "KeySignatureEntry": {
-        "properties": {
-          "bar": {
-            "type": "integer",
-            "title": "Bar"
-          },
-          "fifths": {
-            "type": "integer",
-            "maximum": 7.0,
-            "minimum": -7.0,
-            "title": "Fifths"
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "major",
-              "minor"
-            ],
-            "title": "Mode"
-          }
-        },
-        "type": "object",
-        "required": [
-          "bar",
-          "fifths",
-          "mode"
-        ],
-        "title": "KeySignatureEntry"
-      },
-      "Note": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "onset_sec": {
-            "type": "number",
-            "minimum": 0.0,
-            "title": "Onset Sec"
-          },
-          "duration_sec": {
-            "type": "number",
-            "exclusiveMinimum": 0.0,
-            "title": "Duration Sec"
-          },
-          "onset_tick": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Onset Tick"
-          },
-          "duration_tick": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Duration Tick"
-          },
-          "midi": {
-            "type": "integer",
-            "maximum": 127.0,
-            "minimum": 0.0,
-            "title": "Midi"
-          },
-          "velocity": {
-            "type": "integer",
-            "maximum": 127.0,
-            "minimum": 0.0,
-            "title": "Velocity"
-          },
-          "spelling": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Spelling"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "voice": {
-            "type": "integer",
-            "maximum": 4.0,
-            "minimum": 1.0,
-            "title": "Voice",
-            "default": 1
-          },
-          "staff": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Staff",
-            "default": 1
-          },
-          "tie": {
-            "$ref": "#/components/schemas/Tie"
-          },
-          "confidence": {
-            "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
-            "title": "Confidence",
-            "default": 1.0
-          },
-          "provenance": {
-            "type": "string",
-            "enum": [
-              "amt",
-              "baseline",
-              "llm",
-              "agent",
-              "user"
-            ],
-            "title": "Provenance"
-          },
-          "provenance_run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provenance Run Id"
-          },
-          "flags": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Flags"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "deleted",
-              "muted"
-            ],
-            "title": "Status",
-            "default": "active"
-          },
-          "snap_candidates": {
-            "items": {
-              "$ref": "#/components/schemas/SnapCandidate"
-            },
-            "type": "array",
-            "title": "Snap Candidates"
-          },
-          "selected_snap": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Selected Snap"
-          },
-          "ai_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ai Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "onset_sec",
-          "duration_sec",
-          "midi",
-          "velocity",
-          "provenance"
-        ],
-        "title": "Note"
       },
       "NoteAddOp": {
         "properties": {
@@ -3280,69 +3028,6 @@
         "title": "NoteUpdateOp",
         "description": "既存ノートのプロパティ変更(複数ノートへの一括適用可)。\n\n移動は`onset_tick`、リサイズは`duration_tick`の変更として表現する\n(設計書§10.4のop例が`note.update`を汎用的に使っているのと同じ設計)。\n未指定(`None`)のフィールドは変更しない。"
       },
-      "Part": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "midi_program": {
-            "type": "integer",
-            "maximum": 127.0,
-            "minimum": 0.0,
-            "title": "Midi Program"
-          },
-          "stem_source": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stem Source"
-          },
-          "staves": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Staves",
-            "default": 1
-          },
-          "clefs": {
-            "items": {
-              "$ref": "#/components/schemas/Clef"
-            },
-            "type": "array",
-            "title": "Clefs"
-          },
-          "notes": {
-            "items": {
-              "$ref": "#/components/schemas/Note"
-            },
-            "type": "array",
-            "title": "Notes"
-          },
-          "pedals": {
-            "items": {
-              "$ref": "#/components/schemas/Pedal"
-            },
-            "type": "array",
-            "title": "Pedals"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "midi_program"
-        ],
-        "title": "Part"
-      },
       "PartTransposeOctaveOp": {
         "properties": {
           "type": {
@@ -3400,48 +3085,6 @@
           "peaks"
         ],
         "title": "PeaksResponse"
-      },
-      "Pedal": {
-        "properties": {
-          "start_sec": {
-            "type": "number",
-            "minimum": 0.0,
-            "title": "Start Sec"
-          },
-          "stop_sec": {
-            "type": "number",
-            "title": "Stop Sec"
-          },
-          "start_tick": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Start Tick"
-          },
-          "stop_tick": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stop Tick"
-          }
-        },
-        "type": "object",
-        "required": [
-          "start_sec",
-          "stop_sec"
-        ],
-        "title": "Pedal",
-        "description": "ペダルイベント(#24)。§10.2のスキーマ本文には無いフィールドだが、\n\nByteDance Piano Transcriptionの出力(ペダルon/off)とMusicXML `<pedal>`(#27)の\n両方に必要なため、パート単位で意図的に追加する(設計書からの拡張として記録)。"
       },
       "Project": {
         "properties": {
@@ -3661,6 +3304,35 @@
         ],
         "title": "RejectResponse"
       },
+      "RestoreRevisionResponse": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "revision_id": {
+            "type": "string",
+            "title": "Revision Id"
+          },
+          "restored_at": {
+            "type": "string",
+            "title": "Restored At"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "revision_id",
+          "restored_at",
+          "message"
+        ],
+        "title": "RestoreRevisionResponse",
+        "description": "#59: リビジョン復元レスポンス(FR-15)。"
+      },
       "RevisionDiffResponse": {
         "properties": {
           "project_id": {
@@ -3809,92 +3481,6 @@
         "title": "ScopeRequest",
         "description": "`accept`/`reject`共通のスコープ指定。両方省略時はrun全体が対象(#41)。"
       },
-      "ScoreIR": {
-        "properties": {
-          "schema_version": {
-            "type": "integer",
-            "title": "Schema Version",
-            "default": 3
-          },
-          "project_id": {
-            "type": "string",
-            "title": "Project Id"
-          },
-          "source": {
-            "$ref": "#/components/schemas/SourceInfo"
-          },
-          "divisions": {
-            "type": "integer",
-            "title": "Divisions",
-            "default": 480
-          },
-          "tempo_map": {
-            "items": {
-              "$ref": "#/components/schemas/app__domain__score__TempoMapEntry"
-            },
-            "type": "array",
-            "title": "Tempo Map"
-          },
-          "time_signatures": {
-            "items": {
-              "$ref": "#/components/schemas/app__domain__score__TimeSignatureEntry"
-            },
-            "type": "array",
-            "title": "Time Signatures"
-          },
-          "key_signatures": {
-            "items": {
-              "$ref": "#/components/schemas/KeySignatureEntry"
-            },
-            "type": "array",
-            "title": "Key Signatures"
-          },
-          "chords": {
-            "items": {
-              "$ref": "#/components/schemas/ChordEntry"
-            },
-            "type": "array",
-            "title": "Chords"
-          },
-          "parts": {
-            "items": {
-              "$ref": "#/components/schemas/Part"
-            },
-            "type": "array",
-            "title": "Parts"
-          },
-          "meta": {
-            "$ref": "#/components/schemas/ScoreMeta"
-          },
-          "next_note_id": {
-            "type": "integer",
-            "title": "Next Note Id",
-            "default": 1
-          }
-        },
-        "type": "object",
-        "required": [
-          "project_id",
-          "source"
-        ],
-        "title": "ScoreIR",
-        "description": "§10.2 準拠のトップレベルモデル。`services/score_service.py` がこれを\n\n`score/current.json` として読み書きする。"
-      },
-      "ScoreMeta": {
-        "properties": {
-          "stages": {
-            "additionalProperties": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "object",
-            "title": "Stages"
-          }
-        },
-        "type": "object",
-        "title": "ScoreMeta",
-        "description": "§10.2 の `meta.stages`。各ステージの実行メタデータを緩く保持する。\n\nL1/L2(M4/M5)まで含めた最終形は現時点で決め切らないため、値は `dict` のまま\n許容し、詳細な構造化は各ステージの実装時に個別のヘルパで検証する。"
-      },
       "ScoreOpsRequest": {
         "properties": {
           "ops": {
@@ -3946,93 +3532,6 @@
         ],
         "title": "ScoreOpsRequest",
         "description": "#31: `POST /score/ops`。配列で一括適用する(`domain/score_ops.py`参照)。"
-      },
-      "SnapCandidate": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "resolution": {
-            "type": "string",
-            "title": "Resolution"
-          },
-          "tick": {
-            "type": "integer",
-            "title": "Tick"
-          },
-          "score": {
-            "type": "number",
-            "title": "Score"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "resolution",
-          "tick",
-          "score"
-        ],
-        "title": "SnapCandidate",
-        "description": "Stage 4(#25)が生成する量子化候補。`id` は同一ノート内で一意な短い識別子\n\n(\"a\",\"b\",\"c\",...)。AIやユーザーが `Note.selected_snap` でこれを指す。"
-      },
-      "SourceInfo": {
-        "properties": {
-          "filename": {
-            "type": "string",
-            "title": "Filename"
-          },
-          "duration_sec": {
-            "type": "number",
-            "title": "Duration Sec"
-          },
-          "sample_rate": {
-            "type": "integer",
-            "title": "Sample Rate"
-          }
-        },
-        "type": "object",
-        "required": [
-          "filename",
-          "duration_sec",
-          "sample_rate"
-        ],
-        "title": "SourceInfo"
-      },
-      "Spelling": {
-        "properties": {
-          "step": {
-            "type": "string",
-            "enum": [
-              "C",
-              "D",
-              "E",
-              "F",
-              "G",
-              "A",
-              "B"
-            ],
-            "title": "Step"
-          },
-          "alter": {
-            "type": "integer",
-            "maximum": 2.0,
-            "minimum": -2.0,
-            "title": "Alter"
-          },
-          "octave": {
-            "type": "integer",
-            "title": "Octave"
-          }
-        },
-        "type": "object",
-        "required": [
-          "step",
-          "alter",
-          "octave"
-        ],
-        "title": "Spelling",
-        "description": "異名同音表記(§7.4)。`step`+`alter` のピッチクラスが `midi % 12` と一致すること\n\n(V-4)、`octave` が MIDI 番号と整合すること(V-5、B#/Cbの境界を考慮)は\n`domain.pitch` の検証ロジックで別途チェックする(モデル自体はデータ構造のみ)。"
       },
       "StageStatus": {
         "properties": {
@@ -4122,23 +3621,30 @@
         ],
         "title": "TaskDefinitionResponse"
       },
-      "Tie": {
+      "TempoMapEntry": {
         "properties": {
-          "start": {
-            "type": "boolean",
-            "title": "Start",
-            "default": false
+          "bar": {
+            "type": "integer",
+            "title": "Bar"
           },
-          "stop": {
-            "type": "boolean",
-            "title": "Stop",
-            "default": false
+          "beat": {
+            "type": "number",
+            "title": "Beat"
+          },
+          "bpm": {
+            "type": "number",
+            "title": "Bpm"
           }
         },
         "type": "object",
-        "title": "Tie"
+        "required": [
+          "bar",
+          "beat",
+          "bpm"
+        ],
+        "title": "TempoMapEntry"
       },
-      "TimeSignatureEntry-Input": {
+      "TimeSignatureEntry": {
         "properties": {
           "bar": {
             "type": "integer",
@@ -4200,101 +3706,6 @@
           "type"
         ],
         "title": "ValidationError"
-      },
-      "app__api__schemas__TempoMapEntry": {
-        "properties": {
-          "bar": {
-            "type": "integer",
-            "title": "Bar"
-          },
-          "beat": {
-            "type": "number",
-            "title": "Beat"
-          },
-          "bpm": {
-            "type": "number",
-            "title": "Bpm"
-          }
-        },
-        "type": "object",
-        "required": [
-          "bar",
-          "beat",
-          "bpm"
-        ],
-        "title": "TempoMapEntry"
-      },
-      "app__api__schemas__TimeSignatureEntry": {
-        "properties": {
-          "bar": {
-            "type": "integer",
-            "title": "Bar"
-          },
-          "numerator": {
-            "type": "integer",
-            "title": "Numerator"
-          },
-          "denominator": {
-            "type": "integer",
-            "title": "Denominator"
-          }
-        },
-        "type": "object",
-        "required": [
-          "bar",
-          "numerator",
-          "denominator"
-        ],
-        "title": "TimeSignatureEntry"
-      },
-      "app__domain__score__TempoMapEntry": {
-        "properties": {
-          "bar": {
-            "type": "integer",
-            "title": "Bar"
-          },
-          "beat": {
-            "type": "number",
-            "title": "Beat"
-          },
-          "bpm": {
-            "type": "number",
-            "title": "Bpm"
-          }
-        },
-        "type": "object",
-        "required": [
-          "bar",
-          "beat",
-          "bpm"
-        ],
-        "title": "TempoMapEntry",
-        "description": "§10.2。`api.schemas.TempoMapEntry`(beatmap.json用)とは構造が似るが、\n\ndomain層をAPI層から独立させるため意図的に別定義とする(#23)。"
-      },
-      "app__domain__score__TimeSignatureEntry": {
-        "properties": {
-          "bar": {
-            "type": "integer",
-            "title": "Bar"
-          },
-          "numerator": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Numerator"
-          },
-          "denominator": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Denominator"
-          }
-        },
-        "type": "object",
-        "required": [
-          "bar",
-          "numerator",
-          "denominator"
-        ],
-        "title": "TimeSignatureEntry"
       }
     }
   }
