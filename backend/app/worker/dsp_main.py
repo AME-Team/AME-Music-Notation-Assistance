@@ -890,9 +890,10 @@ def _quantize_artifacts_exist(workspace_dir: Path, project_id: str) -> bool:
 
     Score IR自体が無ければスキップを拒否する。存在する各パート
     (`QUANTIZABLE_STEM_NAMES`のうちノートまたはペダルを持つもの)について、
-    量子化またはL0が未完了(`onset_tick`が未設定、または非userノートで
-    `spelling`が未設定のまま残っている)状態も再実行させる(手動での
-    score/current.json編集や、以前の実行が途中で中断した場合の保護。#25-M2
+    量子化またはL0が未完了(`onset_tick`/`duration_tick`が未設定、または
+    非userノートで`spelling`が未設定のまま残っている)状態も再実行させる
+    (手動でのscore/current.json編集や、以前の実行が途中で中断した場合の
+    保護。#25-M2
     レビュー指摘: `onset_tick`だけを見ると、L0が未適用のまま(spelling等が
     欠けたまま)でもスキップしてしまい、本ステージのdocstringが謳う
     「常にエクスポート可能な状態」を守れない)。ペダルの`start_tick`/
@@ -919,7 +920,9 @@ def _quantize_artifacts_exist(workspace_dir: Path, project_id: str) -> bool:
         found_any = True
         active_notes = [n for n in part.notes if n.status != "deleted"]
         if not all(
-            n.onset_tick is not None and (n.provenance == "user" or n.spelling is not None)
+            n.onset_tick is not None
+            and n.duration_tick is not None
+            and (n.provenance == "user" or n.spelling is not None)
             for n in active_notes
         ):
             return False
