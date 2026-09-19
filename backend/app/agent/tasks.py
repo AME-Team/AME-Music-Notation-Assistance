@@ -19,6 +19,19 @@ from app.agent.mcp.sdk_adapter import SERVER_NAME, TOOL_NAMES
 # 絞り込み(例: ghost-sweepにのみBashも許可する)はM6のスコープとし、ここでは
 # 「run を起動するとツール呼び出しがリアルタイムに SSE で流れる」を満たす
 # 最小限の既定値にとどめる。
+#
+# Gate2レビュー指摘(HIGH、#50): この一覧にRead/Write/Bashが含まれていないため
+# 「エージェントがTASK.md/notation_rules.mdを読めず、report.mdも書けないのでは
+# ないか」という懸念が示されたが、実機テスト(#50、認証済みClaude Code CLI経由で
+# consistency-passを実行)で否定された — 実際にRead/Write/Bashの呼び出しが
+# audit.jsonlに記録され、成功している。これは`claude.py::_build_options`が
+# `permission_mode="bypassPermissions"`を設定しており(全許可チェックを迂回)、
+# かつ`ClaudeAgentOptions.tools`を明示的に絞り込んでいない(既定の全ビルトイン
+# ツールセットが有効なまま)ため — `allowed_tools`はMCPツールの自動承認/発見
+# 対象を絞るだけで、Read/Write/Bash等のビルトインツールの可否には影響しない
+# (実際の権限強制は`agent/policy.py`のPreToolUseフックが構造的に担う、#45)。
+# 将来SDKの既定挙動が変わった場合に備え、この前提が崩れていないかは
+# 実機テストで確認すること(単体テストはSDKをモックするため検出できない)。
 DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = tuple(f"mcp__{SERVER_NAME}__{name}" for name in TOOL_NAMES)
 
 # `consistency-pass`専用の作業手順。notation_rules.md(全runのワークスペースに
@@ -107,7 +120,10 @@ STANDARD_TASKS: tuple[TaskDefinition, ...] = (
     TaskDefinition(
         id="consistency-pass",
         purpose="曲全体で声部・異名同音・記譜の一貫性を担保",
-        tools=("query", "stats", "apply_ops", "validate"),
+        # Gate2レビュー指摘・LOW: 実プロンプト(_CONSISTENCY_PASS_PROMPT_TEMPLATE)は
+        # score_contextの使用も指示しているため、表示用のtools一覧にも含める
+        # (§8.7の元表には無いが、実手順との整合を優先する)。
+        tools=("context", "query", "stats", "apply_ops", "validate"),
         turns_min=20,
         turns_max=40,
         # 曲全体を全パート走査するため既定(300k/900s)より広めの予算を取る。

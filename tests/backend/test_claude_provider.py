@@ -678,3 +678,37 @@ async def test_without_config_run_id_provider_generates_its_own(
     handle = await provider.start(task)
     assert handle.run_id
     assert handle.run_id != "run_public_abc123"
+
+
+async def test_resolve_run_id_ignores_non_score_server_specs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE)の回帰テスト: run_id解決は`kind="in_process"`かつ
+
+    `name=SERVER_NAME`("score")のspecに限定する。無関係なspecが先に列挙されて
+    いても、そのconfig["run_id"]を誤って採用しないことを確認する。
+    """
+    fake_cls = _make_fake_client_cls(_HAPPY_SCRIPT)
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        mcp_servers=[
+            McpServerSpec(
+                name="other",
+                kind="in_process",
+                config={"workspace_dir": str(tmp_path), "run_id": "wrong-run-id"},
+            ),
+            McpServerSpec(
+                name="score",
+                kind="in_process",
+                config={"workspace_dir": str(tmp_path), "run_id": "correct-run-id"},
+            ),
+        ],
+    )
+    handle = await provider.start(task)
+    assert handle.run_id == "correct-run-id"

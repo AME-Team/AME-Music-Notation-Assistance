@@ -152,8 +152,16 @@ def _resolve_run_id(task: AgentTask) -> str | None:
     `AgentRunManager`が`config={"workspace_dir": ..., "run_id": 公開run_id}`を
     渡すようにし(`agent_run_manager.py`参照)、ここでそれを`start()`が採番する
     run_id自体として採用することで一致させる。
+
+    走査対象は`kind="in_process"`かつ`name=SERVER_NAME`("score")のspecに限定する
+    (Gate2レビュー指摘・MIDDLE: staging先ファイル名の一致は score サーバの
+    `ToolContext.run_id`にのみ依存するため、無条件に「最初に見つかった
+    config["run_id"]」を採用すると、将来score以外のspecが混在した場合や
+    順序が変わった場合に無関係な値を拾ってこのバグが再発しうる)。
     """
     for spec in task.mcp_servers:
+        if spec.kind != "in_process" or spec.name != SERVER_NAME:
+            continue
         run_id = spec.config.get("run_id")
         if run_id:
             return str(run_id)
