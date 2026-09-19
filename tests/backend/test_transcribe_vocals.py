@@ -156,6 +156,46 @@ def test_resolve_monophonic_overlaps_evaluates_ghost_on_raw_duration() -> None:
     assert abs(resolved[0].duration_sec - 0.02) < 1e-6
 
 
+def test_resolve_monophonic_overlaps_does_not_reintroduce_overlap_via_floor_clamp() -> (
+    None
+):
+    """床値クランプ(1ms)による重複の再発を防ぎ、厳密なモノフォニック制約が保たれること(#55, #125 レビュー指摘)。"""
+    # 先行ノートと後続ノートの差が 0.0005s (0.5ms < 1ms floor)
+    notes = [
+        NoteEvent(
+            onset_sec=0.0, duration_sec=1.0, midi=60, velocity=80, ghost_candidate=False
+        ),
+        NoteEvent(
+            onset_sec=0.0005,
+            duration_sec=1.0,
+            midi=62,
+            velocity=80,
+            ghost_candidate=False,
+        ),
+    ]
+    resolved = _resolve_monophonic_overlaps(notes)
+    assert len(resolved) == 2
+    # 0.5ms に短縮され、床値クランプで 1ms に伸長されて重複が再発しないこと
+    assert abs(resolved[0].duration_sec - 0.0005) < 1e-6
+    assert resolved[0].onset_sec + resolved[0].duration_sec <= resolved[1].onset_sec
+    assert resolved[0].ghost_candidate is True
+
+
+def test_resolve_monophonic_overlaps_drops_zero_or_negative_duration_notes() -> None:
+    """重複解消の結果デュレーションが0以下になったノートは除外されること(#55, #125 レビュー指摘)。"""
+    notes = [
+        NoteEvent(
+            onset_sec=0.5, duration_sec=0.5, midi=60, velocity=80, ghost_candidate=False
+        ),
+        NoteEvent(
+            onset_sec=0.5, duration_sec=1.0, midi=62, velocity=80, ghost_candidate=False
+        ),
+    ]
+    resolved = _resolve_monophonic_overlaps(notes)
+    assert len(resolved) == 1
+    assert resolved[0].midi == 62
+
+
 def test_run_vocals_transcription_with_mock(tmp_path: Path) -> None:
     """モックトランスクライバを用いた実行フローの検証。"""
     audio_path = tmp_path / "dummy_vocals.wav"

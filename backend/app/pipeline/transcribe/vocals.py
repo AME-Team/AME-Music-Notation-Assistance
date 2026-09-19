@@ -95,17 +95,17 @@ def _resolve_monophonic_overlaps(notes: list[NoteEvent]) -> list[NoteEvent]:
         if i + 1 < len(sorted_notes):
             next_onset = sorted_notes[i + 1].onset_sec
             if offset > next_onset:
-                offset = max(next_onset, onset)
+                offset = next_onset
 
-        # 切り上げ前の実測デュレーションで ghost_candidate を判定し、
-        # 保存用デュレーションのみ MIN_DURATION_FLOOR_SEC でクランプする(#125 レビュー指摘)
-        raw_duration = max(0.0, offset - onset)
+        raw_duration = offset - onset
+        if raw_duration <= 0.0:
+            continue
+
         ghost = is_ghost_candidate(raw_duration, cur.velocity)
-        new_duration = max(raw_duration, MIN_DURATION_FLOOR_SEC)
         resolved.append(
             NoteEvent(
                 onset_sec=onset,
-                duration_sec=new_duration,
+                duration_sec=raw_duration,
                 midi=cur.midi,
                 velocity=cur.velocity,
                 ghost_candidate=ghost,
