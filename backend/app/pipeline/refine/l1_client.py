@@ -8,10 +8,11 @@ APIキーを発行・課金設定する必要が無い(#104: ユーザー指摘�
 で、Anthropic Messages APIのStructured Outputsとほぼ同等の構造化出力・usage・
 実測コスト(`total_cost_usd`)が取得できることを実機検証済み。
 
-`--allowedTools "StructuredOutput" --restricted`でツール実行(Bash/Read/Edit等)
+`--allowedTools "StructuredOutput"`でツール実行(Bash/Read/Edit等)
 を一切許可せず、構造化出力を返す内部ツール`StructuredOutput`のみを許可する
 (このチャンク注釈タスクはテキスト入力→JSON出力の純粋な変換であり、ファイル
-アクセスやコマンド実行は不要かつ望ましくない)。
+アクセスやコマンド実行は不要かつ望ましくない。CLIバージョン間の非互換性を
+防ぐため`--restricted`は付与せず`--allowedTools`のみで制限する)。
 
 テストでは`subprocess.run`をモックし、実際に`claude`バイナリを呼び出さない
 (CI(Windows GitHub Actions)には`claude` CLIがインストールされていない前提)。
@@ -189,7 +190,6 @@ def call_l1_chunk(
         effort,
         "--allowedTools",
         _ALLOWED_TOOLS,
-        "--restricted",
     ]
 
     try:
