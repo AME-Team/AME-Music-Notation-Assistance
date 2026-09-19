@@ -53,6 +53,17 @@ def test_apply_lpf_attenuates_high_frequencies() -> None:
     assert abs(rms_filtered - rms_low_orig) < 0.05
 
 
+def test_apply_lpf_handles_very_short_signals() -> None:
+    """#124 レビュー指摘: padlen 未満の極めて短い信号でも例外を出さずにフィルタ処理できること。"""
+    sr = 22050
+    # わずか 10 サンプルの短信号 (padlen ~ 27 未満)
+    short_signal = np.sin(np.linspace(0, 1, 10))
+    filtered = apply_lpf(short_signal, sr, cutoff_hz=LPF_CUTOFF_HZ)
+    assert len(filtered) == 10
+    # 空信号
+    assert len(apply_lpf(np.array([]), sr)) == 0
+
+
 def test_octave_error_correction_detects_subharmonic() -> None:
     """第2倍音が支配的で基本波が微弱な場合、1オクターブ下に補正されること(R-6)。"""
     sr = 22050

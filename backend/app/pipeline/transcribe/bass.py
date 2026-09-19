@@ -49,7 +49,12 @@ def apply_lpf(audio: np.ndarray, sr: int, cutoff_hz: float = LPF_CUTOFF_HZ) -> n
     nyquist = 0.5 * sr
     normalized_cutoff = min(cutoff_hz, nyquist * 0.95) / nyquist
     sos = scipy.signal.butter(4, normalized_cutoff, btype="lowpass", output="sos")
-    return scipy.signal.sosfiltfilt(sos, audio)
+    padlen = 3 * (2 * sos.shape[0] + 1)
+    if len(audio) <= padlen:
+        # 入力が短すぎてゼロ位相パディングできない場合は因果的フィルタにフォールバック
+        # (#124 レビュー指摘)
+        return scipy.signal.sosfilt(sos, audio)
+    return scipy.signal.sosfiltfilt(sos, audio, padlen=padlen)
 
 
 def check_and_correct_octave_error(
@@ -65,7 +70,8 @@ def check_and_correct_octave_error(
 
     ベースは基本波(f0)のエネルギーが小さく第2倍音(2*f0)が支配的になりやすいため、
     F0追跡が1オクターブ上にずれるリスクがある。
-    推定周波数 f の半分 f/2 付近に局所ピークが存在する場合、基本波を f/2 に補正する。
+    各フレーム t において推定周波数 f の半分 f/2 付近に局所ピークが存在する場合、
+    基本波を f/2 に補正する(#124 レビュー指摘: 全体平均ではなくフレーム固有スペクトルを使用)。
     """
     import librosa
 
@@ -76,7 +82,6 @@ def check_and_correct_octave_error(
 
     stft_mag = np.abs(librosa.stft(filtered_audio, n_fft=n_fft, hop_length=hop_length))
     freq_bins = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
-    spec_mean = np.mean(stft_mag, axis=1)
 
     n_frames = min(len(corrected_f0), stft_mag.shape[1])
     for t in range(n_frames):
@@ -88,10 +93,13 @@ def check_and_correct_octave_error(
             continue
 
         idx_sub = int(np.argmin(np.abs(freq_bins - f_sub)))
-        # idx_sub 近傍(±4 bins)のウィンドウ内で局所ピークがあるか検証
+        # フレーム t のスペクトル(端点過渡応答の影響を和らげるため前後1フレームを含めた平均)
+        t_start = max(0, t - 1)
+        t_end = min(stft_mag.shape[1], t + 2)
+        frame_mag = np.mean(stft_mag[:, t_start:t_end], axis=1)
         start_bin = max(0, idx_sub - 4)
-        end_bin = min(len(spec_mean), idx_sub + 5)
-        window = spec_mean[start_bin:end_bin]
+        end_bin = min(len(frame_mag), idx_sub + 5)
+        window = frame_mag[start_bin:end_bin]
         if len(window) < 3:
             continue
 
@@ -100,8 +108,14 @@ def check_and_correct_octave_error(
         # 局所ピークが idx_sub (またはその隣接) にあり、周囲の中央値に対して有意(1.4倍以上)か
         is_local_peak = abs(local_max - center_offset) <= 1
         noise_floor = float(np.median(window))
-        if is_local_peak and spec_mean[idx_sub] > 1.4 * noise_floor and spec_mean[idx_sub] > 1e-4:
+        if is_local_peak and frame_mag[idx_sub] > 1.4 * noise_floor and frame_mag[idx_sub] > 1e-4:
             corrected_f0[t] = f_sub
+
+    # 孤立フレームのスパイク除去と平滑化のための中央値フィルタ
+    valid_indices = np.where(~np.isnan(corrected_f0) & (corrected_f0 > 0))[0]
+    if len(valid_indices) >= 3:
+        med = scipy.signal.medfilt(corrected_f0[valid_indices], kernel_size=3)
+        corrected_f0[valid_indices] = med
 
     return corrected_f0
 

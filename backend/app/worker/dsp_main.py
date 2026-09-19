@@ -399,20 +399,36 @@ def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
     )
 
 
-def _piano_part_has_notes(workspace_dir: Path, project_id: str) -> bool:
-    """`should_skip_stage` の `artifacts_exist` 用(#24-M2レビュー指摘の想定):
+def _transcribe_artifacts_exist(
+    workspace_dir: Path,
+    project_id: str,
+    *,
+    require_piano: bool = False,
+    require_bass: bool = False,
+) -> bool:
+    """`should_skip_stage` の `artifacts_exist` 用(#24/#54, #124 レビュー指摘):
 
-    Score IR自体、または `piano`/`bass` パートのノートが(手動削除等で)無くなっていれば
-    スキップを拒否する。M1の分離/ビート推定ステージと同じ保護パターン。
+    Score IR自体、または存在する各ステムに対応するパートのノートが(手動削除等で)
+    無くなっていればスキップを拒否する(AND条件: 存在する全パートでノートが存在すること)。
+    M1の分離/ビート推定ステージと同じ保護パターン。
     """
     score = ScoreService(workspace_dir=workspace_dir).read_score_optional(project_id)
     if score is None:
         return False
-    piano_part = score.find_part(PIANO_STEM_NAME)
-    bass_part = score.find_part(BASS_STEM_NAME)
-    has_piano = piano_part is not None and len(piano_part.notes) > 0
-    has_bass = bass_part is not None and len(bass_part.notes) > 0
-    return has_piano or has_bass
+    if require_piano:
+        piano_part = score.find_part(PIANO_STEM_NAME)
+        if piano_part is None or len(piano_part.notes) == 0:
+            return False
+    if require_bass:
+        bass_part = score.find_part(BASS_STEM_NAME)
+        if bass_part is None or len(bass_part.notes) == 0:
+            return False
+    return True
+
+
+def _piano_part_has_notes(workspace_dir: Path, project_id: str) -> bool:
+    """後方互換用エイリアス(#24)。"""
+    return _transcribe_artifacts_exist(workspace_dir, project_id, require_piano=True)
 
 
 def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
@@ -458,8 +474,13 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         provider_versions["piano_transcription_inference"] = piano_transcription_inference_version
 
     if has_bass:
+        librosa_version = _package_version("librosa")
+        scipy_version = _package_version("scipy")
         hash_dict["bass_audio_fingerprint"] = audio_fingerprint(bass_stem_path)
-        provider_versions["bass_transcription"] = "1.0.0"
+        hash_dict["bass_librosa_version"] = librosa_version
+        hash_dict["bass_scipy_version"] = scipy_version
+        provider_versions["librosa"] = librosa_version
+        provider_versions["scipy"] = scipy_version
 
     hash_payload = json.dumps(hash_dict, sort_keys=True)
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
@@ -469,7 +490,9 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         project_id,
         "transcribe",
         hash_value,
-        artifacts_exist=lambda _meta: _piano_part_has_notes(workspace_dir, project_id),
+        artifacts_exist=lambda _meta: _transcribe_artifacts_exist(
+            workspace_dir, project_id, require_piano=has_piano, require_bass=has_bass
+        ),
     ):
         emit(
             {
@@ -487,7 +510,12 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     # 数十秒かかるため、その間に他プロセス(将来のM3編集APIや並行ジョブ)がScore IR
     # を書き換えている可能性がある。**推論を開始する前**に読んだ生JSONと、書き込み
     # 直前に再読込した生JSONを比較し、食い違っていれば上書きしない。この読み取りは
-    # 必ず `run_piano_transcription` / `run_bass_transcription` の呼び出しより前に行うこと。
+    # 必ず `run_piano_transcription` / `run_bass_transcription` の呼び出しより前に行うこと
+    # (#24-M2レビューラウンドで、推論後に読んでしまいレース窓を検出できていなかった
+    # 実装ミスを修正した経緯があるため、推論前に読む設計を厳格に維持する、#124レビュー指摘)。
+    # M2時点ではScore IRを書き換える経路がこのステージ自身以外に無いため実際には
+    # 発火しないが、M3で編集APIが入った際にも安全側に倒れる設計として先に
+    # 用意しておく。
     raw_before = storage.read_json(score_path) if score_path.exists() else None
 
     score = score_service.read_score_optional(project_id) or _initial_score_ir(

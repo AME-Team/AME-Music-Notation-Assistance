@@ -1712,3 +1712,70 @@ def test_transcribe_stage_bass_octave_shift_integration(
     bass_part = score.find_part("bass")
     assert bass_part is not None
     assert bass_part.notes[0].midi == 40
+
+
+def test_transcribe_stage_skip_rejected_when_one_part_notes_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#124 レビュー指摘: 両ステムが存在する状態で片方のノートだけ削除された場合、スキップが拒否されて再採譜されること。"""
+    from app.pipeline.transcribe.piano import NoteEvent, TranscriptionResult
+
+    project_id = "proj_both_delete"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+
+    call_counts = {"piano": 0, "bass": 0}
+
+    def _mock_piano(_p, **_k):
+        call_counts["piano"] += 1
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=60,
+                    velocity=70,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    def _mock_bass(_p, **_k):
+        call_counts["bass"] += 1
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=36,
+                    velocity=80,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _mock_piano)
+    monkeypatch.setattr(dsp_main, "run_bass_transcription", _mock_bass)
+
+    # 初回実行
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    assert call_counts == {"piano": 1, "bass": 1}
+
+    # 入力不変ならスキップされること
+    dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
+    assert call_counts == {"piano": 1, "bass": 1}
+
+    # ピアノパートのノートだけを削除した状態を作る
+    score_service = ScoreService(workspace_dir=tmp_path)
+    score = score_service.read_score(project_id)
+    piano_part = score.find_part("piano")
+    assert piano_part is not None
+    piano_part.notes = []
+    score_service.write_score(project_id, score)
+
+    # 再実行: ピアノノートが欠落しているためスキップが拒否され再採譜されること
+    dsp_main.run_transcribe_stage("job3", project_id, tmp_path, {})
+    assert call_counts == {"piano": 2, "bass": 2}
