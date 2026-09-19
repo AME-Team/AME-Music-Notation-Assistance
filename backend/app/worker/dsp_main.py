@@ -34,6 +34,7 @@ from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
 from app.pipeline.transcribe.bass import BASS_ALGO_VERSION, run_bass_transcription
 from app.pipeline.transcribe.piano import run_piano_transcription
+from app.pipeline.transcribe.vocals import VOCALS_ALGO_VERSION, run_vocals_transcription
 from app.services import score_undo, stage_invalidation
 from app.services.score_service import ScoreService
 
@@ -375,6 +376,7 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path, params: di
 
 PIANO_STEM_NAME = "piano"
 BASS_STEM_NAME = "bass"
+VOCALS_STEM_NAME = "vocals"
 
 
 def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
@@ -405,8 +407,9 @@ def _transcribe_artifacts_exist(
     *,
     require_piano: bool = False,
     require_bass: bool = False,
+    require_vocals: bool = False,
 ) -> bool:
-    """`should_skip_stage` の `artifacts_exist` 用(#24/#54, #124 レビュー指摘):
+    """`should_skip_stage` の `artifacts_exist` 用(#24/#54/#55, #124 レビュー指摘):
 
     Score IR自体、または存在する各ステムに対応するパートのノートが(手動削除等で)
     無くなっていればスキップを拒否する(AND条件: 存在する全パートでノートが存在すること)。
@@ -422,6 +425,10 @@ def _transcribe_artifacts_exist(
     if require_bass:
         bass_part = score.find_part(BASS_STEM_NAME)
         if bass_part is None or len(bass_part.notes) == 0:
+            return False
+    if require_vocals:
+        vocals_part = score.find_part(VOCALS_STEM_NAME)
+        if vocals_part is None or len(vocals_part.notes) == 0:
             return False
     return True
 
@@ -452,11 +459,13 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     stems_dir_path = storage.stems_dir(workspace_dir, project_id)
     piano_stem_path = stems_dir_path / f"{PIANO_STEM_NAME}.wav"
     bass_stem_path = stems_dir_path / f"{BASS_STEM_NAME}.wav"
+    vocals_stem_path = stems_dir_path / f"{VOCALS_STEM_NAME}.wav"
 
     has_piano = piano_stem_path.exists()
     has_bass = bass_stem_path.exists()
+    has_vocals = vocals_stem_path.exists()
 
-    if not has_piano and not has_bass:
+    if not has_piano and not has_bass and not has_vocals:
         # #16: pianoステムは `standard` プリセット(htdemucs_6s)でのみ生成される。
         # `fast`/`high_quality`(4ステム)には無い(M2時点の既知の制約)。
         raise ValueError(
@@ -484,6 +493,17 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         provider_versions["librosa"] = librosa_version
         provider_versions["scipy"] = scipy_version
 
+    if has_vocals:
+        torchcrepe_version = _package_version("torchcrepe")
+        torch_version = _package_version("torch")
+        hash_dict["vocals_audio_fingerprint"] = audio_fingerprint(vocals_stem_path)
+        hash_dict["vocals_algo_version"] = VOCALS_ALGO_VERSION
+        hash_dict["vocals_torchcrepe_version"] = torchcrepe_version
+        hash_dict["vocals_torch_version"] = torch_version
+        provider_versions["vocals_transcription"] = VOCALS_ALGO_VERSION
+        provider_versions["torchcrepe"] = torchcrepe_version
+        provider_versions["torch"] = torch_version
+
     hash_payload = json.dumps(hash_dict, sort_keys=True)
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
 
@@ -493,7 +513,11 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         "transcribe",
         hash_value,
         artifacts_exist=lambda _meta: _transcribe_artifacts_exist(
-            workspace_dir, project_id, require_piano=has_piano, require_bass=has_bass
+            workspace_dir,
+            project_id,
+            require_piano=has_piano,
+            require_bass=has_bass,
+            require_vocals=has_vocals,
         ),
     ):
         emit(
@@ -526,6 +550,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     new_piano_notes_count = 0
     piano_pedals_count = 0
     new_bass_notes_count = 0
+    new_vocals_notes_count = 0
 
     if has_piano:
         result = run_piano_transcription(piano_stem_path)
@@ -592,6 +617,39 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         bass_part.pedals = []
         new_bass_notes_count = len(new_bass_notes)
 
+    if has_vocals:
+        result_vocals = run_vocals_transcription(vocals_stem_path)
+        vocals_part = score.find_part(VOCALS_STEM_NAME)
+        if vocals_part is None:
+            vocals_part = Part(
+                id=VOCALS_STEM_NAME,
+                name="Vocals",
+                midi_program=53,
+                stem_source=f"stems/{VOCALS_STEM_NAME}.wav",
+                staves=1,
+                clefs=[Clef(staff=1, sign="G", line=2)],
+            )
+            score.parts.append(vocals_part)
+
+        preserved_vocals_notes = [n for n in vocals_part.notes if n.provenance != "amt"]
+        new_vocals_notes = [
+            Note(
+                id=score.allocate_note_id(),
+                onset_sec=event.onset_sec,
+                duration_sec=event.duration_sec,
+                midi=event.midi,
+                velocity=event.velocity,
+                voice=1,
+                staff=1,
+                provenance="amt",
+                flags=["ghost_candidate"] if event.ghost_candidate else [],
+            )
+            for event in result_vocals.notes
+        ]
+        vocals_part.notes = preserved_vocals_notes + new_vocals_notes
+        vocals_part.pedals = []
+        new_vocals_notes_count = len(new_vocals_notes)
+
     raw_now = storage.read_json(score_path) if score_path.exists() else None
     if raw_now != raw_before:
         emit(
@@ -617,14 +675,18 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         params_hash=hash_value,
         provider_versions=provider_versions,
     )
-    if not has_bass:
+    if not has_bass and not has_vocals:
         msg = f"{new_piano_notes_count} notes, {piano_pedals_count} pedal events"
     else:
-        msg = (
-            f"{new_piano_notes_count + new_bass_notes_count} notes "
-            f"({new_piano_notes_count} piano, {new_bass_notes_count} bass), "
-            f"{piano_pedals_count} pedal events"
-        )
+        parts_summary = []
+        if has_piano:
+            parts_summary.append(f"{new_piano_notes_count} piano")
+        if has_bass:
+            parts_summary.append(f"{new_bass_notes_count} bass")
+        if has_vocals:
+            parts_summary.append(f"{new_vocals_notes_count} vocals")
+        total_notes = new_piano_notes_count + new_bass_notes_count + new_vocals_notes_count
+        msg = f"{total_notes} notes ({', '.join(parts_summary)}), {piano_pedals_count} pedal events"
     emit(
         {
             "job_id": job_id,

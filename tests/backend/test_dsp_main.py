@@ -1816,3 +1816,212 @@ def test_transcribe_stage_records_bass_algo_version(
     assert meta["versions"].get("bass_transcription") == BASS_ALGO_VERSION
     assert "librosa" in meta["versions"]
     assert "scipy" in meta["versions"]
+
+
+def test_transcribe_stage_with_vocals_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """vocals.wav 単独存在時の Stage 3 採譜テスト(#55)。"""
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+    from app.pipeline.transcribe.vocals import VOCALS_ALGO_VERSION
+
+    project_id = "proj_vocals_only"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "vocals.wav")
+
+    def _mock_vocals(_p, **_k):
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.5,
+                    duration_sec=1.0,
+                    midi=69,
+                    velocity=85,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_vocals_transcription", _mock_vocals)
+
+    dsp_main.run_transcribe_stage("job_v1", project_id, tmp_path, {})
+
+    service = ScoreService(workspace_dir=tmp_path)
+    score = service.read_score(project_id)
+    assert score.find_part("piano") is None
+    assert score.find_part("bass") is None
+
+    vocals_part = score.find_part("vocals")
+    assert vocals_part is not None
+    assert vocals_part.name == "Vocals"
+    assert vocals_part.midi_program == 53
+    assert vocals_part.staves == 1
+    assert vocals_part.clefs[0].sign == "G"
+    assert vocals_part.clefs[0].line == 2
+    assert len(vocals_part.notes) == 1
+    assert vocals_part.notes[0].midi == 69
+
+    # メタデータ記録確認
+    meta_path = storage.stage_metadata_path(tmp_path, project_id, "transcribe")
+    meta = storage.read_json(meta_path)
+    assert meta["versions"].get("vocals_transcription") == VOCALS_ALGO_VERSION
+    assert "torchcrepe" in meta["versions"]
+
+
+def test_transcribe_stage_with_piano_bass_vocals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Piano + Bass + Vocals の 3 ステム同時採譜およびサマリーメッセージの検証(#55)。"""
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_three_stems"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "vocals.wav")
+
+    def _mock_piano(_p, **_k):
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=60,
+                    velocity=70,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    def _mock_bass(_p, **_k):
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=36,
+                    velocity=80,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    def _mock_vocals(_p, **_k):
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=69,
+                    velocity=85,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _mock_piano)
+    monkeypatch.setattr(dsp_main, "run_bass_transcription", _mock_bass)
+    monkeypatch.setattr(dsp_main, "run_vocals_transcription", _mock_vocals)
+
+    emitted = []
+    monkeypatch.setattr(dsp_main, "emit", lambda p: emitted.append(p))
+
+    dsp_main.run_transcribe_stage("job_all", project_id, tmp_path, {})
+
+    service = ScoreService(workspace_dir=tmp_path)
+    score = service.read_score(project_id)
+    assert score.find_part("piano") is not None
+    assert score.find_part("bass") is not None
+    assert score.find_part("vocals") is not None
+
+    # メッセージに 3 パートすべての情報が含まれていること
+    final_msg = emitted[-1]["message"]
+    assert "3 notes (1 piano, 1 bass, 1 vocals)" in final_msg
+
+
+def test_transcribe_stage_skip_rejected_when_vocals_notes_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """3 ステム存在時に vocals ノートだけ手動削除された場合、スキップが拒否されること(#55, AND 条件)。"""
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_vocals_del"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "bass.wav")
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "vocals.wav")
+
+    call_counts = {"piano": 0, "bass": 0, "vocals": 0}
+
+    def _mock_piano(_p, **_k):
+        call_counts["piano"] += 1
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=60,
+                    velocity=70,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    def _mock_bass(_p, **_k):
+        call_counts["bass"] += 1
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=36,
+                    velocity=80,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    def _mock_vocals(_p, **_k):
+        call_counts["vocals"] += 1
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=69,
+                    velocity=85,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _mock_piano)
+    monkeypatch.setattr(dsp_main, "run_bass_transcription", _mock_bass)
+    monkeypatch.setattr(dsp_main, "run_vocals_transcription", _mock_vocals)
+
+    # 初回実行
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    assert call_counts == {"piano": 1, "bass": 1, "vocals": 1}
+
+    # 入力不変ならスキップされること
+    dsp_main.run_transcribe_stage("job2", project_id, tmp_path, {})
+    assert call_counts == {"piano": 1, "bass": 1, "vocals": 1}
+
+    # vocals のノートだけ削除
+    service = ScoreService(workspace_dir=tmp_path)
+    score = service.read_score(project_id)
+    vocals_part = score.find_part("vocals")
+    assert vocals_part is not None
+    vocals_part.notes = []
+    service.write_score(project_id, score)
+
+    # 再実行: スキップが拒否されて全パート再採譜されること
+    dsp_main.run_transcribe_stage("job3", project_id, tmp_path, {})
+    assert call_counts == {"piano": 2, "bass": 2, "vocals": 2}
