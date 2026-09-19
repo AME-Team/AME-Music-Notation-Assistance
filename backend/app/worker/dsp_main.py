@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Any
 
 import soundfile as sf
 
@@ -31,6 +32,7 @@ from app.pipeline.beat import run_beat_estimation
 from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_pedal_ticks
 from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
+from app.pipeline.transcribe.bass import run_bass_transcription
 from app.pipeline.transcribe.piano import run_piano_transcription
 from app.services import score_undo, stage_invalidation
 from app.services.score_service import ScoreService
@@ -372,6 +374,7 @@ def run_beat_stage(job_id: str, project_id: str, workspace_dir: Path, params: di
 
 
 PIANO_STEM_NAME = "piano"
+BASS_STEM_NAME = "bass"
 
 
 def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
@@ -399,22 +402,25 @@ def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
 def _piano_part_has_notes(workspace_dir: Path, project_id: str) -> bool:
     """`should_skip_stage` の `artifacts_exist` 用(#24-M2レビュー指摘の想定):
 
-    Score IR自体、または `piano` パートのノートが(手動削除等で)無くなっていれば
+    Score IR自体、または `piano`/`bass` パートのノートが(手動削除等で)無くなっていれば
     スキップを拒否する。M1の分離/ビート推定ステージと同じ保護パターン。
     """
     score = ScoreService(workspace_dir=workspace_dir).read_score_optional(project_id)
     if score is None:
         return False
-    part = score.find_part(PIANO_STEM_NAME)
-    return part is not None and len(part.notes) > 0
+    piano_part = score.find_part(PIANO_STEM_NAME)
+    bass_part = score.find_part(BASS_STEM_NAME)
+    has_piano = piano_part is not None and len(piano_part.notes) > 0
+    has_bass = bass_part is not None and len(bass_part.notes) > 0
+    return has_piano or has_bass
 
 
 def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
-    """#24: Stage 3 ピアノAMT。
+    """#24/#54: Stage 3 ピアノ・ベースAMT。
 
-    §6: 入力(pianoステム)+使用ライブラリのバージョンが不変ならスキップする
+    §6: 入力(piano/bassステム)+使用ライブラリのバージョンが不変ならスキップする
     (separate/beatステージと対称)。**この段階では一切ノートを捨てない**:
-    `run_piano_transcription` が返す `ghost_candidate` フラグはそのまま
+    `run_piano_transcription` / `run_bass_transcription` が返す `ghost_candidate` フラグはそのまま
     `Note.flags` へ引き継ぎ、削除はしない。
     """
     emit(
@@ -422,13 +428,19 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
             "job_id": job_id,
             "stage": "transcribe",
             "progress": 0.0,
-            "message": "transcribing piano",
+            "message": "transcribing piano/bass",
         }
     )
 
     force = params.get("force", False)
-    piano_stem_path = storage.stems_dir(workspace_dir, project_id) / f"{PIANO_STEM_NAME}.wav"
-    if not piano_stem_path.exists():
+    stems_dir_path = storage.stems_dir(workspace_dir, project_id)
+    piano_stem_path = stems_dir_path / f"{PIANO_STEM_NAME}.wav"
+    bass_stem_path = stems_dir_path / f"{BASS_STEM_NAME}.wav"
+
+    has_piano = piano_stem_path.exists()
+    has_bass = bass_stem_path.exists()
+
+    if not has_piano and not has_bass:
         # #16: pianoステムは `standard` プリセット(htdemucs_6s)でのみ生成される。
         # `fast`/`high_quality`(4ステム)には無い(M2時点の既知の制約)。
         raise ValueError(
@@ -436,14 +448,20 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
             "first (only htdemucs_6s produces a dedicated piano stem)"
         )
 
-    piano_transcription_inference_version = _package_version("piano_transcription_inference")
-    hash_payload = json.dumps(
-        {
-            "audio_fingerprint": audio_fingerprint(piano_stem_path),
-            "package_version": piano_transcription_inference_version,
-        },
-        sort_keys=True,
-    )
+    hash_dict: dict[str, Any] = {}
+    provider_versions: dict[str, str] = {}
+
+    if has_piano:
+        piano_transcription_inference_version = _package_version("piano_transcription_inference")
+        hash_dict["audio_fingerprint"] = audio_fingerprint(piano_stem_path)
+        hash_dict["package_version"] = piano_transcription_inference_version
+        provider_versions["piano_transcription_inference"] = piano_transcription_inference_version
+
+    if has_bass:
+        hash_dict["bass_audio_fingerprint"] = audio_fingerprint(bass_stem_path)
+        provider_versions["bass_transcription"] = "1.0.0"
+
+    hash_payload = json.dumps(hash_dict, sort_keys=True)
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
 
     if not force and storage.should_skip_stage(
@@ -469,47 +487,80 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     # 数十秒かかるため、その間に他プロセス(将来のM3編集APIや並行ジョブ)がScore IR
     # を書き換えている可能性がある。**推論を開始する前**に読んだ生JSONと、書き込み
     # 直前に再読込した生JSONを比較し、食い違っていれば上書きしない。この読み取りは
-    # 必ず `run_piano_transcription` の呼び出しより前に行うこと(#24-M2レビュー
-    # ラウンドで、推論後に読んでしまいレース窓を検出できていなかった実装ミスを修正)。
-    # M2時点ではScore IRを書き換える経路がこのステージ自身以外に無いため実際には
-    # 発火しないが、M3で編集APIが入った際にも安全側に倒れる設計として先に
-    # 用意しておく。
+    # 必ず `run_piano_transcription` / `run_bass_transcription` の呼び出しより前に行うこと。
     raw_before = storage.read_json(score_path) if score_path.exists() else None
-
-    result = run_piano_transcription(piano_stem_path)
 
     score = score_service.read_score_optional(project_id) or _initial_score_ir(
         project_id, workspace_dir
     )
-    part = score.find_part(PIANO_STEM_NAME)
-    if part is None:
-        part = Part(
-            id=PIANO_STEM_NAME,
-            name="Piano",
-            midi_program=0,
-            stem_source=f"stems/{PIANO_STEM_NAME}.wav",
-            staves=2,
-            clefs=[Clef(staff=1, sign="G", line=2), Clef(staff=2, sign="F", line=4)],
-        )
-        score.parts.append(part)
+    new_piano_notes_count = 0
+    piano_pedals_count = 0
+    new_bass_notes_count = 0
 
-    # #29の考え方を先取り: このステージが書き込むのは provenance="amt" のノートのみ。
-    # 将来M3で手動編集(provenance="user")が入っても、再採譜がそれを消さない。
-    preserved_notes = [n for n in part.notes if n.provenance != "amt"]
-    new_notes = [
-        Note(
-            id=score.allocate_note_id(),
-            onset_sec=event.onset_sec,
-            duration_sec=event.duration_sec,
-            midi=event.midi,
-            velocity=event.velocity,
-            provenance="amt",
-            flags=["ghost_candidate"] if event.ghost_candidate else [],
-        )
-        for event in result.notes
-    ]
-    part.notes = preserved_notes + new_notes
-    part.pedals = [Pedal(start_sec=p.start_sec, stop_sec=p.stop_sec) for p in result.pedals]
+    if has_piano:
+        result = run_piano_transcription(piano_stem_path)
+        part = score.find_part(PIANO_STEM_NAME)
+        if part is None:
+            part = Part(
+                id=PIANO_STEM_NAME,
+                name="Piano",
+                midi_program=0,
+                stem_source=f"stems/{PIANO_STEM_NAME}.wav",
+                staves=2,
+                clefs=[Clef(staff=1, sign="G", line=2), Clef(staff=2, sign="F", line=4)],
+            )
+            score.parts.append(part)
+
+        preserved_notes = [n for n in part.notes if n.provenance != "amt"]
+        new_notes = [
+            Note(
+                id=score.allocate_note_id(),
+                onset_sec=event.onset_sec,
+                duration_sec=event.duration_sec,
+                midi=event.midi,
+                velocity=event.velocity,
+                provenance="amt",
+                flags=["ghost_candidate"] if event.ghost_candidate else [],
+            )
+            for event in result.notes
+        ]
+        part.notes = preserved_notes + new_notes
+        part.pedals = [Pedal(start_sec=p.start_sec, stop_sec=p.stop_sec) for p in result.pedals]
+        new_piano_notes_count = len(new_notes)
+        piano_pedals_count = len(part.pedals)
+
+    if has_bass:
+        result_bass = run_bass_transcription(bass_stem_path)
+        bass_part = score.find_part(BASS_STEM_NAME)
+        if bass_part is None:
+            bass_part = Part(
+                id=BASS_STEM_NAME,
+                name="Bass",
+                midi_program=33,
+                stem_source=f"stems/{BASS_STEM_NAME}.wav",
+                staves=1,
+                clefs=[Clef(staff=1, sign="F", line=4)],
+            )
+            score.parts.append(bass_part)
+
+        preserved_bass_notes = [n for n in bass_part.notes if n.provenance != "amt"]
+        new_bass_notes = [
+            Note(
+                id=score.allocate_note_id(),
+                onset_sec=event.onset_sec,
+                duration_sec=event.duration_sec,
+                midi=event.midi,
+                velocity=event.velocity,
+                voice=1,
+                staff=1,
+                provenance="amt",
+                flags=["ghost_candidate"] if event.ghost_candidate else [],
+            )
+            for event in result_bass.notes
+        ]
+        bass_part.notes = preserved_bass_notes + new_bass_notes
+        bass_part.pedals = []
+        new_bass_notes_count = len(new_bass_notes)
 
     raw_now = storage.read_json(score_path) if score_path.exists() else None
     if raw_now != raw_before:
@@ -526,8 +577,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
 
     score_service.write_score(project_id, score)
     # #29: score/current.jsonへ実際に新しい採譜結果を書いた場合のみ下流(quantize)を
-    # 無効化する(直前の「並行変更検知でwrite skip」分岐はScore IRの内容が変わって
-    # いないため対象外)。自ステージのstage_metadataを書く前に呼ぶこと。
+    # 無効化する。自ステージのstage_metadataを書く前に呼ぶこと。
     _invalidate_downstream_or_reset(workspace_dir, project_id, "transcribe")
     _reset_undo_history_or_warn(workspace_dir, project_id)
     storage.write_stage_metadata(
@@ -535,14 +585,22 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         project_id,
         "transcribe",
         params_hash=hash_value,
-        provider_versions={"piano_transcription_inference": piano_transcription_inference_version},
+        provider_versions=provider_versions,
     )
+    if not has_bass:
+        msg = f"{new_piano_notes_count} notes, {piano_pedals_count} pedal events"
+    else:
+        msg = (
+            f"{new_piano_notes_count + new_bass_notes_count} notes "
+            f"({new_piano_notes_count} piano, {new_bass_notes_count} bass), "
+            f"{piano_pedals_count} pedal events"
+        )
     emit(
         {
             "job_id": job_id,
             "stage": "transcribe",
             "progress": 1.0,
-            "message": f"{len(new_notes)} notes, {len(part.pedals)} pedal events",
+            "message": msg,
         }
     )
 
