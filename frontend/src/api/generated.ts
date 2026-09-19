@@ -539,6 +539,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{project_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Revisions */
+        get: operations["list_revisions_api_projects__project_id__revisions_get"];
+        put?: never;
+        /** Create Revision */
+        post: operations["create_revision_api_projects__project_id__revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/revisions/{revision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Revision */
+        get: operations["get_revision_api_projects__project_id__revisions__revision_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Revision */
+        delete: operations["delete_revision_api_projects__project_id__revisions__revision_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/revisions/{revision_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Revision */
+        post: operations["restore_revision_api_projects__project_id__revisions__revision_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/revisions/{revision_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Revision Diff */
+        get: operations["get_revision_diff_api_projects__project_id__revisions__revision_id__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agent/providers": {
         parameters: {
             query?: never;
@@ -878,9 +948,9 @@ export interface components {
             /** Downbeats Sec */
             downbeats_sec: number[];
             /** Time Signatures */
-            time_signatures: components["schemas"]["TimeSignatureEntry"][];
+            time_signatures: components["schemas"]["app__api__schemas__TimeSignatureEntry"][];
             /** Tempo Map */
-            tempo_map: components["schemas"]["TempoMapEntry"][];
+            tempo_map: components["schemas"]["app__api__schemas__TempoMapEntry"][];
             /** Confidence */
             confidence: number;
             /**
@@ -903,7 +973,7 @@ export interface components {
              * @default false
              */
             rotate_downbeat: boolean;
-            time_signature_override?: components["schemas"]["TimeSignatureEntry"] | null;
+            time_signature_override?: components["schemas"]["TimeSignatureEntry-Input"] | null;
         };
         /** Body_create_project_api_projects_post */
         Body_create_project_api_projects_post: {
@@ -921,6 +991,29 @@ export interface components {
             status: "cancelled";
             /** Project Id */
             project_id: string;
+        };
+        /** ChordEntry */
+        ChordEntry: {
+            /** Bar */
+            bar: number;
+            /** Beat */
+            beat: number;
+            /** Symbol */
+            symbol: string;
+            /** Confidence */
+            confidence: number;
+        };
+        /** Clef */
+        Clef: {
+            /** Staff */
+            staff: number;
+            /**
+             * Sign
+             * @enum {string}
+             */
+            sign: "G" | "F" | "C" | "percussion";
+            /** Line */
+            line: number;
         };
         /**
          * CreateAgentRunRequest
@@ -954,6 +1047,16 @@ export interface components {
         CreateAgentRunResponse: {
             /** Run Id */
             run_id: string;
+        };
+        /**
+         * CreateRevisionRequest
+         * @description #59: 名前付きリビジョン作成リクエスト(FR-15)。
+         */
+        CreateRevisionRequest: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
         };
         /** DiffResponse */
         DiffResponse: {
@@ -1016,6 +1119,73 @@ export interface components {
             created_at: string;
             /** Updated At */
             updated_at: string;
+        };
+        /** KeySignatureEntry */
+        KeySignatureEntry: {
+            /** Bar */
+            bar: number;
+            /** Fifths */
+            fifths: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "major" | "minor";
+        };
+        /** Note */
+        Note: {
+            /** Id */
+            id: number;
+            /** Onset Sec */
+            onset_sec: number;
+            /** Duration Sec */
+            duration_sec: number;
+            /** Onset Tick */
+            onset_tick?: number | null;
+            /** Duration Tick */
+            duration_tick?: number | null;
+            /** Midi */
+            midi: number;
+            /** Velocity */
+            velocity: number;
+            spelling?: components["schemas"]["Spelling"] | null;
+            /**
+             * Voice
+             * @default 1
+             */
+            voice: number;
+            /**
+             * Staff
+             * @default 1
+             */
+            staff: number;
+            tie?: components["schemas"]["Tie"];
+            /**
+             * Confidence
+             * @default 1
+             */
+            confidence: number;
+            /**
+             * Provenance
+             * @enum {string}
+             */
+            provenance: "amt" | "baseline" | "llm" | "agent" | "user";
+            /** Provenance Run Id */
+            provenance_run_id?: string | null;
+            /** Flags */
+            flags?: string[];
+            /**
+             * Status
+             * @default active
+             * @enum {string}
+             */
+            status: "active" | "deleted" | "muted";
+            /** Snap Candidates */
+            snap_candidates?: components["schemas"]["SnapCandidate"][];
+            /** Selected Snap */
+            selected_snap?: string | null;
+            /** Ai Reason */
+            ai_reason?: string | null;
         };
         /**
          * NoteAddOp
@@ -1173,6 +1343,28 @@ export interface components {
             /** Staff */
             staff?: number | null;
         };
+        /** Part */
+        Part: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Midi Program */
+            midi_program: number;
+            /** Stem Source */
+            stem_source?: string | null;
+            /**
+             * Staves
+             * @default 1
+             */
+            staves: number;
+            /** Clefs */
+            clefs?: components["schemas"]["Clef"][];
+            /** Notes */
+            notes?: components["schemas"]["Note"][];
+            /** Pedals */
+            pedals?: components["schemas"]["Pedal"][];
+        };
         /**
          * PartTransposeOctaveOp
          * @description パート内の全activeノートを±1オクターブ移調する(R-6軽減策)。
@@ -1199,6 +1391,23 @@ export interface components {
             sample_rate: number;
             /** Peaks */
             peaks: number[][];
+        };
+        /**
+         * Pedal
+         * @description ペダルイベント(#24)。§10.2のスキーマ本文には無いフィールドだが、
+         *
+         *     ByteDance Piano Transcriptionの出力(ペダルon/off)とMusicXML `<pedal>`(#27)の
+         *     両方に必要なため、パート単位で意図的に追加する(設計書からの拡張として記録)。
+         */
+        Pedal: {
+            /** Start Sec */
+            start_sec: number;
+            /** Stop Sec */
+            stop_sec: number;
+            /** Start Tick */
+            start_tick?: number | null;
+            /** Stop Tick */
+            stop_tick?: number | null;
         };
         /** Project */
         Project: {
@@ -1291,6 +1500,40 @@ export interface components {
             reverted_note_ids: number[];
             remaining_diff: components["schemas"]["DiffResponse"];
         };
+        /**
+         * RevisionDiffResponse
+         * @description #59: リビジョン間差分レスポンス(FR-15)。
+         */
+        RevisionDiffResponse: {
+            /** Project Id */
+            project_id: string;
+            /** Revision Id */
+            revision_id: string;
+            /** Base Revision Id */
+            base_revision_id: string | null;
+            /** Parts */
+            parts: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * RevisionResponse
+         * @description #59: リビジョンメタデータレスポンス(FR-15)。
+         */
+        RevisionResponse: {
+            /** Id */
+            id: string;
+            /** Project Id */
+            project_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Op Count */
+            op_count: number;
+            /** Created At */
+            created_at: string;
+        };
         /** RunStageRequest */
         RunStageRequest: {
             /**
@@ -1322,12 +1565,107 @@ export interface components {
             bar_range?: number[] | null;
         };
         /**
+         * ScoreIR
+         * @description §10.2 準拠のトップレベルモデル。`services/score_service.py` がこれを
+         *
+         *     `score/current.json` として読み書きする。
+         */
+        ScoreIR: {
+            /**
+             * Schema Version
+             * @default 3
+             */
+            schema_version: number;
+            /** Project Id */
+            project_id: string;
+            source: components["schemas"]["SourceInfo"];
+            /**
+             * Divisions
+             * @default 480
+             */
+            divisions: number;
+            /** Tempo Map */
+            tempo_map?: components["schemas"]["app__domain__score__TempoMapEntry"][];
+            /** Time Signatures */
+            time_signatures?: components["schemas"]["app__domain__score__TimeSignatureEntry"][];
+            /** Key Signatures */
+            key_signatures?: components["schemas"]["KeySignatureEntry"][];
+            /** Chords */
+            chords?: components["schemas"]["ChordEntry"][];
+            /** Parts */
+            parts?: components["schemas"]["Part"][];
+            meta?: components["schemas"]["ScoreMeta"];
+            /**
+             * Next Note Id
+             * @default 1
+             */
+            next_note_id: number;
+        };
+        /**
+         * ScoreMeta
+         * @description §10.2 の `meta.stages`。各ステージの実行メタデータを緩く保持する。
+         *
+         *     L1/L2(M4/M5)まで含めた最終形は現時点で決め切らないため、値は `dict` のまま
+         *     許容し、詳細な構造化は各ステージの実装時に個別のヘルパで検証する。
+         */
+        ScoreMeta: {
+            /** Stages */
+            stages?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        /**
          * ScoreOpsRequest
          * @description #31: `POST /score/ops`。配列で一括適用する(`domain/score_ops.py`参照)。
          */
         ScoreOpsRequest: {
             /** Ops */
             ops: (components["schemas"]["NoteAddOp"] | components["schemas"]["NoteUpdateOp"] | components["schemas"]["NoteDeleteOp"] | components["schemas"]["NoteRestoreOp"] | components["schemas"]["NoteSplitOp"] | components["schemas"]["NoteMergeOp"] | components["schemas"]["PartTransposeOctaveOp"])[];
+        };
+        /**
+         * SnapCandidate
+         * @description Stage 4(#25)が生成する量子化候補。`id` は同一ノート内で一意な短い識別子
+         *
+         *     ("a","b","c",...)。AIやユーザーが `Note.selected_snap` でこれを指す。
+         */
+        SnapCandidate: {
+            /** Id */
+            id: string;
+            /** Resolution */
+            resolution: string;
+            /** Tick */
+            tick: number;
+            /** Score */
+            score: number;
+        };
+        /** SourceInfo */
+        SourceInfo: {
+            /** Filename */
+            filename: string;
+            /** Duration Sec */
+            duration_sec: number;
+            /** Sample Rate */
+            sample_rate: number;
+        };
+        /**
+         * Spelling
+         * @description 異名同音表記(§7.4)。`step`+`alter` のピッチクラスが `midi % 12` と一致すること
+         *
+         *     (V-4)、`octave` が MIDI 番号と整合すること(V-5、B#/Cbの境界を考慮)は
+         *     `domain.pitch` の検証ロジックで別途チェックする(モデル自体はデータ構造のみ)。
+         */
+        Spelling: {
+            /**
+             * Step
+             * @enum {string}
+             */
+            step: "C" | "D" | "E" | "F" | "G" | "A" | "B";
+            /** Alter */
+            alter: number;
+            /** Octave */
+            octave: number;
         };
         /** StageStatus */
         StageStatus: {
@@ -1367,17 +1705,21 @@ export interface components {
              */
             requires_scope: boolean;
         };
-        /** TempoMapEntry */
-        TempoMapEntry: {
-            /** Bar */
-            bar: number;
-            /** Beat */
-            beat: number;
-            /** Bpm */
-            bpm: number;
+        /** Tie */
+        Tie: {
+            /**
+             * Start
+             * @default false
+             */
+            start: boolean;
+            /**
+             * Stop
+             * @default false
+             */
+            stop: boolean;
         };
         /** TimeSignatureEntry */
-        TimeSignatureEntry: {
+        "TimeSignatureEntry-Input": {
             /** Bar */
             bar: number;
             /** Numerator */
@@ -1397,6 +1739,47 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** TempoMapEntry */
+        app__api__schemas__TempoMapEntry: {
+            /** Bar */
+            bar: number;
+            /** Beat */
+            beat: number;
+            /** Bpm */
+            bpm: number;
+        };
+        /** TimeSignatureEntry */
+        app__api__schemas__TimeSignatureEntry: {
+            /** Bar */
+            bar: number;
+            /** Numerator */
+            numerator: number;
+            /** Denominator */
+            denominator: number;
+        };
+        /**
+         * TempoMapEntry
+         * @description §10.2。`api.schemas.TempoMapEntry`(beatmap.json用)とは構造が似るが、
+         *
+         *     domain層をAPI層から独立させるため意図的に別定義とする(#23)。
+         */
+        app__domain__score__TempoMapEntry: {
+            /** Bar */
+            bar: number;
+            /** Beat */
+            beat: number;
+            /** Bpm */
+            bpm: number;
+        };
+        /** TimeSignatureEntry */
+        app__domain__score__TimeSignatureEntry: {
+            /** Bar */
+            bar: number;
+            /** Numerator */
+            numerator: number;
+            /** Denominator */
+            denominator: number;
         };
     };
     responses: never;
@@ -2306,6 +2689,201 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RejectResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_revisions_api_projects__project_id__revisions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_revision_api_projects__project_id__revisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRevisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_revision_api_projects__project_id__revisions__revision_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_revision_api_projects__project_id__revisions__revision_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_revision_api_projects__project_id__revisions__revision_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoreIR"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_revision_diff_api_projects__project_id__revisions__revision_id__diff_get: {
+        parameters: {
+            query?: {
+                /** @description 比較元リビジョンID(未指定時は現行スコア) */
+                base_revision_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionDiffResponse"];
                 };
             };
             /** @description Validation Error */
