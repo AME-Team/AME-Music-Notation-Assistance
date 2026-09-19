@@ -30,7 +30,7 @@ from app.domain.score import Clef, Note, Part, Pedal, ScoreIR, SnapCandidate, So
 from app.infra import storage
 from app.pipeline.beat import run_beat_estimation
 from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_pedal_ticks
-from app.pipeline.refine.baseline import RefineNoteInput, refine_baseline
+from app.pipeline.refine.baseline import RefineNoteInput, estimate_key_fifths, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
 from app.pipeline.transcribe.bass import BASS_ALGO_VERSION, run_bass_transcription
 from app.pipeline.transcribe.guitar import (
@@ -384,6 +384,20 @@ BASS_STEM_NAME = "bass"
 VOCALS_STEM_NAME = "vocals"
 GUITAR_STEM_NAME = "guitar"
 OTHER_STEM_NAME = "other"
+
+# quantizeステージ(#25/#56)が処理対象とする全パート名。
+QUANTIZABLE_STEM_NAMES = (
+    PIANO_STEM_NAME,
+    BASS_STEM_NAME,
+    VOCALS_STEM_NAME,
+    GUITAR_STEM_NAME,
+    OTHER_STEM_NAME,
+)
+# 大譜表(ト音部/へ音部の2段)を持つのはpianoのみ。他は単一譜表のため
+# `refine_baseline(..., single_staff=True)`(#56)で扱う。`QUANTIZABLE_STEM_NAMES`から
+# 導出する(#128レビュー指摘: 別リテラルで二重管理すると、将来パートが増えた際に
+# 片方だけ更新され不整合になる)。
+_SINGLE_STAFF_STEM_NAMES = frozenset(QUANTIZABLE_STEM_NAMES) - {PIANO_STEM_NAME}
 
 
 def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
@@ -859,39 +873,48 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     )
 
 
-def _piano_notes_are_quantized(workspace_dir: Path, project_id: str) -> bool:
-    """`should_skip_stage` の `artifacts_exist` 用(#25/#26、`_piano_part_has_notes`
+def _quantize_artifacts_exist(workspace_dir: Path, project_id: str) -> bool:
+    """`should_skip_stage` の `artifacts_exist` 用(#25/#26/#56)。
 
-    と同じ保護パターン): Score IR自体、`piano`パート、またはノートが無くなって
-    いればスキップを拒否する。加えて、量子化またはL0が未完了(`onset_tick`が
-    未設定、または非userノートで`spelling`が未設定のまま残っている)状態も
-    再実行させる(手動でのscore/current.json編集や、以前の実行が途中で
-    中断した場合の保護。#25-M2レビュー指摘: `onset_tick`だけを見ると、L0が
-    未適用のまま(spelling等が欠けたまま)でもスキップしてしまい、本ステージの
-    docstringが謳う「常にエクスポート可能な状態」を守れない)。
+    Score IR自体が無ければスキップを拒否する。存在する各パート
+    (`QUANTIZABLE_STEM_NAMES`のうちノートを持つもの)について、量子化または
+    L0が未完了(`onset_tick`が未設定、または非userノートで`spelling`が未設定の
+    まま残っている)状態も再実行させる(手動でのscore/current.json編集や、
+    以前の実行が途中で中断した場合の保護。#25-M2レビュー指摘: `onset_tick`だけを
+    見ると、L0が未適用のまま(spelling等が欠けたまま)でもスキップしてしまい、
+    本ステージのdocstringが謳う「常にエクスポート可能な状態」を守れない)。
+
+    ノートを持つ対象パートが1つも無い場合はFalseを返す(#56: `run_quantize_stage`
+    本体の「処理対象パートが無ければエラー」という分岐へ確実に流すため)。
     """
     score = ScoreService(workspace_dir=workspace_dir).read_score_optional(project_id)
     if score is None:
         return False
-    part = score.find_part(PIANO_STEM_NAME)
-    if part is None:
-        return False
-    active_notes = [n for n in part.notes if n.status != "deleted"]
-    if not active_notes:
-        return False
-    return all(
-        n.onset_tick is not None and (n.provenance == "user" or n.spelling is not None)
-        for n in active_notes
-    )
+
+    found_any = False
+    for stem_name in QUANTIZABLE_STEM_NAMES:
+        part = score.find_part(stem_name)
+        if part is None:
+            continue
+        active_notes = [n for n in part.notes if n.status != "deleted"]
+        if not active_notes:
+            continue
+        found_any = True
+        if not all(
+            n.onset_tick is not None and (n.provenance == "user" or n.spelling is not None)
+            for n in active_notes
+        ):
+            return False
+    return found_any
 
 
 def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params: dict) -> None:
-    """#25/#26: Stage 4 決定論的クオンタイズ + L0決定論的整音(ステージ末尾で実行)。
+    """#25/#26/#56: Stage 4 決定論的クオンタイズ + L0決定論的整音(ステージ末尾で実行)。
 
     L0を独立ステージにせず本ステージの末尾で実行するのは、量子化直後に必ず
     整音済み(=常にエクスポート可能)な状態を保つため(計画時の技術決定)。
 
-    §6: 入力(beatmap.json + pianoパートの生ノート情報)+music21のバージョンが
+    §6: 入力(beatmap.json + 各パートの生ノート情報)+music21のバージョンが
     不変ならスキップする(separate/beat/transcribeステージと対称)。`onset_sec`/
     `duration_sec`(生データ)はここでは一切変更しない(§10.1)。
 
@@ -901,6 +924,20 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     修正後の再量子化を可能にするため)。L0(spelling/voice/staff/flags)のみ
     userノートを変更しない。「ユーザーが手動で選んだ`selected_snap`を再量子化で
     上書きしない」という、より細かい保護はM3の編集APIと合わせて実装する。
+
+    #56: 従来はpianoパートのみを処理していたが、`QUANTIZABLE_STEM_NAMES`の
+    うちノートを持つ全パート(piano/bass/vocals/guitar/other)を処理するよう
+    拡張した(bass/vocals/guitar/otherは#54/#55/#56で採譜されて以降、本ステージが
+    素通りしていたため`onset_tick`等が一切設定されず、`pipeline/export/
+    score_builder.py`のエクスポートが常に拒否されていた既存ギャップの解消)。
+    tick変換(`quantize_note_onsets`)はスウィング検出・ビートアンカー計算を
+    曲全体で1回にまとめるため全パートのノートをまとめて1回だけ呼ぶ。一方、
+    L0(`refine_baseline`)は`_assign_spellings`の半音進行追跡や
+    `_assign_staff_and_voice`のvoiceグルーピングが単一の旋律的系列を前提と
+    しており、無関係な複数パートのノートを混ぜると誤った判定になるため、
+    パートごとに個別に呼ぶ(調号`fifths`のみスコア全体から一度推定して共有し、
+    パートごとに異なる調号推定結果になる食い違いを避ける)。ピアノ以外は
+    実際には単一譜表しか持たないため`single_staff=True`を渡す。
     """
     force = params.get("force", False)
     emit({"job_id": job_id, "stage": "quantize", "progress": 0.0, "message": "quantizing"})
@@ -922,35 +959,61 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     # 再読込しない。
     raw_before = storage.read_json(score_path)
     score = ScoreIR.model_validate(migrate_to_current(raw_before))
-    part = score.find_part(PIANO_STEM_NAME)
-    if part is None or not part.notes:
-        raise ValueError("piano part has no notes; run the transcribe stage first")
+
+    # `stem_name`を`part`と一緒に保持する(#128レビュー指摘): 後段のsingle_staff
+    # 判定を`part.id`の値(`find_part`の実装詳細)ではなく、ここで実際に検索に
+    # 使ったステム名で行うことで、将来`find_part`の照合方法が変わっても
+    # 契約が壊れないようにする。
+    candidate_parts = [
+        (stem_name, part)
+        for stem_name in QUANTIZABLE_STEM_NAMES
+        if (part := score.find_part(stem_name)) is not None
+    ]
 
     music21_version = _package_version("music21")
-    active_notes = [n for n in part.notes if n.status != "deleted"]
     # ハッシュの対象は「このステージへの入力」となる生フィールドのみ(#25-M2
     # レビューと同種の注意点): onset_tick/duration_tick/spelling等はこのステージ
     # 自身が書き込む出力なので含めない。含めると自分の前回出力のせいで毎回
     # ハッシュが変わり続け、スキップが永久に効かなくなってしまう。
-    notes_snapshot = [
-        {
-            "id": n.id,
-            "onset_sec": n.onset_sec,
-            "duration_sec": n.duration_sec,
-            "midi": n.midi,
-            "velocity": n.velocity,
-            "confidence": n.confidence,
-            "provenance": n.provenance,
+    # `part.notes`(削除済み含む)ではなくアクティブノートの有無で対象パートを
+    # 判定する(#128レビュー指摘: 全ノート削除済みのパートを対象に含めると、
+    # `_quantize_artifacts_exist`(アクティブノートで判定)との食い違いにより
+    # 毎回スキップ不能になり無限に再実行され続ける)。
+    active_notes_by_part_id: dict[str, list[Note]] = {}
+    parts_snapshot: dict[str, dict[str, Any]] = {}
+    for _stem_name, part in candidate_parts:
+        active_notes = [n for n in part.notes if n.status != "deleted"]
+        if not active_notes:
+            continue
+        active_notes_by_part_id[part.id] = active_notes
+        parts_snapshot[part.id] = {
+            "notes": [
+                {
+                    "id": n.id,
+                    "onset_sec": n.onset_sec,
+                    "duration_sec": n.duration_sec,
+                    "midi": n.midi,
+                    "velocity": n.velocity,
+                    "confidence": n.confidence,
+                    "provenance": n.provenance,
+                }
+                for n in active_notes
+            ],
+            "pedals": [{"start_sec": p.start_sec, "stop_sec": p.stop_sec} for p in part.pedals],
         }
-        for n in active_notes
+    parts_with_notes = [
+        (stem_name, part)
+        for stem_name, part in candidate_parts
+        if part.id in active_notes_by_part_id
     ]
-    pedals_snapshot = [{"start_sec": p.start_sec, "stop_sec": p.stop_sec} for p in part.pedals]
+    if not parts_with_notes:
+        raise ValueError("no part has notes; run the transcribe stage first")
+
     hash_payload = json.dumps(
         {
             "beats": beatmap.get("beats", []),
             "time_signatures": beatmap.get("time_signatures", []),
-            "notes": notes_snapshot,
-            "pedals": pedals_snapshot,
+            "parts": parts_snapshot,
             "divisions": score.divisions,
             "music21_version": music21_version,
         },
@@ -963,7 +1026,7 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         project_id,
         "quantize",
         hash_value,
-        artifacts_exist=lambda _meta: _piano_notes_are_quantized(workspace_dir, project_id),
+        artifacts_exist=lambda _meta: _quantize_artifacts_exist(workspace_dir, project_id),
     ):
         emit(
             {
@@ -975,7 +1038,15 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         )
         return
 
-    onset_inputs = [(n.id, n.onset_sec, n.duration_sec) for n in active_notes]
+    # 全パート分のノートをまとめて1回でtick変換する(スウィング検出・ビート
+    # アンカー計算は曲全体で共有すべきであり、パートごとに個別計算すると
+    # 楽器間でスウィング判定が食い違いうるため、#56)。戻り値の`quantized`辞書は
+    # `note.id`をキーとするため、パートをまたいでnote.idが一意であることに
+    # 依存する(#128レビュー指摘)。`Note.id`は`ScoreIR.next_note_id`という
+    # スコア全体で単一のカウンタから`allocate_note_id()`経由でのみ採番される
+    # (`domain/score.py`のクラス不変条件)ため、パート間の衝突は起こらない。
+    all_active_notes = [n for notes in active_notes_by_part_id.values() for n in notes]
+    onset_inputs = [(n.id, n.onset_sec, n.duration_sec) for n in all_active_notes]
     quantized = quantize_note_onsets(
         onset_inputs,
         beatmap.get("beats", []),
@@ -983,56 +1054,69 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         divisions=score.divisions,
         top_n=DEFAULT_TOP_N,
     )
-    refine_inputs = [
-        RefineNoteInput(
-            id=n.id,
-            midi=n.midi,
-            onset_tick=quantized[n.id].onset_tick,
-            duration_sec=n.duration_sec,
-            velocity=n.velocity,
-            confidence=n.confidence,
-            flags=tuple(n.flags),
-            is_user=(n.provenance == "user"),
-        )
-        for n in active_notes
-    ]
-    refined = refine_baseline(refine_inputs)
+    # 調号はスコア全体のノートから一度だけ推定し、全パートで共有する(#56:
+    # パートごとに独立推定すると、同じ曲なのにパートごとに異なる調号が
+    # 割り当てられうる)。
+    shared_fifths = estimate_key_fifths(
+        [n.midi % 12 for n in all_active_notes if n.provenance != "user"]
+    )
 
-    for note in active_notes:
-        q = quantized[note.id]
-        note.onset_tick = q.onset_tick
-        note.duration_tick = q.duration_tick
-        note.snap_candidates = [
-            SnapCandidate(id=c.id, resolution=c.resolution, tick=c.tick, score=c.score)
-            for c in q.snap_candidates
+    for stem_name, part in parts_with_notes:
+        active_notes = active_notes_by_part_id[part.id]
+        refine_inputs = [
+            RefineNoteInput(
+                id=n.id,
+                midi=n.midi,
+                onset_tick=quantized[n.id].onset_tick,
+                duration_sec=n.duration_sec,
+                velocity=n.velocity,
+                confidence=n.confidence,
+                flags=tuple(n.flags),
+                is_user=(n.provenance == "user"),
+            )
+            for n in active_notes
         ]
-        note.selected_snap = q.selected_snap
-
-        r = refined.get(note.id)
-        if r is None:
-            continue  # provenance="user"のノート(#29): L0は変更しない
-        step, alter, octave = r.spelling
-        note.spelling = Spelling(step=step, alter=alter, octave=octave)
-        note.voice = r.voice
-        note.staff = r.staff
-        note.flags = list(r.flags)
-
-    if part.pedals:
-        # #27のMusicXML書き出しがtick位置を必要とするため、ここで併せて
-        # 変換しておく(pedalはノートと違いスナップ格子への丸めは行わない)。
-        pedal_ticks = quantize_pedal_ticks(
-            [(p.start_sec, p.stop_sec) for p in part.pedals],
-            beatmap.get("beats", []),
-            beatmap.get("time_signatures", []),
-            divisions=score.divisions,
+        refined = refine_baseline(
+            refine_inputs,
+            fifths=shared_fifths,
+            single_staff=(stem_name in _SINGLE_STAFF_STEM_NAMES),
         )
-        for pedal, (start_tick, stop_tick) in zip(part.pedals, pedal_ticks, strict=True):
-            pedal.start_tick = start_tick
-            pedal.stop_tick = stop_tick
+
+        for note in active_notes:
+            q = quantized[note.id]
+            note.onset_tick = q.onset_tick
+            note.duration_tick = q.duration_tick
+            note.snap_candidates = [
+                SnapCandidate(id=c.id, resolution=c.resolution, tick=c.tick, score=c.score)
+                for c in q.snap_candidates
+            ]
+            note.selected_snap = q.selected_snap
+
+            r = refined.get(note.id)
+            if r is None:
+                continue  # provenance="user"のノート(#29): L0は変更しない
+            step, alter, octave = r.spelling
+            note.spelling = Spelling(step=step, alter=alter, octave=octave)
+            note.voice = r.voice
+            note.staff = r.staff
+            note.flags = list(r.flags)
+
+        if part.pedals:
+            # #27のMusicXML書き出しがtick位置を必要とするため、ここで併せて
+            # 変換しておく(pedalはノートと違いスナップ格子への丸めは行わない)。
+            pedal_ticks = quantize_pedal_ticks(
+                [(p.start_sec, p.stop_sec) for p in part.pedals],
+                beatmap.get("beats", []),
+                beatmap.get("time_signatures", []),
+                divisions=score.divisions,
+            )
+            for pedal, (start_tick, stop_tick) in zip(part.pedals, pedal_ticks, strict=True):
+                pedal.start_tick = start_tick
+                pedal.stop_tick = stop_tick
 
     # #57 FR-16: コード進行の自動推定とScoreIR.chordsへの格納
     # 下記の楽観的並行性チェック(raw_now != raw_before)を通過後、直後の
-    # score_service.write_score(project_id, score) (922行目)によって
+    # score_service.write_score(project_id, score) によって
     # score/current.json へ永続化される。ScoreService.ensure_chords() を
     # 用いて score.chords を最新ノート情報から確定させておく。
     ScoreService.ensure_chords(score, force_recompute=True)
@@ -1059,12 +1143,17 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         params_hash=hash_value,
         provider_versions={"music21": music21_version},
     )
+    total_notes = len(all_active_notes)
+    parts_summary = ", ".join(
+        f"{len(active_notes_by_part_id[part.id])} {part.id}"
+        for _stem_name, part in parts_with_notes
+    )
     emit(
         {
             "job_id": job_id,
             "stage": "quantize",
             "progress": 1.0,
-            "message": f"quantized {len(active_notes)} notes",
+            "message": f"quantized {total_notes} notes ({parts_summary})",
         }
     )
 

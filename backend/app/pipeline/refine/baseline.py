@@ -106,15 +106,37 @@ def _assign_spellings(
     return result
 
 
-def _assign_staff_and_voice(notes: list[RefineNoteInput]) -> dict[int, tuple[int, int]]:
-    """同一onset_tickのノートをグループ化し、MIDI60でstaffを分け(§7.4)、staff内で
+def _rank_group_into_voices(
+    group: list[RefineNoteInput], *, staff: int
+) -> dict[int, tuple[int, int]]:
+    """同時発音グループ内のノートを高音から低音の順にvoice 1..`MAX_VOICES`へ割る。
 
-    高音から低音の順にvoiceを割る(#26)。userノートも「そのタイミングに音がある」
+    `_assign_staff_and_voice`(ピアノの大譜表、staff内ごとに呼ぶ)と
+    `_assign_voice_single_staff`(単一譜表、staff=1固定で全体に対して呼ぶ)が
+    共有するランク付けロジック(#128レビュー指摘: 重複実装だと片方だけ修正されて
+    乖離するリスクがあったため一元化)。userノートも「そのタイミングに音がある」
     という事実としてグループには含める(=voice番号を1つ消費させる)が、userノート
-    自身のstaff/voiceは変更しない。
+    自身のvoiceは変更しない。
 
     既知の制約: 同一staff・同一onset_tickに5音以上同時発音がある場合、5番目以降は
     全てvoice=4に潰れる(MusicXMLの慣例的な声部数上限に合わせた単純化)。
+    """
+    ranked = sorted(group, key=lambda n: -n.midi)
+    result: dict[int, tuple[int, int]] = {}
+    for voice_index, note in enumerate(ranked, start=1):
+        if note.is_user:
+            continue
+        result[note.id] = (staff, min(voice_index, MAX_VOICES))
+    return result
+
+
+def _assign_staff_and_voice(notes: list[RefineNoteInput]) -> dict[int, tuple[int, int]]:
+    """同一onset_tickのノートをグループ化し、MIDI60でstaffを分け(§7.4)、staff内で
+
+    高音から低音の順にvoiceを割る(#26)。大譜表(ト音部/へ音部の2段)を持つ
+    ピアノパート専用(#56レビュー指摘: 単一譜表パートには`_assign_voice_single_staff`
+    を使う。MIDDLE_C分割をピアノ以外に適用すると、その楽器が実際には持たない
+    staff=2を参照してしまう)。
     """
     groups: dict[int, list[RefineNoteInput]] = {}
     for note in notes:
@@ -127,11 +149,28 @@ def _assign_staff_and_voice(notes: list[RefineNoteInput]) -> dict[int, tuple[int
             staff = 1 if note.midi >= MIDDLE_C else 2
             by_staff[staff].append(note)
         for staff, staff_notes in by_staff.items():
-            ranked = sorted(staff_notes, key=lambda n: -n.midi)
-            for voice_index, note in enumerate(ranked, start=1):
-                if note.is_user:
-                    continue
-                result[note.id] = (staff, min(voice_index, MAX_VOICES))
+            if staff_notes:
+                result.update(_rank_group_into_voices(staff_notes, staff=staff))
+    return result
+
+
+def _assign_voice_single_staff(notes: list[RefineNoteInput]) -> dict[int, tuple[int, int]]:
+    """単一譜表パート(bass/vocals/guitar/other)向けのvoice割当(#56)。
+
+    `_assign_staff_and_voice`のMIDDLE_C分割によるstaff振り分けは行わず、
+    常に`staff=1`固定で、同一onset_tickのノートを高音から低音の順に
+    voice 1..`MAX_VOICES`へ割り振る。bass/vocalsはモノフォニックなため通常
+    voice=1のみを使うが、guitar/otherは和音を弾きうるため、これが無いと
+    同一onset_tickの複数ノートが全てvoice=1へ潰れ、MusicXML上不正な重複
+    ノートになりうる(#56 Gate2レビュー指摘への対応)。
+    """
+    groups: dict[int, list[RefineNoteInput]] = {}
+    for note in notes:
+        groups.setdefault(note.onset_tick, []).append(note)
+
+    result: dict[int, tuple[int, int]] = {}
+    for group in groups.values():
+        result.update(_rank_group_into_voices(group, staff=1))
     return result
 
 
@@ -157,15 +196,34 @@ def _flag_ghost_notes(notes: list[RefineNoteInput]) -> dict[int, tuple[str, ...]
     return result
 
 
-def refine_baseline(notes: list[RefineNoteInput]) -> dict[int, RefinedNote]:
+def refine_baseline(
+    notes: list[RefineNoteInput],
+    *,
+    fifths: int | None = None,
+    single_staff: bool = False,
+) -> dict[int, RefinedNote]:
     """L0本体(#26)。異名同音・staff/voice・ghostフラグをまとめて適用する。
 
     戻り値は `note_id -> RefinedNote` のマッピングで、`is_user=True` の
     ノートのIDは含まれない(呼び出し元は変更しない)。
+
+    `fifths`(#56): 省略時は`notes`自身から調号を推定する(従来どおりの単一パート
+    呼び出し)。複数パートを個別に呼び出す場合、呼び出し元(`worker/dsp_main.py`)が
+    スコア全体のノートから一度だけ推定した値を全パート共通で渡すことで、
+    パートごとに異なる調号推定結果になる食い違いを避ける。
+
+    `single_staff`(#56): Trueの場合、大譜表分割(`_assign_staff_and_voice`の
+    MIDDLE_C基準staff振り分け)ではなく`_assign_voice_single_staff`(常にstaff=1、
+    同一onset_tick内で高音順にvoiceのみ割当)を使う。bass/vocals/guitar/other等、
+    実際に単一譜表しか持たないパートに使う(ピアノ以外でMIDDLE_C分割を使うと
+    存在しないstaff=2を参照してしまうため)。
     """
-    fifths = estimate_key_fifths([n.midi % 12 for n in notes if not n.is_user])
+    if fifths is None:
+        fifths = estimate_key_fifths([n.midi % 12 for n in notes if not n.is_user])
     spellings = _assign_spellings(notes, fifths=fifths)
-    staff_voice = _assign_staff_and_voice(notes)
+    staff_voice = (
+        _assign_voice_single_staff(notes) if single_staff else _assign_staff_and_voice(notes)
+    )
     ghost_flags = _flag_ghost_notes(notes)
 
     result: dict[int, RefinedNote] = {}

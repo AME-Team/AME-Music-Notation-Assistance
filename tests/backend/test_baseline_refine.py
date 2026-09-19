@@ -134,6 +134,54 @@ class TestRefineBaselineStaffAndVoice:
         assert result[2].voice == 1
 
 
+class TestRefineBaselineSingleStaff:
+    """#56: bass/vocals/guitar/other等、単一譜表しか持たないパート向けの挙動。"""
+
+    def test_single_staff_always_uses_staff_one_regardless_of_pitch(self) -> None:
+        notes = [_note(1, midi=72, onset_tick=0), _note(2, midi=40, onset_tick=0)]
+        result = refine_baseline(notes, single_staff=True)
+
+        # single_staff=False なら staff 1/2 に分かれる(上のテストで確認済み)が、
+        # single_staff=True では低音でもstaff=2へは分けない。
+        assert result[1].staff == 1
+        assert result[2].staff == 1
+
+    def test_single_staff_chord_gets_distinct_voices_top_down(self) -> None:
+        """guitar/other等のポリフォニックな和音が同一voiceに潰れないこと(#56 Gate2レビュー指摘)。"""
+        notes = [
+            _note(1, midi=64, onset_tick=0),  # E4 最高音 -> voice1
+            _note(2, midi=60, onset_tick=0),  # C4 -> voice2
+            _note(3, midi=52, onset_tick=0),  # E3 最低音 -> voice3
+        ]
+        result = refine_baseline(notes, single_staff=True)
+
+        assert result[1].voice == 1
+        assert result[2].voice == 2
+        assert result[3].voice == 3
+        assert {r.staff for r in result.values()} == {1}
+
+    def test_single_staff_monophonic_notes_stay_on_voice_one(self) -> None:
+        """bass/vocals(モノフォニック)は別タイミングなので両方voice1のまま。"""
+        notes = [_note(1, midi=40, onset_tick=0), _note(2, midi=43, onset_tick=480)]
+        result = refine_baseline(notes, single_staff=True)
+
+        assert result[1].voice == 1
+        assert result[2].voice == 1
+
+
+class TestRefineBaselineSharedFifths:
+    """#56: 複数パートへ個別に呼ぶ際、事前計算した調号を共有できること。"""
+
+    def test_explicit_fifths_overrides_self_estimation(self) -> None:
+        """`fifths`を明示すると、`notes`自身からの調号自己推定をスキップして使われる。"""
+        notes = [_note(1, midi=65, onset_tick=0)]  # F4
+        result_c_major = refine_baseline(notes, fifths=0)
+        result_g_major = refine_baseline(notes, fifths=1)
+
+        assert result_c_major[1].spelling == ("F", 0, 4)  # ハ長調ではFナチュラル
+        assert result_g_major[1].spelling == ("E", 1, 4)  # ト長調ではE#
+
+
 class TestRefineBaselineGhostFlags:
     def test_short_and_quiet_and_low_confidence_note_is_flagged(self) -> None:
         note = _note(

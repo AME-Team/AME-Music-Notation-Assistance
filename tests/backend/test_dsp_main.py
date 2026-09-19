@@ -882,6 +882,7 @@ def test_quantize_stage_raises_if_score_missing(tmp_path: Path) -> None:
 
 
 def test_quantize_stage_raises_if_piano_part_has_no_notes(tmp_path: Path) -> None:
+    """回帰(#56): quantizeが処理する全パート("piano"含む)が空の場合のエラー。"""
     project_id = "proj_test"
     _setup_project_with_valid_source(tmp_path, project_id)
     _write_beatmap(tmp_path, project_id)
@@ -889,7 +890,7 @@ def test_quantize_stage_raises_if_piano_part_has_no_notes(tmp_path: Path) -> Non
     service = ScoreService(workspace_dir=tmp_path)
     service.write_score(project_id, dsp_main._initial_score_ir(project_id, tmp_path))
 
-    with pytest.raises(ValueError, match="piano part has no notes"):
+    with pytest.raises(ValueError, match="no part has notes"):
         dsp_main.run_quantize_stage("job1", project_id, tmp_path, {})
 
 
@@ -923,6 +924,130 @@ def test_quantize_stage_sets_tick_spelling_voice_staff(
         assert note.spelling is not None
         assert note.staff in (1, 2)
         assert 1 <= note.voice <= 4
+
+
+def test_quantize_stage_sets_tick_and_spelling_for_all_parts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#56): quantizeがpianoだけでなくbass/vocals/guitar/otherも処理すること。
+
+    #54/#55/#56でbass/vocals/guitar/otherの採譜が実装されて以降、quantizeが
+    pianoのみを処理し続けていたため、これらのパートは`onset_tick`/`spelling`が
+    一切設定されずMusicXMLエクスポートが常に拒否されるという既存ギャップが
+    あった(export/score_builder.pyがNoneを拒否するため)。
+    """
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_all_parts"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    for stem in ["piano", "bass", "vocals", "guitar", "other"]:
+        _write_stub_wav(storage.stems_dir(tmp_path, project_id) / f"{stem}.wav")
+
+    def _single_note(midi: int):
+        def _mock(_p, **_k):
+            return TranscriptionResult(
+                notes=[
+                    NoteEvent(
+                        onset_sec=0.0,
+                        duration_sec=0.5,
+                        midi=midi,
+                        velocity=90,
+                        ghost_candidate=False,
+                    )
+                ],
+                pedals=[],
+            )
+
+        return _mock
+
+    monkeypatch.setattr(dsp_main, "run_piano_transcription", _single_note(60))
+    monkeypatch.setattr(dsp_main, "run_bass_transcription", _single_note(36))
+    monkeypatch.setattr(dsp_main, "run_vocals_transcription", _single_note(69))
+
+    def _mock_guitar_or_other(stem_path: Path, **_k):
+        midi = 52 if "guitar" in stem_path.name else 64
+        return TranscriptionResult(
+            notes=[
+                NoteEvent(
+                    onset_sec=0.0,
+                    duration_sec=0.5,
+                    midi=midi,
+                    velocity=70,
+                    ghost_candidate=False,
+                )
+            ],
+            pedals=[],
+        )
+
+    monkeypatch.setattr(dsp_main, "run_guitar_transcription", _mock_guitar_or_other)
+
+    dsp_main.run_transcribe_stage("job_tr", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    dsp_main.run_quantize_stage("job_q", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score(project_id)
+    for stem_name in ["piano", "bass", "vocals", "guitar", "other"]:
+        part = score.find_part(stem_name)
+        assert part is not None, f"{stem_name} part missing"
+        assert len(part.notes) == 1
+        note = part.notes[0]
+        assert note.onset_tick is not None, f"{stem_name} onset_tick not set"
+        assert note.duration_tick is not None and note.duration_tick >= 1
+        assert note.spelling is not None, f"{stem_name} spelling not set"
+        assert 1 <= note.voice <= 4
+
+    # ピアノ以外は単一譜表固定(#56): staff=2は割り当てられない。
+    for stem_name in ["bass", "vocals", "guitar", "other"]:
+        part = score.find_part(stem_name)
+        assert part is not None
+        assert all(n.staff == 1 for n in part.notes)
+
+
+def test_quantize_stage_assigns_distinct_voices_to_guitar_chord(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#56 Gate2レビュー指摘): guitarの同時発音和音が同一voiceに潰れず、
+
+    高音から低音の順に別voiceへ割り当てられること(単一譜表向けvoice割当)。
+    """
+    from app.pipeline.transcribe.common import NoteEvent, TranscriptionResult
+
+    project_id = "proj_guitar_chord"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "guitar.wav")
+
+    chord_notes = [
+        NoteEvent(
+            onset_sec=0.0, duration_sec=0.5, midi=64, velocity=80, ghost_candidate=False
+        ),
+        NoteEvent(
+            onset_sec=0.0, duration_sec=0.5, midi=60, velocity=80, ghost_candidate=False
+        ),
+        NoteEvent(
+            onset_sec=0.0, duration_sec=0.5, midi=52, velocity=80, ghost_candidate=False
+        ),
+    ]
+    monkeypatch.setattr(
+        dsp_main,
+        "run_guitar_transcription",
+        lambda _p, **_k: TranscriptionResult(notes=chord_notes, pedals=[]),
+    )
+    dsp_main.run_transcribe_stage("job_tr", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    dsp_main.run_quantize_stage("job_q", project_id, tmp_path, {})
+
+    part = (
+        ScoreService(workspace_dir=tmp_path).read_score(project_id).find_part("guitar")
+    )
+    assert part is not None
+    assert len(part.notes) == 3
+    by_midi = {n.midi: n for n in part.notes}
+    assert by_midi[64].voice == 1
+    assert by_midi[60].voice == 2
+    assert by_midi[52].voice == 3
+    assert all(n.staff == 1 for n in part.notes)
 
 
 def test_quantize_stage_resets_undo_history(
