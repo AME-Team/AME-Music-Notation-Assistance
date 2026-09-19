@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -28,9 +29,21 @@ _DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 PUBLIC_PATHS = {"/health"}
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # アプリ終了時にOpenCodeサーバなどのバックグラウンドプロセスを確実に停止する(§15 R-13)
+    agent_run_manager = getattr(app.state, "agent_run_manager", None)
+    if agent_run_manager is not None:
+        for provider in agent_run_manager.providers.values():
+            stop_fn = getattr(provider, "stop", None)
+            if callable(stop_fn):
+                stop_fn()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
-    app = FastAPI(title="AME Music Notation Assistance API", version="0.1.0")
+    app = FastAPI(title="AME Music Notation Assistance API", version="0.1.0", lifespan=lifespan)
 
     app.state.settings = settings
     app.state.project_service = ProjectService(workspace_dir=settings.workspace_dir)
