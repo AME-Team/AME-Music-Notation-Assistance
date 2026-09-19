@@ -119,6 +119,8 @@ def ensure_onnx_model(path: Path = DEFAULT_MODEL_PATH) -> Path:
         return _sha256_file(p) == _MODEL_SHA256
 
     def _describe_failure(p: Path) -> str:
+        # 診断の断片(実測ハッシュ値・期待値)のみを返す。URLや定型の前置き/末尾は
+        # `fetch_verified_model`側が一元管理する(#56レビュー3巡目の指摘)。
         return f"sha256={_sha256_file(p)}, expected={_MODEL_SHA256}"
 
     return fetch_verified_model(

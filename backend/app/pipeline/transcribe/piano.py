@@ -96,6 +96,8 @@ def ensure_checkpoint(path: Path = DEFAULT_CHECKPOINT_PATH) -> Path:
         return p.stat().st_size >= MIN_CHECKPOINT_SIZE_BYTES
 
     def _describe_failure(p: Path) -> str:
+        # 診断の断片(実測サイズ・期待値)のみを返す。URLや定型の前置き/末尾は
+        # `fetch_verified_model`側が一元管理する(#56レビュー3巡目の指摘)。
         return f"{p.stat().st_size} bytes, expected >= {MIN_CHECKPOINT_SIZE_BYTES}"
 
     return fetch_verified_model(
