@@ -145,8 +145,8 @@ CI(`typegen-check` job)がこの2ファイルの最新性を `git diff --exit-co
 | Stage 2 ビート推定 | `pipeline/beat.py` | `beat-this`。`pipeline/time_signature.py` で拍子を自前導出(beat-this は拍子を出力しない)。出力は `workspace/{id}/analysis/beatmap.json` |
 | BeatGridEditor 補正 | `pipeline/beatmap_edit.py` | オフセット/固定BPM上書き/ダウンビート回転/小節ごとの拍子上書きを純粋関数として実装 |
 | 波形ピーク | `pipeline/peaks.py` | 初回リクエスト時に計算し `analysis/peaks/{name}.json` にキャッシュ |
-| Stage 3 ピアノAMT(採譜) | `pipeline/transcribe/piano.py` | `piano_transcription_inference`。ノートは一切削除せず、ゴースト候補は`Note.flags`へ引き継ぐ。出力は`workspace/{id}/score/current.json`(Score IR、`app/domain/score.py`) |
-| Stage 4 量子化+L0整音 | `pipeline/quantize.py` + `pipeline/refine/baseline.py` | 決定論的クオンタイズ(拍子・テンポマップに沿ってスナップ)の直後に、AI(L1/L2)を使わない決定論的な整音(異名同音・声部・段割り当て)をステージ末尾で実行する |
+| Stage 3 AMT(採譜) | `pipeline/transcribe/{piano,bass,vocals,guitar}.py` | パートごとに方式が異なる: **piano** = `piano_transcription_inference`(ポリフォニック+ペダル)。**bass/vocals** = LPF+F0追跡/TorchCREPE(モノフォニック、`voice=1`/`staff=1`固定で書き込む)。**guitar/other** = Basic Pitch(Spotify, Apache-2.0)の公開ONNXモデルを`onnxruntime`で直接推論(ポリフォニックだが現状は同じく`voice=1`/`staff=1`固定、#56)。ノートは一切削除せず、ゴースト候補は`Note.flags`へ引き継ぐ。出力は`workspace/{id}/score/current.json`(Score IR、`app/domain/score.py`) |
+| Stage 4 量子化+L0整音 | `pipeline/quantize.py` + `pipeline/refine/baseline.py` | 決定論的クオンタイズ(拍子・テンポマップに沿ってスナップ)の直後に、AI(L1/L2)を使わない決定論的な整音(異名同音・声部・段割り当て)をステージ末尾で実行する。**既知の制約**: 本ステージは現状pianoパートのみを処理する。bass/vocals/guitar/otherのノートは`onset_tick`/`duration_tick`/`spelling`が設定されないため、Stage 6書き出しの対象にならない(#60の実曲検証で対応予定) |
 | Stage 6 書き出し | `pipeline/export/{score_builder,musicxml,midi}.py` | partitura経由でScore IR→MusicXML/Standard MIDI Fileへ変換。量子化+L0実行済み(`onset_tick`/`spelling`設定済み)が前提で、未実行は`ExportError`(API層で422)。Doricoへのインポート手順・推奨設定・検証チェックリストは [`docs/dorico-import.md`](docs/dorico-import.md) 参照(#28) |
 | ステージ独立再実行/無効化(#29) | `domain/stages.py` + `services/stage_invalidation.py` | `separate→transcribe→quantize`/`beat→quantize`の依存グラフ。上流が実際に再実行(または手動編集)されると下流の`analysis/{stage}.meta.json`を削除し、`stale`として要再実行を示す |
 

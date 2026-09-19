@@ -547,23 +547,23 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
 
     if has_guitar or has_other:
         # guitar/otherは同一の`run_guitar_transcription`(onnxruntime)を共有するため、
-        # バージョン取得は1回に集約する(#56レビュー指摘: 個別に呼ぶと同じ
-        # `provider_versions["onnxruntime"]`キーへの重複書き込みになっていた)。
+        # バージョン取得・`provider_versions`への記録は1回に集約する(#56レビュー
+        # 指摘: 個別に代入すると同じキーへの重複書き込みになり、コメントと実装が
+        # 食い違っていた)。
         onnxruntime_version = _package_version("onnxruntime")
+        provider_versions["onnxruntime"] = onnxruntime_version
 
     if has_guitar:
         hash_dict["guitar_audio_fingerprint"] = audio_fingerprint(guitar_stem_path)
         hash_dict["guitar_algo_version"] = GUITAR_ALGO_VERSION
         hash_dict["guitar_onnxruntime_version"] = onnxruntime_version
         provider_versions["guitar_transcription"] = GUITAR_ALGO_VERSION
-        provider_versions["onnxruntime"] = onnxruntime_version
 
     if has_other:
         hash_dict["other_audio_fingerprint"] = audio_fingerprint(other_stem_path)
         hash_dict["other_algo_version"] = OTHER_ALGO_VERSION
         hash_dict["other_onnxruntime_version"] = onnxruntime_version
         provider_versions["other_transcription"] = OTHER_ALGO_VERSION
-        provider_versions["onnxruntime"] = onnxruntime_version
 
     hash_payload = json.dumps(hash_dict, sort_keys=True)
     hash_value = hashlib.sha256(hash_payload.encode("utf-8")).hexdigest()
