@@ -100,6 +100,70 @@ class ProviderContractTests:
         result = await provider.result(handle.run_id)
         assert result.status == "cancelled"
 
+    async def test_stream_events_schema_integrity(self, tmp_path: Path) -> None:
+        """すべての AgentEvent が正規化されたスキーマ要件を満たしていることを検証する(§8.2)。"""
+        provider = self.provider()
+        handle = await provider.start(self._make_task(tmp_path))
+        events = [e async for e in provider.stream(handle.run_id)]
+
+        assert events, "stream must yield at least one event"
+        valid_kinds = {
+            "thinking",
+            "text",
+            "tool_use",
+            "tool_result",
+            "error",
+            "done",
+            "cancelled",
+        }
+
+        for i, event in enumerate(events):
+            assert event.run_id == handle.run_id
+            assert event.seq == i, f"seq must match index ({event.seq} != {i})"
+            assert event.kind in valid_kinds
+            assert isinstance(event.payload, dict)
+            assert event.ts is not None
+            if event.kind in ("tool_use", "tool_result"):
+                assert event.tool_name, f"tool_name must be non-empty for {event.kind}"
+
+    async def test_stream_cancel_yields_cancelled_event(self, tmp_path: Path) -> None:
+        """キャンセルされた run の stream が終端イベントとして `cancelled` を出力することを検証する。"""
+        provider = self.provider()
+        handle = await provider.start(self._make_task(tmp_path))
+        await provider.cancel(handle.run_id)
+        events = [e async for e in provider.stream(handle.run_id)]
+
+        assert events, "stream of cancelled run must yield event"
+        assert events[-1].kind == "cancelled"
+
+    async def test_cancel_leaves_current_score_intact(self, tmp_path: Path) -> None:
+        """キャンセルしても current.json が無変更であることを確認する(M5c完了条件3)。"""
+        from app.infra import storage
+
+        project_id = "proj-1"
+        score_path = storage.score_current_path(tmp_path, project_id)
+        original_data = {
+            "schema_version": "1.0",
+            "project_id": project_id,
+            "source": {
+                "filename": "test.wav",
+                "duration_sec": 8.0,
+                "sample_rate": 8000,
+            },
+            "divisions": 480,
+            "parts": [],
+        }
+        storage.write_json(score_path, original_data)
+        original_bytes = score_path.read_bytes()
+
+        provider = self.provider()
+        handle = await provider.start(self._make_task(tmp_path))
+        await provider.cancel(handle.run_id)
+        async for _ in provider.stream(handle.run_id):
+            pass
+
+        assert score_path.read_bytes() == original_bytes
+
     async def test_unknown_run_id_raises_agent_run_not_found(
         self, tmp_path: Path
     ) -> None:
