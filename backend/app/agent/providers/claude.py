@@ -15,9 +15,16 @@ PreToolUseフックのみに委ねる(フックの deny 決定は`permission_mod
 `{"workspace_dir": <str|Path>}`(アプリ全体のワークスペースルート、
 `Settings.workspace_dir`相当)を必須キーとして要求する — `mcp/stdio_server.py`の
 `AME_WORKSPACE_DIR`環境変数と同じ役割を、環境変数ではなくこの`config`辞書経由で
-渡す(インプロセスのため環境変数を経由する必要が無い)。`project_id`/`run_id`は
-`AgentTask.project_id`/本プロバイダが`start()`で採番した`run_id`から補う
-(呼び出し元は`run_id`をまだ知らないため`config`には含められない)。
+渡す(インプロセスのため環境変数を経由する必要が無い)。`project_id`は
+`AgentTask.project_id`から補う。`run_id`は`config`に`"run_id"`キーがあれば
+それを`start()`が採番するprovider内部run_id自体として採用し、無ければ
+`start()`が`uuid.uuid4()`で独自に採番する(`_resolve_run_id`参照)。
+呼び出し元(#49 `AgentRunManager`)が公開run_id(DB/URLで使うID)を
+`config["run_id"]`として渡すことで、`score_apply_ops`が書き込むstaging先
+(`score/staging/{run_id}.json`)を`AgentRunService.accept`/`reject`/`get_diff`
+(#46)が探すパスと一致させられる — これを渡さないと、provider が独自採番した
+別のrun_idでstagingファイルが書かれ、承認フローが永遠にステージング済みの
+変更を見つけられなくなる(#50の実機テストで発見した実バグ)。
 
 リトライ方針(§8.9「プロバイダAPIエラー: 指数バックオフでリトライ(3回)」):
 **接続確立前**(`ClaudeSDKClient.connect()`が最初のメッセージを1件も返す前)に
@@ -124,6 +131,47 @@ class _RunState:
     usage: TokenUsage = field(default_factory=TokenUsage)
     staged_ops_count: int = 0
     error: str | None = None
+
+
+def _resolve_run_id(task: AgentTask) -> str | None:
+    """`McpServerSpec.config["run_id"]`(呼び出し元が公開run_idを明示した場合)を
+
+    優先的なprovider内部run_idとして使う。指定が無ければ`None`を返し、
+    呼び出し元(`start()`)が独自に採番する。
+
+    #50の実機テストで発見: `score_apply_ops`が書き込むstaging先
+    (`score/staging/{run_id}.json`)は`ToolContext.run_id`由来であり、これは
+    従来常に`start()`が`str(uuid.uuid4())`で独自採番した値だった。#49の
+    `AgentRunManager`は自らが発行した公開run_id(DB/URLで使うID)とは別の
+    このprovider内部run_idを`AgentEvent.run_id`の書き換えでは吸収していたが、
+    staging先ファイル名の食い違いまでは吸収しておらず、
+    `AgentRunService.accept`/`reject`/`get_diff`(#46)が公開run_idベースで
+    `score/staging/{公開run_id}.json`を探すため、実際に書き込まれた
+    `score/staging/{provider内部run_id}.json`を永遠に見つけられず、
+    `score_apply_ops`が成功していても承認フローが機能しない状態になっていた。
+    `AgentRunManager`が`config={"workspace_dir": ..., "run_id": 公開run_id}`を
+    渡すようにし(`agent_run_manager.py`参照)、ここでそれを`start()`が採番する
+    run_id自体として採用することで一致させる。
+
+    走査対象は`kind="in_process"`かつ`name=SERVER_NAME`("score")のspecに限定する
+    (Gate2レビュー指摘・MIDDLE: staging先ファイル名の一致は score サーバの
+    `ToolContext.run_id`にのみ依存するため、無条件に「最初に見つかった
+    config["run_id"]」を採用すると、将来score以外のspecが混在した場合や
+    順序が変わった場合に無関係な値を拾ってこのバグが再発しうる)。
+
+    **契約(Gate2レビュー指摘・LOW)**: `config["run_id"]`を指定する呼び出し元は、
+    プロセス内でその値が(同時に生存している他のrunと)一意であることを保証する
+    責任を負う。ここで採用したrun_idが既に`self._runs`に存在する場合、
+    `start()`は`ClaudeAgentProviderError`を送出してfail-fastする
+    (サイレントな状態上書きを避けるため)。
+    """
+    for spec in task.mcp_servers:
+        if spec.kind != "in_process" or spec.name != SERVER_NAME:
+            continue
+        run_id = spec.config.get("run_id")
+        if run_id:
+            return str(run_id)
+    return None
 
 
 def _build_mcp_servers(task: AgentTask, run_id: str) -> dict[str, Any]:
@@ -269,7 +317,18 @@ class ClaudeAgentProvider:
         self._runs: dict[str, _RunState] = {}
 
     async def start(self, task: AgentTask) -> AgentRunHandle:
-        run_id = str(uuid.uuid4())
+        run_id = _resolve_run_id(task) or str(uuid.uuid4())
+        # Gate2レビュー指摘(LOW): `config["run_id"]`(外部指定)を無条件に採用する
+        # ため、呼び出し元が同一run_idを重複して渡すと`self._runs`のキーが衝突し、
+        # 既存runの状態を無言で上書きしてしまう。一意性は呼び出し元の契約
+        # (`_resolve_run_id`のdocstring参照)だが、違反時はサイレントな上書きより
+        # fail-fastの方が安全なため、ここで検出して例外にする。自己採番
+        # (`uuid.uuid4()`)側は衝突が天文学的に起こらないため対象外で構わない。
+        if run_id in self._runs:
+            raise ClaudeAgentProviderError(
+                f"run_id {run_id!r} is already in use; McpServerSpec.config['run_id'] "
+                "must be unique per run (the caller is responsible for uniqueness)"
+            )
         # `mcp_servers`の構成不備(`ClaudeAgentProviderError`)はrunを
         # `self._runs`へ登録する前に検出する(モジュールdocstring参照)。
         mcp_servers = _build_mcp_servers(task, run_id)

@@ -623,3 +623,125 @@ async def test_in_process_mcp_server_is_wired_into_options(
     assert options.allowed_tools == ["mcp__score__score_query"]
     assert options.cwd == str(tmp_path)
     assert options.permission_mode == "bypassPermissions"
+
+
+async def test_config_run_id_is_adopted_as_provider_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#50の実機テストで発見した回帰テスト: `McpServerSpec.config["run_id"]`が
+
+    指定された場合、`start()`はそれをprovider内部run_id自体として採用する。
+    これが無いと、`score_apply_ops`が書き込むstaging先
+    (`score/staging/{run_id}.json`)が呼び出し元(#49 `AgentRunManager`)の
+    公開run_idと食い違い、`AgentRunService.accept`/`reject`/`get_diff`(#46)が
+    ステージング済みの変更を永遠に見つけられなくなる。
+    """
+    fake_cls = _make_fake_client_cls(_HAPPY_SCRIPT)
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        mcp_servers=[
+            McpServerSpec(
+                name="score",
+                kind="in_process",
+                config={"workspace_dir": str(tmp_path), "run_id": "run_public_abc123"},
+            )
+        ],
+    )
+    handle = await provider.start(task)
+    assert handle.run_id == "run_public_abc123"
+
+
+async def test_without_config_run_id_provider_generates_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_cls = _make_fake_client_cls(_HAPPY_SCRIPT)
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        mcp_servers=[
+            McpServerSpec(
+                name="score", kind="in_process", config={"workspace_dir": str(tmp_path)}
+            )
+        ],
+    )
+    handle = await provider.start(task)
+    assert handle.run_id
+    assert handle.run_id != "run_public_abc123"
+
+
+async def test_resolve_run_id_ignores_non_score_server_specs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(MIDDLE)の回帰テスト: run_id解決は`kind="in_process"`かつ
+
+    `name=SERVER_NAME`("score")のspecに限定する。無関係なspecが先に列挙されて
+    いても、そのconfig["run_id"]を誤って採用しないことを確認する。
+    """
+    fake_cls = _make_fake_client_cls(_HAPPY_SCRIPT)
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+
+    provider = claude_provider.ClaudeAgentProvider()
+    task = AgentTask(
+        task_type="test",
+        project_id="proj-1",
+        prompt="do it",
+        workspace=tmp_path,
+        mcp_servers=[
+            McpServerSpec(
+                name="other",
+                kind="in_process",
+                config={"workspace_dir": str(tmp_path), "run_id": "wrong-run-id"},
+            ),
+            McpServerSpec(
+                name="score",
+                kind="in_process",
+                config={"workspace_dir": str(tmp_path), "run_id": "correct-run-id"},
+            ),
+        ],
+    )
+    handle = await provider.start(task)
+    assert handle.run_id == "correct-run-id"
+
+
+async def test_start_rejects_duplicate_config_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gate2レビュー指摘(LOW)の回帰テスト: 呼び出し元が同一の
+
+    `config["run_id"]`を重複して渡した場合、既存runの状態をサイレントに
+    上書きせず`ClaudeAgentProviderError`でfail-fastすることを確認する。
+    """
+    fake_cls = _make_fake_client_cls(_HAPPY_SCRIPT)
+    monkeypatch.setattr(claude_provider, "ClaudeSDKClient", fake_cls)
+
+    provider = claude_provider.ClaudeAgentProvider()
+
+    def _task() -> AgentTask:
+        return AgentTask(
+            task_type="test",
+            project_id="proj-1",
+            prompt="do it",
+            workspace=tmp_path,
+            mcp_servers=[
+                McpServerSpec(
+                    name="score",
+                    kind="in_process",
+                    config={"workspace_dir": str(tmp_path), "run_id": "run_dup"},
+                )
+            ],
+        )
+
+    await provider.start(_task())
+    with pytest.raises(claude_provider.ClaudeAgentProviderError):
+        await provider.start(_task())

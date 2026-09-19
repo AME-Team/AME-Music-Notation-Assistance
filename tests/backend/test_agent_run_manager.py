@@ -21,6 +21,7 @@ from app.infra import db, storage
 from app.services.agent_run_manager import (
     AgentRunManager,
     MissingPromptError,
+    MissingScopeError,
     UnknownProviderError,
     UnknownTaskTypeError,
 )
@@ -130,6 +131,34 @@ async def test_create_run_requires_prompt_for_investigate(tmp_path: Path) -> Non
         await manager.create_run(
             project_id="proj_1", task_type="investigate", provider_name="dummy"
         )
+
+
+async def test_create_run_requires_scope_for_voicing_fix(tmp_path: Path) -> None:
+    """Gate2レビュー指摘(MIDDLE)の回帰テスト: `requires_scope=True`のタスク
+
+    (voicing-fix)に`scope`が無い場合、サイレントに(スコープ抜きの不完全な
+    指示のまま)起動せず`MissingScopeError`でfail-fastすることを確認する。
+    """
+    _create_project(tmp_path, "proj_1")
+    manager = _manager(tmp_path)
+    with pytest.raises(MissingScopeError):
+        await manager.create_run(
+            project_id="proj_1", task_type="voicing-fix", provider_name="dummy"
+        )
+
+
+async def test_create_run_accepts_voicing_fix_with_scope(tmp_path: Path) -> None:
+    _create_project(tmp_path, "proj_1")
+    manager = _manager(tmp_path)
+    run_id = await manager.create_run(
+        project_id="proj_1",
+        task_type="voicing-fix",
+        provider_name="dummy",
+        scope={"part_id": "piano", "bars": [1, 4]},
+    )
+    await _drain(manager, run_id)
+    run = manager.agent_run_service.get_run(run_id)
+    assert run["status"] == "completed"
 
 
 async def test_create_run_propagates_project_not_found(tmp_path: Path) -> None:
@@ -333,3 +362,124 @@ async def test_cancel_during_stream_is_not_overwritten_by_late_completion(
 
     run_after = manager.agent_run_service.get_run(run_id)
     assert run_after["status"] == "cancelled"
+
+
+class _RecordingProvider:
+    """`provider.start()`に渡された`AgentTask`をそのまま記録するフェイクプロバイダ。
+
+    #50の回帰テスト用: consistency-pass/voicing-fixが実際に専用プロンプト/
+    予算(max_tokens_budget/timeout_sec)を`AgentTask`へ渡していることを検証する。
+    """
+
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.received_task: AgentTask | None = None
+
+    async def start(self, task: AgentTask) -> AgentRunHandle:
+        self.received_task = task
+        return AgentRunHandle(run_id="internal-recording")
+
+    async def stream(self, run_id: str) -> AsyncIterator[AgentEvent]:
+        yield AgentEvent(run_id=run_id, seq=0, kind="done", payload={})
+
+    async def cancel(self, run_id: str) -> None:
+        pass
+
+    async def result(self, run_id: str) -> AgentResult:
+        return AgentResult(
+            run_id=run_id, status="completed", turns=1, usage=TokenUsage()
+        )
+
+
+async def test_consistency_pass_uses_task_specific_prompt_and_budget(
+    tmp_path: Path,
+) -> None:
+    _create_project(tmp_path, "proj_1")
+    provider = _RecordingProvider()
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"recording": provider},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1", task_type="consistency-pass", provider_name="recording"
+    )
+    await _drain(manager, run_id)
+
+    assert provider.received_task is not None
+    assert "consistency-pass専用の作業手順" in provider.received_task.prompt
+    assert "mcp__score__score_validate" in provider.received_task.prompt
+    assert provider.received_task.max_turns == 40
+    assert provider.received_task.max_tokens_budget == 400_000
+    assert provider.received_task.timeout_sec == 1200
+
+
+async def test_voicing_fix_embeds_scope_in_prompt_and_uses_task_budget(
+    tmp_path: Path,
+) -> None:
+    _create_project(tmp_path, "proj_1")
+    provider = _RecordingProvider()
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"recording": provider},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1",
+        task_type="voicing-fix",
+        provider_name="recording",
+        scope={"part_id": "piano", "bars": [10, 20]},
+    )
+    await _drain(manager, run_id)
+
+    assert provider.received_task is not None
+    assert "voicing-fix専用の作業手順" in provider.received_task.prompt
+    assert "piano" in provider.received_task.prompt
+    assert provider.received_task.max_turns == 20
+    assert provider.received_task.max_tokens_budget == 200_000
+    assert provider.received_task.timeout_sec == 600
+
+
+async def test_generic_task_falls_back_to_agent_task_defaults(tmp_path: Path) -> None:
+    """`prompt_template`/`max_tokens_budget`/`timeout_sec`が未設定のタスク
+
+    (#50時点ではconsistency-pass/voicing-fix以外)は、`AgentTask`自身の既定値
+    (max_tokens_budget=300,000、timeout_sec=900)を使うことを確認する。
+    """
+    _create_project(tmp_path, "proj_1")
+    provider = _RecordingProvider()
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"recording": provider},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1", task_type="refine-part", provider_name="recording"
+    )
+    await _drain(manager, run_id)
+
+    assert provider.received_task is not None
+    assert "専用の作業手順" not in provider.received_task.prompt
+    assert provider.received_task.max_tokens_budget == 300_000
+    assert provider.received_task.timeout_sec == 900
+
+
+async def test_explicit_budget_overrides_task_default(tmp_path: Path) -> None:
+    _create_project(tmp_path, "proj_1")
+    provider = _RecordingProvider()
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"recording": provider},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1",
+        task_type="consistency-pass",
+        provider_name="recording",
+        budget=123_456,
+    )
+    await _drain(manager, run_id)
+
+    assert provider.received_task is not None
+    assert provider.received_task.max_tokens_budget == 123_456

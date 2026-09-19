@@ -43,6 +43,7 @@ from app.pipeline.refine.l1_client import is_claude_cli_available
 from app.services.agent_run_manager import (
     AgentRunManager,
     MissingPromptError,
+    MissingScopeError,
     UnknownProviderError,
     UnknownTaskTypeError,
 )
@@ -193,6 +194,8 @@ async def create_agent_run(
     except UnknownProviderError as exc:
         raise HTTPException(status_code=422, detail=f"unknown provider: {exc}") from exc
     except MissingPromptError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except MissingScopeError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
