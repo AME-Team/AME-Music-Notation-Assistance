@@ -23,7 +23,7 @@ import contextlib
 import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from app.agent.provider import (
     AgentEvent,
@@ -35,6 +35,7 @@ from app.agent.provider import (
 )
 from app.agent.providers.claude import ClaudeAgentProvider
 from app.agent.providers.dummy import DummyAgentProvider
+from app.agent.providers.opencode import OpenCodeProvider
 from app.agent.tasks import TaskDefinition, get_task_definition
 from app.infra import ids
 from app.services.agent_run_service import AgentRunService
@@ -125,6 +126,7 @@ class AgentRunManager:
             self.providers = {
                 DummyAgentProvider.name: DummyAgentProvider(),
                 ClaudeAgentProvider.name: ClaudeAgentProvider(),
+                OpenCodeProvider.name: OpenCodeProvider(workspace_dir=self.workspace_dir),
             }
 
     async def create_run(
@@ -230,6 +232,9 @@ class AgentRunManager:
         # AgentTaskへ届いており、timeout_secはどのタスクでも常に既定値固定だった。
         if timeout_sec is not None:
             task_kwargs["timeout_sec"] = timeout_sec
+        mcp_kind: Literal["in_process", "stdio"] = (
+            "stdio" if provider.name == "opencode" else "in_process"
+        )
         task = AgentTask(
             task_type=task_type,
             project_id=project_id,
@@ -238,11 +243,11 @@ class AgentRunManager:
             mcp_servers=[
                 McpServerSpec(
                     name="score",
-                    kind="in_process",
+                    kind=mcp_kind,
                     # `run_id`(公開run_id)を明示的に渡す(#50で発見した実バグの
-                    # 修正): ClaudeAgentProviderがこれを自身のprovider内部run_id
-                    # として採用しないと、score_apply_opsが書き込むstaging先
-                    # (score/staging/{run_id}.json)がこのManagerの公開run_idと
+                    # 修正): ClaudeAgentProvider/OpenCodeProviderがこれを自身の
+                    # provider内部run_idとして採用しないと、score_apply_opsが書き込む
+                    # staging先(score/staging/{run_id}.json)がこのManagerの公開run_idと
                     # 食い違い、AgentRunService.accept/reject/get_diff(#46)が
                     # 永遠にステージング済みの変更を見つけられなくなる。
                     config={"workspace_dir": str(self.workspace_dir), "run_id": run_id},

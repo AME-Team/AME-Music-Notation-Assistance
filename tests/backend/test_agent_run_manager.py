@@ -605,3 +605,26 @@ async def test_explicit_budget_overrides_task_default(tmp_path: Path) -> None:
 
     assert provider.received_task is not None
     assert provider.received_task.max_tokens_budget == 123_456
+
+
+async def test_opencode_provider_receives_stdio_mcp_server_spec(tmp_path: Path) -> None:
+    _create_project(tmp_path, "proj_1")
+    provider = _RecordingProvider()
+    provider.name = "opencode"
+    manager = AgentRunManager(
+        workspace_dir=tmp_path,
+        agent_run_service=AgentRunService(workspace_dir=tmp_path),
+        providers={"opencode": provider},
+    )
+    run_id = await manager.create_run(
+        project_id="proj_1",
+        task_type="consistency-pass",
+        provider_name="opencode",
+    )
+    await _drain(manager, run_id)
+
+    assert provider.received_task is not None
+    score_spec = next(
+        s for s in provider.received_task.mcp_servers if s.name == "score"
+    )
+    assert score_spec.kind == "stdio"

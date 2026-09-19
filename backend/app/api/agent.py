@@ -29,6 +29,7 @@ from app.agent.audit import AuditEntry
 from app.agent.provider import AgentEvent, AgentRunNotFoundError
 from app.agent.providers.claude import ClaudeAgentProvider
 from app.agent.providers.dummy import DummyAgentProvider
+from app.agent.providers.opencode import OpenCodeProvider, is_opencode_available
 from app.agent.tasks import STANDARD_TASKS
 from app.agent.workspace import ReportNotFoundError
 from app.api.deps import get_agent_run_manager, get_agent_run_service
@@ -153,6 +154,7 @@ def list_providers() -> list[AgentProviderInfo]:
     return [
         AgentProviderInfo(name=DummyAgentProvider.name, configured=True),
         AgentProviderInfo(name=ClaudeAgentProvider.name, configured=is_claude_cli_available()),
+        AgentProviderInfo(name=OpenCodeProvider.name, configured=is_opencode_available()),
     ]
 
 
