@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from collections.abc import AsyncIterator, Sequence
@@ -33,6 +34,7 @@ from app.agent.providers.opencode import (
 from app.agent.tasks import TaskDefinition, get_task_definition
 from app.domain.score import Part, ScoreIR, SourceInfo, TimeSignatureEntry
 from app.infra import storage
+from app.services.agent_run_manager import _compose_prompt
 from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
@@ -94,14 +96,18 @@ def _make_task(
     workspace.mkdir(parents=True, exist_ok=True)
 
     # TASK.md, context.md, notation_rules.md
-    (workspace / "TASK.md").write_text(f"# Task {task_def.id}\n", encoding="utf-8")
+    task_lines = [f"# Task {task_def.id}", ""]
+    if scope:
+        task_lines.extend(["## Scope", json.dumps(scope), ""])
+    (workspace / "TASK.md").write_text("\n".join(task_lines) + "\n", encoding="utf-8")
     (workspace / "context.md").write_text("# Context\n", encoding="utf-8")
     (workspace / "notation_rules.md").write_text("# Rules\n", encoding="utf-8")
 
+    prompt = _compose_prompt(task_def, None, scope)
     return AgentTask(
         task_type=task_def.id,
         project_id=_PROJECT_ID,
-        prompt=task_def.prompt_template or task_def.purpose,
+        prompt=prompt,
         workspace=workspace,
         mcp_servers=[
             McpServerSpec(
@@ -206,13 +212,18 @@ def _build_claude_provider(
     return ClaudeAgentProvider(), client
 
 
-def _build_opencode_provider(
+@contextlib.asynccontextmanager
+async def _mock_opencode_provider(
     sse_events: list[dict[str, Any]],
-) -> tuple[OpenCodeProvider, _MockOpenCodeTransport]:
+) -> AsyncIterator[tuple[OpenCodeProvider, _MockOpenCodeTransport]]:
     transport = _MockOpenCodeTransport(sse_events)
     client = httpx.AsyncClient(transport=transport, base_url="http://mock-opencode")
     provider = OpenCodeProvider(base_url="http://mock-opencode", http_client=client)
-    return provider, transport
+    try:
+        yield provider, transport
+    finally:
+        await client.aclose()
+        provider.stop()
 
 
 # =========================================================================
@@ -290,8 +301,6 @@ async def test_standard_tasks_run_to_completion_on_both_providers(
             "properties": {"sessionID": "s_mock_parity"},
         },
     ]
-    opencode_prov, _ = _build_opencode_provider(opencode_events)
-
     # 1. Claude プロバイダで実行
     claude_handle = await claude_prov.start(task)
     claude_events = [e async for e in claude_prov.stream(claude_handle.run_id)]
@@ -324,16 +333,17 @@ async def test_standard_tasks_run_to_completion_on_both_providers(
         max_tokens_budget=task.max_tokens_budget,
         timeout_sec=task.timeout_sec,
     )
-    opencode_handle = await opencode_prov.start(opencode_task)
-    opencode_stream_events = [
-        e async for e in opencode_prov.stream(opencode_handle.run_id)
-    ]
-    opencode_result = await opencode_prov.result(opencode_handle.run_id)
+    async with _mock_opencode_provider(opencode_events) as (opencode_prov, _):
+        opencode_handle = await opencode_prov.start(opencode_task)
+        opencode_stream_events = [
+            e async for e in opencode_prov.stream(opencode_handle.run_id)
+        ]
+        opencode_result = await opencode_prov.result(opencode_handle.run_id)
 
-    assert opencode_result.status == "completed"
-    assert opencode_stream_events[-1].kind == "done"
-    assert opencode_result.usage.input_tokens == 200
-    assert opencode_result.usage.output_tokens == 50
+        assert opencode_result.status == "completed"
+        assert opencode_stream_events[-1].kind == "done"
+        assert opencode_result.usage.input_tokens == 200
+        assert opencode_result.usage.output_tokens == 50
 
 
 # =========================================================================
@@ -483,8 +493,6 @@ async def test_agent_event_sequence_and_semantic_parity(
             "properties": {"sessionID": "s_mock_parity"},
         },
     ]
-    opencode_prov, _ = _build_opencode_provider(opencode_events)
-
     # 両プロバイダを実行
     h_claude = await claude_prov.start(task)
     claude_events = [e async for e in claude_prov.stream(h_claude.run_id)]
@@ -509,8 +517,11 @@ async def test_agent_event_sequence_and_semantic_parity(
         max_tokens_budget=task.max_tokens_budget,
         timeout_sec=task.timeout_sec,
     )
-    h_opencode = await opencode_prov.start(opencode_task)
-    opencode_events_stream = [e async for e in opencode_prov.stream(h_opencode.run_id)]
+    async with _mock_opencode_provider(opencode_events) as (opencode_prov, _):
+        h_opencode = await opencode_prov.start(opencode_task)
+        opencode_events_stream = [
+            e async for e in opencode_prov.stream(h_opencode.run_id)
+        ]
 
     # 1. イベント種別(kind)の系列順序が一致すること
     claude_kinds = [e.kind for e in claude_events]
@@ -604,7 +615,6 @@ async def test_cancellation_preserves_current_score_on_both_providers(
     assert current_path.read_bytes() == current_bytes_before
 
     # 2. OpenCode プロバイダのキャンセル
-    opencode_prov, _ = _build_opencode_provider([])
     opencode_task = AgentTask(
         task_type=task.task_type,
         project_id=task.project_id,
@@ -625,15 +635,16 @@ async def test_cancellation_preserves_current_score_on_both_providers(
         max_tokens_budget=task.max_tokens_budget,
         timeout_sec=task.timeout_sec,
     )
-    h_opencode = await opencode_prov.start(opencode_task)
-    await opencode_prov.cancel(h_opencode.run_id)
+    async with _mock_opencode_provider([]) as (opencode_prov, _):
+        h_opencode = await opencode_prov.start(opencode_task)
+        await opencode_prov.cancel(h_opencode.run_id)
 
-    opencode_events = [e async for e in opencode_prov.stream(h_opencode.run_id)]
-    opencode_res = await opencode_prov.result(h_opencode.run_id)
+        opencode_events = [e async for e in opencode_prov.stream(h_opencode.run_id)]
+        opencode_res = await opencode_prov.result(h_opencode.run_id)
 
-    assert opencode_res.status == "cancelled"
-    assert opencode_events[-1].kind == "cancelled"
-    assert current_path.read_bytes() == current_bytes_before
+        assert opencode_res.status == "cancelled"
+        assert opencode_events[-1].kind == "cancelled"
+        assert current_path.read_bytes() == current_bytes_before
 
 
 # =========================================================================

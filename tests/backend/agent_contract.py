@@ -138,9 +138,23 @@ class ProviderContractTests:
 
     async def test_cancel_leaves_current_score_intact(self, tmp_path: Path) -> None:
         """キャンセルしても current.json が無変更であることを確認する(M5c完了条件3)。"""
-        score_file = tmp_path / "current.json"
-        original_content = '{"project_id": "proj-1", "parts": []}'
-        score_file.write_text(original_content, encoding="utf-8")
+        from app.infra import storage
+
+        project_id = "proj-1"
+        score_path = storage.score_current_path(tmp_path, project_id)
+        original_data = {
+            "schema_version": "1.0",
+            "project_id": project_id,
+            "source": {
+                "filename": "test.wav",
+                "duration_sec": 8.0,
+                "sample_rate": 8000,
+            },
+            "divisions": 480,
+            "parts": [],
+        }
+        storage.write_json(score_path, original_data)
+        original_bytes = score_path.read_bytes()
 
         provider = self.provider()
         handle = await provider.start(self._make_task(tmp_path))
@@ -148,7 +162,7 @@ class ProviderContractTests:
         async for _ in provider.stream(handle.run_id):
             pass
 
-        assert score_file.read_text(encoding="utf-8") == original_content
+        assert score_path.read_bytes() == original_bytes
 
     async def test_unknown_run_id_raises_agent_run_not_found(
         self, tmp_path: Path
