@@ -439,6 +439,40 @@ class TestV8VoiceOverlap:
         assert "V-8" not in _rules(violations)
 
 
+class TestV8FloatRounding:
+    """#138: 浮動小数点の丸め誤差で「接しているだけ」の区間を重複と誤検知しない。
+
+    実曲検証(#60)で、`onset_beat + duration_beat`が次の`onset_beat`とtick上は等しい
+    (接しているだけ)のに、別々の除算結果の和が1ULPだけ大きくなるケースが
+    7件検出された(bass 2 / vocals 4 / other 1)。
+    """
+
+    def test_touching_intervals_with_rounding_error_are_not_violations(self) -> None:
+        # tick上では13+60=73で接しているが、`13/480 + 60/480`は`73/480`より
+        # 1ULPだけ大きくなり、丸め誤差なしの比較では重複と判定されていた。
+        assert 13 / 480 + 60 / 480 > 73 / 480  # 前提: この値で丸め誤差が再現する
+        notes = [
+            _note(1, onset_beat=13 / 480, duration_beat=60 / 480),
+            _note(2, onset_beat=73 / 480, duration_beat=1.0),
+        ]
+        decisions = [_decision(1, voice=1), _decision(2, voice=1)]
+        violations = validate_decisions(decisions, notes=notes, part_staves=1)
+        assert "V-8" not in _rules(violations)
+
+    def test_real_overlap_after_rounding_is_still_detected(self) -> None:
+        """許容誤差は「実在の重複」を隠さないこと(最小音価1tick=1/480拍 ≫ 1e-9)。
+
+        1tick長く伸ばした区間(61/480拍)は、実際に重なっているため検出され続ける。
+        """
+        notes = [
+            _note(1, onset_beat=13 / 480, duration_beat=61 / 480),
+            _note(2, onset_beat=73 / 480, duration_beat=1.0),
+        ]
+        decisions = [_decision(1, voice=1), _decision(2, voice=1)]
+        violations = validate_decisions(decisions, notes=notes, part_staves=1)
+        assert _rules(violations) == ["V-8"]
+
+
 class TestV9SplitTieRange:
     def test_split_at_beat_within_range_is_not_violation(self) -> None:
         notes = [_note(1, onset_beat=0.0, duration_beat=2.0, snap_ids=("a",))]

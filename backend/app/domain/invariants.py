@@ -201,6 +201,14 @@ def time_occupancies(
     return result
 
 
+# V-8の区間比較に使う許容誤差(拍)。`onset_beat`と`duration_beat`はtickからの
+# 別々の除算で求まるため、tick上では「接している」だけの区間でも浮動小数点の
+# 丸め誤差で和がわずかに大きくなり、重複と誤検知される(#138: 実曲検証で7件、
+# いずれも1ULP程度)。最小音価は1tick=1/480拍(約0.0021)なので、1e-9は実在の
+# 重複を隠さずに丸め誤差だけを吸収できる。
+_BEAT_EPSILON = 1e-9
+
+
 def _overlap_violations(
     decisions: list[Decision], notes_by_id: dict[int, ValidationNote]
 ) -> list[Violation]:
@@ -226,6 +234,10 @@ def _overlap_violations(
       あるが、記譜ルール上小節線をまたぐノートは`split_tie`で分割される前提
       (モジュールdocstring・設計書§7.4「小節線をまたぐノートは、小節線上でタイに
       分割する」)のため、現実的な運用では影響が限定的と判断する。
+    - 区間の端は`_BEAT_EPSILON`の許容誤差付きで比較する(#138): `onset_beat`と
+      `duration_beat`は別々の除算結果なので、tick上で接している区間の和が丸め誤差で
+      わずかに大きくなり、実在しない重複を報告してしまう(実曲で7件)。tick表現に
+      揃える案は`ValidationNote`がtickを持たないため、許容誤差方式を採る。
     - `staff`(#109): L0はstaffごとにvoice番号を1から振るため、voice番号は
       staff内でのみ意味を持つ。`staff`を無視すると、ピアノの大譜表(staff 1と
       staff 2が同じvoice番号を持つ)で、**decisionsが空(すべて暗黙keep)の状態でも
@@ -241,7 +253,7 @@ def _overlap_violations(
     for intervals in by_key.values():
         ordered = sorted(intervals, key=lambda item: item[0])
         for (_, end, _), (next_start, _, next_id) in zip(ordered, ordered[1:], strict=False):
-            if next_start < end:
+            if next_start < end - _BEAT_EPSILON:
                 violations.append(
                     Violation(
                         rule="V-8",
