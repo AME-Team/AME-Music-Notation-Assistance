@@ -22,6 +22,25 @@ extraResources:
 # コード署名は見送り(#80で決定): 本アプリは開発者本人が単独で使うツール
 # (設計書§2.3)であり、証明書取得コストに見合わない。未署名のため初回起動時に
 # Windows SmartScreenの警告が表示される(README/インストーラ説明に明記する)。
+#
+# ネイティブモジュールの自動リビルドを無効化する(#62、実際のwindows-latest CI
+# ビルドで発覚): 本アプリの`dependencies`(package.json)にネイティブモジュールは
+# 一切無い(重い処理は同梱するPythonバックエンド側が担う)。唯一存在するネイティブ
+# モジュールは`opensheetmusicdisplay`の`optionalDependencies`である`gl`
+# (ブラウザ外のヘッドレスWebGL用途、Electron上ではChromium自体がWebGLを提供する
+# ため本アプリでは一切使われない)で、`electron-builder`が既定で行う
+# `@electron/rebuild`がこれを検出してWindows向けにビルドしようとし、MSVCの
+# リンクエラー(v8 ABI不一致によるGetBackingStore未解決シンボル)で必ず失敗して
+# いた。ビルド不要なので無効化する。
+#
+# 注意(#62 Gate2レビュー指摘): この設定は全てのネイティブ依存のリビルドを
+# 無効化するグローバル設定である。将来`dependencies`に実行時必須のネイティブ
+# モジュール(例: better-sqlite3等)を追加した場合、ビルドは警告なく成功する
+# ものの、そのモジュールは未リビルドのまま(Electronの ABI と不一致)パッケージ
+# されてしまう。ネイティブ依存を追加する際は、この設定を見直す(`gl`だけを
+# 個別に除外する方式へ切り替える、または対象モジュールをリビルド対象に含める)
+# 必要があることに注意すること。
+npmRebuild: false
 win:
   target: nsis
   artifactName: ${productName}-${version}-setup.${ext}
