@@ -57,10 +57,67 @@ export interface BackendHandle {
   stop(): Promise<void>;
 }
 
-// dev: <repo>/frontend/dist-electron/backend.js -> <repo>/backend
-// packaged: 同梱方式は Q-17(#82) で M6 までに決定する。M0 時点では同一の相対解決を既定とする。
-function backendDir(): string {
-  return path.resolve(__dirname, "..", "..", "backend");
+interface BackendCommand {
+  command: string;
+  args: string[];
+  cwd: string;
+  /** ffmpeg同梱ディレクトリ等、子プロセスのPATH先頭へ追加するパス(#62/#80)。 */
+  extraPathDirs: string[];
+}
+
+// dev: <repo>/frontend/dist-electron/backend.js -> <repo>/backend を `uv run` で起動する
+// (開発者のマシンに `uv`/Python 3.12 が導入済みであることを前提とする)。
+// packaged: Q-17(#80で決定)により、`scripts/prepare-python-runtime.mjs` が
+// ビルド前に組み立てた embeddable Python + 事前インストール済み依存一式を
+// `resources/python-runtime` として同梱し(`electron-builder.yml`の
+// `extraResources`)、その `python.exe` を直接起動する。エンドユーザーの
+// マシンにPython/uvは一切不要になる(#62完了条件)。
+function resolveBackendCommand(port: number): BackendCommand {
+  if (app.isPackaged) {
+    const runtimeDir = path.join(process.resourcesPath, "python-runtime");
+    const ffmpegDir = path.join(process.resourcesPath, "ffmpeg");
+    return {
+      command: path.join(runtimeDir, "python.exe"),
+      args: ["-m", "app.main", "--port", String(port)],
+      cwd: runtimeDir,
+      extraPathDirs: [ffmpegDir],
+    };
+  }
+
+  const dir = path.resolve(__dirname, "..", "..", "backend");
+  return {
+    command: "uv",
+    args: ["run", "--project", dir, "python", "-m", "app.main", "--port", String(port)],
+    cwd: dir,
+    extraPathDirs: [],
+  };
+}
+
+/**
+ * `extraPathDirs`をPATH環境変数の先頭へ追加した環境変数オブジェクトを返す(#62)。
+ *
+ * Windowsでは環境変数名が大文字小文字を区別せず、`process.env`は通常
+ * `Path`というキーで持つ(`PATH`ではない)。単純に`{ ...process.env, PATH: ... }`
+ * とすると`Path`と`PATH`が別キーとして両方残ってしまい、子プロセスへ渡る
+ * 環境ブロックでどちらが有効になるか不定になる(#62 Gate1レビュー指摘)。
+ * 既存のPATHキー(大文字小文字を問わず)を削除してから単一のキーで設定する。
+ */
+function withExtraPathDirs(env: NodeJS.ProcessEnv, extraPathDirs: string[]): NodeJS.ProcessEnv {
+  if (extraPathDirs.length === 0) return { ...env };
+
+  const result: NodeJS.ProcessEnv = {};
+  let existingPath = "";
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toUpperCase() === "PATH") {
+      existingPath = value ?? "";
+      continue;
+    }
+    result[key] = value;
+  }
+
+  const pathSeparator = process.platform === "win32" ? ";" : ":";
+  result.PATH = [...extraPathDirs, existingPath].join(pathSeparator);
+  return result;
 }
 
 async function waitForHealth(
@@ -91,22 +148,18 @@ export async function startBackend(
   const token = generateToken();
   onStatus("starting");
 
-  const dir = backendDir();
-  const child = spawn(
-    "uv",
-    ["run", "--project", dir, "python", "-m", "app.main", "--port", String(port)],
-    {
-      cwd: dir,
-      env: {
-        ...process.env,
-        AME_BACKEND_PORT: String(port),
-        AME_BACKEND_TOKEN: token,
-        PYTHONUTF8: "1",
-        PYTHONIOENCODING: "utf-8",
-      },
-      detached: process.platform !== "win32",
+  const { command, args, cwd, extraPathDirs } = resolveBackendCommand(port);
+  const child = spawn(command, args, {
+    cwd,
+    env: {
+      ...withExtraPathDirs(process.env, extraPathDirs),
+      AME_BACKEND_PORT: String(port),
+      AME_BACKEND_TOKEN: token,
+      PYTHONUTF8: "1",
+      PYTHONIOENCODING: "utf-8",
     },
-  );
+    detached: process.platform !== "win32",
+  });
 
   if (child.pid) {
     await writeFile(lockPath(), JSON.stringify({ pid: child.pid, port }), "utf-8");

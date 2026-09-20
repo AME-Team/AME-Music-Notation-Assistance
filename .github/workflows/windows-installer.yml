@@ -1,0 +1,37 @@
+---
+name: Windows Installer
+
+# #62/#80: Windowsインストーラのビルド自動化。埋め込みPythonランタイムの構築
+# (`prepare-python-runtime.mjs`)と依存パッケージのpip installを毎回行うため、
+# 通常のCI(ci.yml)より時間がかかる。Dual-Gateレビューの反復を遅くしないよう、
+# 通常のpush/PRトリガーには含めず、手動実行(workflow_dispatch)のみとする。
+"on":
+  workflow_dispatch: {}
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: uv sync (backend)
+        working-directory: backend
+        run: uv sync
+      - name: npm ci (frontend)
+        working-directory: frontend
+        run: npm ci
+      - name: build installer
+        # README/`npm run dist:win`と同一手順(prepare→build→electron-builder)を
+        # 二重管理しないよう、ここでも同じスクリプトを呼ぶ(#62 Gate1レビュー指摘)。
+        working-directory: frontend
+        run: npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: frontend/release/*.exe
+          if-no-files-found: error
