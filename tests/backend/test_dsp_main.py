@@ -894,6 +894,78 @@ def test_quantize_stage_raises_if_piano_part_has_no_notes(tmp_path: Path) -> Non
         dsp_main.run_quantize_stage("job1", project_id, tmp_path, {})
 
 
+def test_quantize_stage_imports_time_signatures_and_tempo_map_from_beatmap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#136): beatmap.jsonの拍子・テンポをScoreIRへ取り込むこと。
+
+    取り込まれていないと、書き出したMusicXMLが空になる(拍子が無いとpartituraが
+    小節を生成できない)不具合があった(#60の実曲検証で発覚)。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    beats = [
+        {"time_sec": i * 0.5, "beat_in_bar": (i % 3) + 1, "bar": (i // 3) + 1}
+        for i in range(6)
+    ]
+    storage.write_json(
+        storage.beatmap_path(tmp_path, project_id),
+        {
+            "beats": beats,
+            "downbeats_sec": [b["time_sec"] for b in beats if b["beat_in_bar"] == 1],
+            "time_signatures": [
+                {"bar": 1, "numerator": 3, "denominator": 4},
+                {"bar": 2, "numerator": 4, "denominator": 4},
+            ],
+            "tempo_map": [{"bar": 1, "beat": 1.0, "bpm": 132.0}],
+            "confidence": 1.0,
+        },
+    )
+
+    dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score(project_id)
+    assert [(ts.bar, ts.numerator, ts.denominator) for ts in score.time_signatures] == [
+        (1, 3, 4),
+        (2, 4, 4),
+    ]
+    assert [(t.bar, t.beat, t.bpm) for t in score.tempo_map] == [(1, 1.0, 132.0)]
+
+
+def test_quantize_stage_reruns_when_only_tempo_map_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#136: テンポマップは取り込む入力になったため、単独で変わっても再実行される。"""
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+    dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+
+    beatmap_file = storage.beatmap_path(tmp_path, project_id)
+    beatmap = storage.read_json(beatmap_file)
+    beatmap["tempo_map"] = [{"bar": 1, "beat": 1.0, "bpm": 90.0}]
+    storage.write_json(beatmap_file, beatmap)
+
+    dsp_main.run_quantize_stage("job3", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score(project_id)
+    assert [(t.bar, t.beat, t.bpm) for t in score.tempo_map] == [(1, 1.0, 90.0)]
+
+
 def test_quantize_stage_sets_tick_spelling_voice_staff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
