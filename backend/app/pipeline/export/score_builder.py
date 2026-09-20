@@ -90,6 +90,18 @@ def _spelling_or_raise(note: dict, part_id: str) -> tuple[str, int | None, int]:
     return spelling["step"], spelling.get("alter") or None, spelling["octave"]
 
 
+def is_exportable_note(note: dict[str, Any]) -> bool:
+    """`build_score`がpartituraへ渡す(=書き出し対象の)ノートかどうか。
+
+    `status="deleted"`のノートはL0/L1で削除済みのため書き出しから除外する。
+    書き出し結果の検証(`musicxml._ensure_notes_written`)も同じ述語を通すことで、
+    「どのノートが書き出し対象か」の基準を一箇所に保つ(#137レビュー指摘: 基準が
+    二重管理だと、片方だけ変更されたときに正当な出力をエラーにしたり検知漏れを
+    起こす)。
+    """
+    return note.get("status") != "deleted"
+
+
 def build_score(score: dict[str, Any]) -> Any:  # noqa: ANN401 — partituraの型を外部公開しない
     """Score IRのJSON dict形状から partitura の `Score` を構築する(#27)。
 
@@ -133,7 +145,7 @@ def build_score(score: dict[str, Any]) -> Any:  # noqa: ANN401 — partituraの�
             )
 
         for note in part_data.get("notes", []):
-            if note.get("status") == "deleted":
+            if not is_exportable_note(note):
                 continue
             onset_tick = note.get("onset_tick")
             duration_tick = note.get("duration_tick")

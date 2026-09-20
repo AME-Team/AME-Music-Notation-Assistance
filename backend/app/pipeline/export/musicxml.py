@@ -13,11 +13,10 @@
 from __future__ import annotations
 
 import re
-import sys
 from typing import Any
 from xml.sax.saxutils import escape as _xml_escape
 
-from app.pipeline.export.score_builder import ExportError, build_score
+from app.pipeline.export.score_builder import ExportError, build_score, is_exportable_note
 
 __all__ = ["ExportError", "render_musicxml"]
 
@@ -26,12 +25,12 @@ _NOTE_ELEMENT_PATTERN = re.compile(r"<note\b[^>]*/>|<note\b[^>]*>.*?</note>", re
 
 
 def _expected_note_count(score: dict[str, Any]) -> int:
-    """書き出し対象のノート数(`build_score`と同じ基準: `status="deleted"`は除外)。"""
+    """書き出し対象のノート数(`score_builder.is_exportable_note`と同一基準)。"""
     return sum(
         1
         for part_data in score.get("parts", [])
         for note in part_data.get("notes", [])
-        if note.get("status") != "deleted"
+        if is_exportable_note(note)
     )
 
 
@@ -96,8 +95,11 @@ def _ensure_notes_written(score: dict[str, Any], xml_str: str) -> None:
     戻らないよう、ここで明示的に検出する(`midi.py`が`strict=True`でトラック数の
     前提崩れを検出する方針と揃える)。
 
-    等値比較はしない: partituraは小節線をまたぐノートをタイ分割するため、出力の
-    `<note>`要素数は入力のノート数より**多くなりうる**(実データで568→647)。
+    要素数の等値比較・減少の警告はしない: partituraは小節線をまたぐノートをタイ分割
+    するため出力は入力より**多くなりうる**し(実データで568→647)、逆に入力のタイが
+    `tie_notes`で統合されて正当に減ることもある。つまり要素数だけでは「欠落」と
+    区別できないため、警告を出すと正当なスコアでも毎回ログが出てノイズになる
+    (#137レビュー指摘)。検知するのは「ノートが1件も出ていない」場合に限る。
     """
     expected_notes = _expected_note_count(score)
     written_notes = _count_sounding_notes(xml_str)
@@ -106,14 +108,6 @@ def _ensure_notes_written(score: dict[str, Any], xml_str: str) -> None:
             f"generated MusicXML has no notes although the score has {expected_notes} notes; "
             "the score could not be laid out into measures (check time_signatures/tempo_map/"
             "divisions in the Score IR)"
-        )
-    if written_notes < expected_notes:
-        # 入力自体がタイで繋がっている場合は`tie_notes`の統合で正当に減りうるため、
-        # 書き出しを失敗させず警告に留める。
-        print(
-            f"[musicxml] warning: generated MusicXML has {written_notes} notes but the score "
-            f"has {expected_notes}; some notes may have been dropped",
-            file=sys.stderr,
         )
 
 
