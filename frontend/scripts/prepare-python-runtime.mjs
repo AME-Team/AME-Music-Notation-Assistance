@@ -136,7 +136,11 @@ function enableSitePackages(pythonDir) {
   }
   const content = readFileSync(pthPath, "utf-8");
   let patched = content.replace(/^#\s*import site/m, "import site");
-  if (patched === content && !content.includes("\nimport site")) {
+  // 既に(コメントアウトされずに)有効化済みの`import site`が行頭にあるかを、
+  // 置換の前後比較ではなく直接判定する(#62 Gate2レビュー指摘: 前後比較+
+  // `content.includes("\nimport site")`だと、ファイル1行目に`import site`が
+  // 来るケース(改行が前置されない)で誤って例外を投げていた)。
+  if (patched === content && !/^\s*import site\b/m.test(content)) {
     throw new Error(
       `could not enable 'import site' in ${pthPath}; unexpected file contents`,
     );

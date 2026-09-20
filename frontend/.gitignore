@@ -8,3 +8,6 @@ release/
 # サイズが大きく(数百MB)、Windows専用バイナリのためリポジトリに含めない。
 python-runtime/
 ffmpeg/
+# 上記の組み立て作業用一時ディレクトリ。プロセスが強制終了された場合、
+# finallyでの削除が走らず残存しうる(#62 Gate2レビュー指摘)。
+.python-runtime-tmp/
