@@ -39,6 +39,14 @@ class RefineNoteInput:
     """L0への入力ノート1件分(#26)。`is_user=True` のノートは、L0が返す
 
     差分に一切含まれない(呼び出し元は変更しない)。
+
+    `duration_tick`(#130): `onset_tick`と同じ量子化格子単位の音価。区間ベースの
+    voice割当(`_assign_voices_in_interval_order`)が「時間的に重なるか」を判定する
+    ために使う。`duration_sec`(生の秒音価)では tick 軸上の重なりを判定できない
+    (tick と秒の相互変換にはテンポマップが必要で、この純粋関数モジュールは
+    それを知らない)ため、量子化済みの音価を別途受け取る。`None`(未量子化)の
+    場合は音価不明として扱い、時間方向の重なりは判定せず同一`onset_tick`のみを
+    衝突とみなす(量子化前の呼び出しでも決定的に動作させるため)。
     """
 
     id: int
@@ -47,6 +55,7 @@ class RefineNoteInput:
     duration_sec: float
     velocity: int
     confidence: float
+    duration_tick: int | None = None
     flags: tuple[str, ...] = ()
     is_user: bool = False
 
@@ -106,80 +115,134 @@ def _assign_spellings(
     return result
 
 
-def _rank_group_into_voices(
-    group: list[RefineNoteInput], *, staff: int
-) -> dict[int, tuple[int, int]]:
-    """同時発音グループ内のノートを高音から低音の順にvoice 1..`MAX_VOICES`へ割る。
+def _note_end_tick(note: RefineNoteInput) -> int | None:
+    """ノートの発音終了tick(排他的終端)。音価不明(`duration_tick is None`)ならNone。
 
-    `_assign_staff_and_voice`(ピアノの大譜表、staff内ごとに呼ぶ)と
-    `_assign_voice_single_staff`(単一譜表、staff=1固定で全体に対して呼ぶ)が
-    共有するランク付けロジック(#128レビュー指摘: 重複実装だと片方だけ修正されて
-    乖離するリスクがあったため一元化)。userノートも「そのタイミングに音がある」
-    という事実としてグループには含める(=voice番号を1つ消費させる)が、userノート
-    自身のvoiceは変更しない。
-
-    既知の制約: 同一staff・同一onset_tickに5音以上同時発音がある場合、5番目以降は
-    全てvoice=4に潰れる(MusicXMLの慣例的な声部数上限に合わせた単純化)。
+    `duration_tick=0`(ゼロ長)は「開始と同じ位置で終わる」= 時間方向の重なりを
+    持たない音として扱う(同時発音の判定は`_conflicts_in_voice`が`onset_tick`の
+    一致で別途行う)。
     """
-    ranked = sorted(group, key=lambda n: -n.midi)
+    if note.duration_tick is None:
+        return None
+    return note.onset_tick + max(note.duration_tick, 0)
+
+
+def _conflicts_in_voice(last_onset: int, last_end: int | None, note: RefineNoteInput) -> bool:
+    """同一voice内で、直前に割り当てたノートと`note`が記譜上衝突するか(#130)。
+
+    MusicXMLのvoiceは「常に単旋律」であるべき(同一voice内で時間的に重なる
+    ノートは不正)ため、以下のいずれかで衝突とみなす:
+
+    - `onset_tick`が一致する(和音・同時発音)。音価に関係なく別voiceが必要。
+    - `note.onset_tick`が直前ノートの発音区間内(開始より後、終了より前)に入る。
+
+    直前ノートの音価が不明(`last_end is None`)な場合は時間方向の重なりを
+    判定できないため、同時発音のみを衝突とする。
+    """
+    if last_onset == note.onset_tick:
+        return True
+    if last_end is None:
+        return False
+    return note.onset_tick < last_end
+
+
+def _assign_voices_in_interval_order(
+    notes: list[RefineNoteInput], *, staff: int
+) -> dict[int, tuple[int, int]]:
+    """区間(interval)ベースのvoice割当(#130)。
+
+    `_assign_staff_and_voice`(ピアノの大譜表、staffごとに呼ぶ)と
+    `_assign_voice_single_staff`(単一譜表、staff=1固定で全体に対して呼ぶ)が
+    共有する中核ロジック(#128レビュー指摘の重複実装回避を引き継ぎつつ、
+    #130でグループ化の単位を「同一onset_tick」から「発音区間の重なり」へ
+    一般化した)。
+
+    各voiceについて「直前に割り当てたノートの開始tickと終了tick」を保持し、
+    開始tick順(同一開始tickでは高音順)にノートを見て、**直前ノートと衝突しない
+    最小番号のvoice**(1..`MAX_VOICES`)へ割り当てる。これにより、開始タイミングが
+    異なっても持続時間が重なる音(アルペジオ、サステインしたまま次の音が鳴る
+    ケース等)は別voiceへ回され、同一voice内の時間重複(V-8違反)が生じない。
+
+    同一onset_tickの同時発音が高音から順にvoice 1, 2, 3, 4へ割り当てられる
+    従来の挙動(#26/#56)は、同一開始tickのノートを高音順に処理し、各ノートが
+    直前のノートと衝突するため自然に保たれる。
+
+    4声すべてが衝突する場合(5音以上の同時発音、または4声を使い切るほど密な
+    重なり)は、**最も早く終わるvoice**へ回す(重なり幅を最小化する。同点は
+    若い番号を優先)。この場合の重複は声部数上限に起因するもので避けられず、
+    検証層(V-8)に掛かる可能性が残る既知の制約として扱う。
+
+    userノートも「そのタイミングで音が鳴っている」という事実として処理に含める
+    (=voice番号を1つ消費させる、#26から継続する挙動)が、userノート自身は戻り値に
+    含めない(呼び出し元が変更しない)。
+    """
+    ordered = sorted(notes, key=lambda n: (n.onset_tick, -n.midi, n.id))
+    last_onset: dict[int, int] = {}
+    voice_end: dict[int, int | None] = {}
     result: dict[int, tuple[int, int]] = {}
-    for voice_index, note in enumerate(ranked, start=1):
-        if note.is_user:
-            continue
-        result[note.id] = (staff, min(voice_index, MAX_VOICES))
+    for note in ordered:
+        end_tick = _note_end_tick(note)
+        free_voices = [
+            voice
+            for voice in range(1, MAX_VOICES + 1)
+            if voice not in last_onset
+            or not _conflicts_in_voice(last_onset[voice], voice_end[voice], note)
+        ]
+        voice = (
+            free_voices[0]
+            if free_voices
+            else min(
+                range(1, MAX_VOICES + 1),
+                key=lambda v: (
+                    voice_end[v] if voice_end[v] is not None else note.onset_tick,
+                    v,
+                ),
+            )
+        )
+        last_onset[voice] = note.onset_tick
+        previous_end = voice_end.get(voice)
+        # 音価不明のノートは「開始位置で終わる」ものとして扱い、後続ノートとの
+        # 時間重複判定に持ち越さない(同時発音の判定は開始tickの一致で別途行う)。
+        new_end = end_tick if end_tick is not None else note.onset_tick
+        voice_end[voice] = new_end if previous_end is None else max(previous_end, new_end)
+        if not note.is_user:
+            result[note.id] = (staff, voice)
     return result
 
 
 def _assign_staff_and_voice(notes: list[RefineNoteInput]) -> dict[int, tuple[int, int]]:
-    """同一onset_tickのノートをグループ化し、MIDI60でstaffを分け(§7.4)、staff内で
+    """MIDI60でstaffを分け(§7.4)、staff内で発音区間の重なりに応じてvoiceを割る
 
-    高音から低音の順にvoiceを割る(#26)。大譜表(ト音部/へ音部の2段)を持つ
-    ピアノパート専用(#56レビュー指摘: 単一譜表パートには`_assign_voice_single_staff`
-    を使う。MIDDLE_C分割をピアノ以外に適用すると、その楽器が実際には持たない
-    staff=2を参照してしまう)。
+    (#26/#130)。大譜表(ト音部/へ音部の2段)を持つピアノパート専用
+    (#56レビュー指摘: 単一譜表パートには`_assign_voice_single_staff`を使う。
+    MIDI60の分割をピアノ以外に適用すると、その楽器が実際には持たないstaff=2を
+    参照してしまう)。
+
+    voice番号はstaffごとに独立して1から振る(L0の契約。#56で単一譜表パートにも
+    同じ規則を適用した)。
     """
-    groups: dict[int, list[RefineNoteInput]] = {}
+    by_staff: dict[int, list[RefineNoteInput]] = {1: [], 2: []}
     for note in notes:
-        groups.setdefault(note.onset_tick, []).append(note)
+        by_staff[1 if note.midi >= MIDDLE_C else 2].append(note)
 
     result: dict[int, tuple[int, int]] = {}
-    for group in groups.values():
-        by_staff: dict[int, list[RefineNoteInput]] = {1: [], 2: []}
-        for note in group:
-            staff = 1 if note.midi >= MIDDLE_C else 2
-            by_staff[staff].append(note)
-        for staff, staff_notes in by_staff.items():
-            if staff_notes:
-                result.update(_rank_group_into_voices(staff_notes, staff=staff))
+    for staff, staff_notes in by_staff.items():
+        if staff_notes:
+            result.update(_assign_voices_in_interval_order(staff_notes, staff=staff))
     return result
 
 
 def _assign_voice_single_staff(notes: list[RefineNoteInput]) -> dict[int, tuple[int, int]]:
-    """単一譜表パート(bass/vocals/guitar/other)向けのvoice割当(#56)。
+    """単一譜表パート(bass/vocals/guitar/other)向けのvoice割当(#56/#130)。
 
     `_assign_staff_and_voice`のMIDDLE_C分割によるstaff振り分けは行わず、
-    常に`staff=1`固定で、同一onset_tickのノートを高音から低音の順に
-    voice 1..`MAX_VOICES`へ割り振る。bass/vocalsはモノフォニックなため通常
-    voice=1のみを使うが、guitar/otherは和音を弾きうるため、これが無いと
-    同一onset_tickの複数ノートが全てvoice=1へ潰れ、MusicXML上不正な重複
-    ノートになりうる(#56 Gate2レビュー指摘への対応)。
-
-    **既知の制約(#128 Gate2レビュー指摘)**: グループ化は`onset_tick`の完全一致
-    でのみ行う。開始タイミングが異なるが持続時間が重なる音(アルペジオ、
-    サステインしたまま次の音が鳴るケース等)は別グループとして扱われ、
-    それぞれ独立にvoice=1へ割り当てられうるため、同一voice内で時間的に
-    重複するノートが残る可能性がある。この制約は`_assign_staff_and_voice`
-    (#26, M2)が実装当初から持つものをそのまま引き継いでおり、ピアノにも
-    同様に当てはまる。区間(interval)ベースのvoice再割当は#130で対応予定。
+    常に`staff=1`固定で、発音区間の重なりに応じてvoice 1..`MAX_VOICES`へ
+    割り振る。bass/vocalsはモノフォニックなため通常voice=1のみを使うが、
+    guitar/otherは和音を弾きうるため、これが無いと同一onset_tickの複数ノートが
+    全てvoice=1へ潰れ、MusicXML上不正な重複ノートになりうる
+    (#56 Gate2レビュー指摘への対応)。
     """
-    groups: dict[int, list[RefineNoteInput]] = {}
-    for note in notes:
-        groups.setdefault(note.onset_tick, []).append(note)
-
-    result: dict[int, tuple[int, int]] = {}
-    for group in groups.values():
-        result.update(_rank_group_into_voices(group, staff=1))
-    return result
+    return _assign_voices_in_interval_order(notes, staff=1)
 
 
 def _flag_ghost_notes(notes: list[RefineNoteInput]) -> dict[int, tuple[str, ...]]:
@@ -222,9 +285,14 @@ def refine_baseline(
 
     `single_staff`(#56): Trueの場合、大譜表分割(`_assign_staff_and_voice`の
     MIDDLE_C基準staff振り分け)ではなく`_assign_voice_single_staff`(常にstaff=1、
-    同一onset_tick内で高音順にvoiceのみ割当)を使う。bass/vocals/guitar/other等、
+    発音区間の重なりに応じてvoiceを割当)を使う。bass/vocals/guitar/other等、
     実際に単一譜表しか持たないパートに使う(ピアノ以外でMIDDLE_C分割を使うと
     存在しないstaff=2を参照してしまうため)。
+
+    voiceの割当はいずれの経路も発音区間ベース(`_assign_voices_in_interval_order`、
+    #130)であり、`RefineNoteInput.duration_tick`を渡すことで「開始が異なるが
+    持続時間が重なる音」も別voiceへ回される。渡さない場合(`None`)は音価不明として
+    同一onset_tickのみを衝突とみなす従来相当の挙動になる。
     """
     if fifths is None:
         fifths = estimate_key_fifths([n.midi % 12 for n in notes if not n.is_user])

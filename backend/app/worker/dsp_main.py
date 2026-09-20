@@ -1094,6 +1094,10 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
                 duration_sec=n.duration_sec,
                 velocity=n.velocity,
                 confidence=n.confidence,
+                # 発音区間ベースのvoice割当(#130)には量子化済みの音価が要る。
+                # `duration_sec`(生の秒)ではtick軸上の重なりを判定できない
+                # (`quantize_note_onsets`が同じ格子へ終端もスナップした値)。
+                duration_tick=quantized[n.id].duration_tick,
                 flags=tuple(n.flags),
                 is_user=(n.provenance == "user"),
             )
