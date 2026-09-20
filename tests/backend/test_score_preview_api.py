@@ -10,7 +10,15 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 
 from app.config import Settings
-from app.domain.score import Clef, Note, Part, ScoreIR, SourceInfo, Spelling
+from app.domain.score import (
+    Clef,
+    Note,
+    Part,
+    ScoreIR,
+    SourceInfo,
+    Spelling,
+    TimeSignatureEntry,
+)
 from app.services.score_service import ScoreService
 from fastapi.testclient import TestClient
 
@@ -28,6 +36,9 @@ def _write_score(settings: Settings, project_id: str, *, quantized: bool) -> Non
     score = ScoreIR(
         project_id=project_id,
         source=SourceInfo(filename="song.wav", duration_sec=2.0, sample_rate=8000),
+        # 量子化済みスコアには拍子が入る(#136)。拍子が無いとpartituraが小節を
+        # 生成できず、MusicXMLがノート0件になる(#137で検知対象にした症状そのもの)。
+        time_signatures=[TimeSignatureEntry(bar=1, numerator=4, denominator=4)],
     )
     part = Part(
         id="piano",
@@ -90,6 +101,8 @@ def test_preview_returns_valid_musicxml(
 
     root = ET.fromstring(resp.content)
     assert root.tag == "score-partwise"
+    # #137: プレビューでもノートが実際に書き出されていることまで確認する。
+    assert len(root.findall(".//note")) == 1
 
 
 def test_preview_does_not_write_export_artifact(

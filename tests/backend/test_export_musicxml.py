@@ -12,7 +12,13 @@ import xml.etree.ElementTree as ET
 
 import pytest
 from app.pipeline.export.midi import render_midi
-from app.pipeline.export.musicxml import ExportError, render_musicxml
+from app.pipeline.export.musicxml import (
+    ExportError,
+    _count_sounding_notes,
+    _ensure_notes_written,
+    _expected_note_count,
+    render_musicxml,
+)
 from app.pipeline.export.musicxml import (
     _inject_score_instruments as inject_score_instruments,
 )
@@ -212,6 +218,65 @@ class TestRenderMusicxmlPreconditions:
         )
         with pytest.raises(ExportError):
             render_musicxml(score)
+
+
+class TestEmptyMusicxmlDetection:
+    """#137: ノート0件のMusicXMLを無言で正常終了させない。
+
+    #60の実曲検証で、`ScoreIR`の拍子が空だとpartituraが小節を1つも生成できず、
+    ノート0件(1,599バイト)のMusicXMLを正常終了で返していた(原因は#136で修正済み)。
+    ここでは書き出し後の入出力突き合わせが機能することを固定する。
+    """
+
+    def test_zero_note_output_raises_when_score_has_notes(self) -> None:
+        """ノートがあるのに出力0件なら ExportError(#136の症状そのもの)。
+
+        実データでも `time_signatures=[]` のスコア(4パート・568ノート)に対して
+        この検出が働くことを確認済み。
+        """
+        score = _score([_piano_part([_note(1, 0, 480)])])
+        xml = "<score-partwise><part-list/></score-partwise>"
+        with pytest.raises(ExportError, match="generated MusicXML has no notes"):
+            _ensure_notes_written(score, xml)
+
+    def test_more_output_than_input_is_allowed(self) -> None:
+        """タイ分割で出力が入力より多い場合(実データ568→647)はエラーにしない。"""
+        score = _score([_piano_part([_note(1, 0, 480)])])
+        xml = "<note><pitch><step>C</step></pitch></note><note><pitch/></note>"
+        _ensure_notes_written(score, xml)  # 例外が出ないこと
+
+    def test_empty_output_is_allowed_when_score_has_no_notes(self) -> None:
+        score = _score([_piano_part([])])
+        _ensure_notes_written(score, "<score-partwise><part-list/></score-partwise>")
+
+    def test_normal_score_is_not_rejected(self) -> None:
+        score = _score([_piano_part([_note(1, 0, 480), _note(2, 480, 480)])])
+        xml = render_musicxml(score)
+        assert _count_sounding_notes(xml.decode("utf-8")) == 2
+
+    def test_deleted_notes_are_excluded_from_the_expected_count(self) -> None:
+        score = _score(
+            [_piano_part([_note(1, 0, 480), _note(2, 480, 480, status="deleted")])]
+        )
+        assert _expected_note_count(score) == 1
+        xml = render_musicxml(score)
+        assert _count_sounding_notes(xml.decode("utf-8")) == 1
+
+    def test_rests_are_not_counted_as_sounding_notes(self) -> None:
+        xml = (
+            "<measure><note><rest/><duration>480</duration></note>"
+            "<note><pitch><step>C</step><octave>4</octave></pitch></note></measure>"
+        )
+        assert _count_sounding_notes(xml) == 1
+
+    def test_tie_splits_are_not_treated_as_lost_notes(self) -> None:
+        """小節線をまたぐノートはタイ分割されるため、出力要素数は入力より多くなりうる
+
+        (実データで568→647)。その場合もエラーにしないことを固定する。
+        """
+        score = _score([_piano_part([_note(1, 0, 1920)])])  # 4拍(1小節)ぴったり
+        xml = render_musicxml(score)
+        assert _count_sounding_notes(xml.decode("utf-8")) >= 1
 
 
 class TestRenderMusicxmlTiesAndMeasures:
