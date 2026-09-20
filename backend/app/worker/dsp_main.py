@@ -99,6 +99,50 @@ def _reset_undo_history_or_warn(workspace_dir: Path, project_id: str) -> None:
         )
 
 
+def _beatmap_time_signatures(beatmap: dict) -> list[TimeSignatureEntry]:
+    """`beatmap.json`の`time_signatures`を`TimeSignatureEntry`へ変換する(#136)。
+
+    beatmap側の生dictを`**entry`でそのまま展開しない(#139レビュー指摘: beatmapに
+    未知キーが増える/キー名が変わると`TypeError`でquantizeステージ全体が落ち、
+    クロスファイル契約が暗黙になる)。既知フィールドだけを明示的に取り出し、
+    欠落・型不正は文脈付きの`ValueError`にする。
+    """
+    entries: list[TimeSignatureEntry] = []
+    for entry in beatmap.get("time_signatures", []):
+        try:
+            entries.append(
+                TimeSignatureEntry(
+                    bar=int(entry["bar"]),
+                    numerator=int(entry["numerator"]),
+                    denominator=int(entry["denominator"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"beatmap.jsonのtime_signaturesが不正です: {entry!r} ({type(exc).__name__}: {exc})"
+            ) from exc
+    return entries
+
+
+def _beatmap_tempo_map(beatmap: dict) -> list[TempoMapEntry]:
+    """`beatmap.json`の`tempo_map`を`TempoMapEntry`へ変換する(#136、上と同方針)。"""
+    entries: list[TempoMapEntry] = []
+    for entry in beatmap.get("tempo_map", []):
+        try:
+            entries.append(
+                TempoMapEntry(
+                    bar=int(entry["bar"]),
+                    beat=float(entry["beat"]),
+                    bpm=float(entry["bpm"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"beatmap.jsonのtempo_mapが不正です: {entry!r} ({type(exc).__name__}: {exc})"
+            ) from exc
+    return entries
+
+
 def _package_version(name: str) -> str:
     """NFR-11: 成果物メタデータに記録するプロバイダのバージョン。"""
     try:
@@ -1089,10 +1133,23 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     # 小節境界(`tick_to_bar_beat`)・コード進行(`ensure_chords`)・L1プロンプトの
     # 楽曲コンテキストがすべてこの値に依存するため、tick変換より前に確定させる。
     # スキップ判定の後に行う(スキップ時は`current.json`へ一切書き込まない)。
-    score.time_signatures = [
-        TimeSignatureEntry(**entry) for entry in beatmap.get("time_signatures", [])
-    ]
-    score.tempo_map = [TempoMapEntry(**entry) for entry in beatmap.get("tempo_map", [])]
+    score.time_signatures = _beatmap_time_signatures(beatmap)
+    if not score.time_signatures:
+        # 拍子が1つも無いとpartituraが小節を生成できず、書き出したMusicXMLが
+        # 空になる(#136)。旧形式のbeatmapや拍子推定の失敗に備えて4/4で補い、
+        # 補ったことをログに残す(#139レビュー指摘: 空のまま上書きして再発させない)。
+        print(
+            "[dsp_main] warning: beatmap.jsonにtime_signaturesが無いため4/4(既定)で補います",
+            file=sys.stderr,
+        )
+        score.time_signatures = [TimeSignatureEntry(bar=1, numerator=4, denominator=4)]
+    score.tempo_map = _beatmap_tempo_map(beatmap)
+    if not score.tempo_map:
+        print(
+            "[dsp_main] warning: beatmap.jsonにtempo_mapが無いためテンポ情報なしで"
+            "進みます(既定120bpm扱い)",
+            file=sys.stderr,
+        )
 
     # 全パート分のノートをまとめて1回でtick変換する(スウィング検出・ビート
     # アンカー計算は曲全体で共有すべきであり、パートごとに個別計算すると

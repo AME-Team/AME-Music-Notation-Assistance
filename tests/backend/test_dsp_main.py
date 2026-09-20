@@ -939,6 +939,107 @@ def test_quantize_stage_imports_time_signatures_and_tempo_map_from_beatmap(
     assert [(t.bar, t.beat, t.bpm) for t in score.tempo_map] == [(1, 1.0, 132.0)]
 
 
+def test_quantize_stage_ignores_unknown_keys_in_beatmap_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#139レビュー指摘: beatmap側の生dictを`**entry`で展開しないこと。
+
+    未知キー(将来追加されるメタ情報等)が増えてもステージが落ちない。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    beats = [
+        {
+            "time_sec": i * 0.5,
+            "beat_in_bar": (i % 4) + 1,
+            "bar": (i // 4) + 1,
+            "extra": "x",
+        }
+        for i in range(4)
+    ]
+    storage.write_json(
+        storage.beatmap_path(tmp_path, project_id),
+        {
+            "beats": beats,
+            "downbeats_sec": [b["time_sec"] for b in beats if b["beat_in_bar"] == 1],
+            "time_signatures": [
+                {"bar": 1, "numerator": 4, "denominator": 4, "confidence": 0.9}
+            ],
+            "tempo_map": [{"bar": 1, "beat": 1.0, "bpm": 120.0, "source": "beat_this"}],
+            "confidence": 1.0,
+        },
+    )
+
+    dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score(project_id)
+    assert [(ts.bar, ts.numerator, ts.denominator) for ts in score.time_signatures] == [
+        (1, 4, 4)
+    ]
+    assert [(t.bar, t.beat, t.bpm) for t in score.tempo_map] == [(1, 1.0, 120.0)]
+
+
+def test_quantize_stage_falls_back_to_common_time_without_time_signatures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#139レビュー指摘: 拍子が無いbeatmapでは4/4で補い、警告を残すこと。
+
+    空のまま上書きすると#136(拍子が無くMusicXMLが空)が再発する。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+    beatmap_file = storage.beatmap_path(tmp_path, project_id)
+    beatmap = storage.read_json(beatmap_file)
+    beatmap["time_signatures"] = []
+    storage.write_json(beatmap_file, beatmap)
+
+    dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+
+    score = ScoreService(workspace_dir=tmp_path).read_score(project_id)
+    assert [(ts.bar, ts.numerator, ts.denominator) for ts in score.time_signatures] == [
+        (1, 4, 4)
+    ]
+    assert "time_signaturesが無いため4/4(既定)で補います" in capsys.readouterr().err
+
+
+def test_quantize_stage_reports_malformed_time_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#139レビュー指摘: 欠落キーは文脈付きのValueErrorで検出すること。"""
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+    beatmap_file = storage.beatmap_path(tmp_path, project_id)
+    beatmap = storage.read_json(beatmap_file)
+    beatmap["time_signatures"] = [{"bar": 1, "numerator": 4}]  # denominator 欠落
+    storage.write_json(beatmap_file, beatmap)
+
+    with pytest.raises(ValueError, match="time_signaturesが不正です"):
+        dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+
+
 def test_quantize_stage_reruns_when_only_tempo_map_changed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
