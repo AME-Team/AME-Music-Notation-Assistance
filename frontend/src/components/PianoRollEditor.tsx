@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import type { NoteOp } from "../api/client";
 import { useScore, useScoreEditing } from "../hooks/useScore";
 import {
+  countVoiceSaturated,
   LAYER_CATEGORY_LABEL,
   type LayerCategory,
   layerCategoryForProvenance,
   type PianoRollNote,
+  SATURATED_LABEL,
 } from "../lib/pianoRoll";
 import { Inspector } from "./Inspector";
 import { PianoRoll } from "./PianoRoll";
@@ -123,6 +125,11 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
   );
   const visibleNoteIds = new Set(visibleNotes.map((n) => n.id));
 
+  // #142: 飽和(`voice_saturated`)ノートはパート単位の件数で見出しに出す
+  // (レイヤ表示で隠しているノートも含める。隠れていると「要確認が消えた」と
+  // 誤解されるため)。
+  const saturatedCount = countVoiceSaturated(editableNotes);
+
   const selectedArray = [...selectedNoteIds].filter((id) => visibleNoteIds.has(id));
   const visibleSelectedNoteIds = new Set(selectedArray);
   const canDelete = selectedArray.length >= 1;
@@ -165,7 +172,15 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
 
   return (
     <section className="space-y-3 rounded-lg border border-gray-200 p-4">
-      <h3 className="text-lg font-semibold text-gray-700">ピアノロール({part.name})</h3>
+      <div className="flex flex-wrap items-center gap-3">
+        <h3 className="text-lg font-semibold text-gray-700">ピアノロール({part.name})</h3>
+        {/* #142: 4声上限に収まらず重複が残るノートの件数(0件なら何も出さない)。 */}
+        {saturatedCount > 0 && (
+          <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+            {SATURATED_LABEL} {saturatedCount}件
+          </span>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"

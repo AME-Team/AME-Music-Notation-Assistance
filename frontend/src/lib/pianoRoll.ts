@@ -93,6 +93,77 @@ export function provenanceStyle(provenance: string): ProvenanceStyle {
   return PROVENANCE_STYLE[provenance] ?? DEFAULT_PROVENANCE_STYLE;
 }
 
+/** #142: L0(`pipeline/refine/baseline.py`)が付与する「4声上限に収まらず、同じ
+ * voice内に時間重複が残っている」フラグ。
+ *
+ * 5音以上が同時に鳴る所は、声部規則(設計書§7.4「パートあたり最大4声部」)と検証層
+ * V-7(`1 <= voice <= 4`)の両方を満たす解が存在しないため、重複が構造的に残る
+ * (#134 の設計判断により上限は4声のまま)。ユーザーが気づけるよう「要確認」として
+ * 可視化する(#142)。
+ */
+export const SATURATED_FLAG = "voice_saturated";
+
+/** #35: ゴースト候補のフラグ(斜線ハッチで示す、設計書§12.4)。 */
+export const GHOST_FLAG = "ghost_candidate";
+
+/** #142: 飽和ノートの表示名(ピアノロールの件数バッジ・Inspectorのバッジ)。 */
+export const SATURATED_LABEL = "要確認(声部が足りません)";
+
+/** #142: 飽和ノートを選択したときInspectorに出す説明(#134 の設計判断の要約)。 */
+export const SATURATED_HINT =
+  "このノートは4声上限に収まらず、同じ声部内で時間的に重複しています。" +
+  "5音以上が同時に鳴っているため、声部規則(パートあたり最大4声部)では重複を避けられません。" +
+  "音そのものは失われていません。";
+
+/** #142: 飽和ノートの線色。削除=破線/選択=黒太線/出自=各色と区別できる琥珀色。 */
+export const SATURATED_STROKE = "#b45309";
+
+/** #142: 飽和ノートに重ねるドットパターン(#35のghost=斜線ハッチと区別する)。 */
+export const SATURATED_DOT_PATTERN = {
+  color: "rgba(120, 53, 15, 0.5)",
+  spacingPx: 5,
+  radiusPx: 1,
+} as const;
+
+/** #142: 飽和ノート(`voice_saturated`)に重ねるドットパターンをCanvasへ描く。
+ *
+ * `ghost_candidate`(#35)の斜線ハッチと混同しないよう別パターンにしている。
+ * 呼び出し元が既に`ctx.save()`で囲んでいる前提だが、この関数自身も
+ * `clip()`が外へ漏れないよう`save()`/`restore()`で囲む。
+ */
+export function drawSaturatedDotPattern(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const { color, spacingPx, radiusPx } = SATURATED_DOT_PATTERN;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.fillStyle = color;
+  for (let dy = y + 2; dy < y + h; dy += spacingPx) {
+    for (let dx = x + 2; dx < x + w; dx += spacingPx) {
+      ctx.beginPath();
+      ctx.arc(dx, dy, radiusPx, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+/** #142: 飽和ノート(`voice_saturated`)かどうか(フラグ名の直書きを避ける)。 */
+export function isVoiceSaturated(note: { flags: readonly string[] }): boolean {
+  return note.flags.includes(SATURATED_FLAG);
+}
+
+/** #142: 飽和ノートの件数(ピアノロール見出しのバッジ表示に使う)。 */
+export function countVoiceSaturated(notes: readonly { flags: readonly string[] }[]): number {
+  return notes.filter(isVoiceSaturated).length;
+}
+
 /** `bar`時点で有効な拍子`(numerator, denominator)`。指定が無ければ4/4相当。
 
  * `backend/app/pipeline/time_signature.py`の`time_signature_at_bar`と同じ

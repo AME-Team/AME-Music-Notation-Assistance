@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   barBoundariesTicks,
   barNumberForTick,
+  countVoiceSaturated,
+  drawSaturatedDotPattern,
   hitTestNote,
+  isVoiceSaturated,
   midiToY,
   type PianoRollNote,
+  SATURATED_DOT_PATTERN,
+  SATURATED_FLAG,
+  SATURATED_LABEL,
   tickToX,
   timeSignatureAtBar,
   visibleNoteRange,
@@ -172,5 +178,74 @@ describe("hitTestNote", () => {
       NOTE({ id: 2, onset_tick: 0, duration_tick: 480, midi: 60 }),
     ];
     expect(hitTestNote(notes, 100, 60, 1)?.note.id).toBe(2);
+  });
+});
+
+describe("isVoiceSaturated / countVoiceSaturated", () => {
+  it("detects the voice_saturated flag that L0 attaches (#142)", () => {
+    expect(isVoiceSaturated(NOTE({ flags: [SATURATED_FLAG] }))).toBe(true);
+  });
+
+  it("does not treat ghost_candidate or flagless notes as saturated", () => {
+    expect(isVoiceSaturated(NOTE({ flags: ["ghost_candidate"] }))).toBe(false);
+    expect(isVoiceSaturated(NOTE())).toBe(false);
+  });
+
+  it("counts only the saturated notes for the header badge", () => {
+    const notes = [
+      NOTE({ id: 1, flags: [SATURATED_FLAG] }),
+      NOTE({ id: 2, flags: ["ghost_candidate", SATURATED_FLAG] }),
+      NOTE({ id: 3 }),
+    ];
+    expect(countVoiceSaturated(notes)).toBe(2);
+    expect(countVoiceSaturated([])).toBe(0);
+  });
+
+  it("keeps the label and dot pattern usable for drawing", () => {
+    expect(SATURATED_LABEL).toContain("要確認");
+    expect(SATURATED_DOT_PATTERN.spacingPx).toBeGreaterThan(0);
+    expect(SATURATED_DOT_PATTERN.radiusPx).toBeGreaterThan(0);
+  });
+});
+
+describe("drawSaturatedDotPattern", () => {
+  /** Canvasに依存せず描画呼び出しだけを記録するスタブ(#142)。 */
+  function fakeCtx() {
+    const arcs: { x: number; y: number; r: number }[] = [];
+    const ctx = {
+      save: () => undefined,
+      restore: () => undefined,
+      beginPath: () => undefined,
+      rect: () => undefined,
+      clip: () => undefined,
+      fill: () => undefined,
+      set fillStyle(_value: string) {
+        /* noop */
+      },
+      arc: (x: number, y: number, r: number) => {
+        arcs.push({ x, y, r });
+      },
+    };
+    return { ctx: ctx as unknown as CanvasRenderingContext2D, arcs };
+  }
+
+  it("draws dots inside the note rectangle", () => {
+    const { ctx, arcs } = fakeCtx();
+    drawSaturatedDotPattern(ctx, 0, 0, 20, 10);
+    // spacing 5px: x=2,7,12,17 / y=2,7 -> 4列 x 2行
+    expect(arcs).toHaveLength(8);
+    for (const arc of arcs) {
+      expect(arc.x).toBeGreaterThanOrEqual(0);
+      expect(arc.x).toBeLessThan(20);
+      expect(arc.y).toBeGreaterThanOrEqual(0);
+      expect(arc.y).toBeLessThan(10);
+      expect(arc.r).toBe(SATURATED_DOT_PATTERN.radiusPx);
+    }
+  });
+
+  it("draws nothing for a degenerate rectangle", () => {
+    const { ctx, arcs } = fakeCtx();
+    drawSaturatedDotPattern(ctx, 5, 5, 0, 0);
+    expect(arcs).toHaveLength(0);
   });
 });
