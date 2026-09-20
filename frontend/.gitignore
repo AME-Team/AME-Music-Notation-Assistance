@@ -3,3 +3,8 @@ dist/
 dist-electron/
 release/
 .vite/
+
+# #62/#80(Q-17): prepare-python-runtime.mjsが生成する同梱用Pythonランタイム。
+# サイズが大きく(数百MB)、Windows専用バイナリのためリポジトリに含めない。
+python-runtime/
+ffmpeg/

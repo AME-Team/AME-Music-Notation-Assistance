@@ -79,6 +79,29 @@ npm start
 
 ---
 
+### 3.5. Windows インストーラのビルド (配布用, #62/#80)
+
+エンドユーザー配布用の `.exe` インストーラ (NSIS) をビルドするコマンド。**Windows 上でのみ実行できる** (embeddable Python は Windows バイナリのため)。
+
+```cmd
+cd frontend
+npm run dist:win
+```
+
+内部では以下を行う:
+
+1. `npm run prepare:python-runtime` — embeddable Python 3.12 をダウンロードし、バックエンドの全依存 (`uv export` で `pyproject.toml`/`uv.lock` から取得) を pip install、`backend/app` のコピー、ffmpeg (LGPL ビルド) の同梱準備を `frontend/python-runtime/` / `frontend/ffmpeg/` に組み立てる (Q-17, #80 で決定した方式)
+2. `npm run build` — レンダラー/Electron のビルド
+3. `electron-builder --win --x64` — 上記一式を `extraResources` として含めた NSIS インストーラを `frontend/release/` に生成
+
+生成されたインストーラは **Python も Node.js も未導入の Windows マシン**でアプリ自体は単体で起動できる (#62 完了条件)。ただし **初回のパイプライン実行時のみ**、Demucs (htdemucs_6s, ~150MB)・beat-this・ByteDance Piano Transcription (~165MB)・Basic Pitch (Guitar/Other, ~230KB) の各モデルファイルがそれぞれのライブラリの標準機構により自動ダウンロードされる (Q-17, #80。以降はキャッシュされ再ダウンロードしない)。そのためインターネット接続と数百MB程度の空き容量が必要になる。GitHub Actions の `Windows Installer` ワークフロー (`.github/workflows/windows-installer.yml`, 手動トリガー) でも同じ手順を実行できる。
+
+**未署名であることに注意**: コード署名は行っていない (作編曲者本人が単独で使うツールであり証明書取得コストに見合わないと判断、#80)。インストーラ実行時に Windows SmartScreen の警告が表示されるが、「詳細情報」→「実行」で続行できる。
+
+**同梱ライブラリのライセンス**: ffmpeg は LGPL ビルド ([BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)) を同梱しており、`resources/ffmpeg/LICENSE.txt` にライセンス全文を含めている。ソースの入手先は同リポジトリ ([ffmpeg.org](https://ffmpeg.org/) 本体のミラー配布) を参照。
+
+---
+
 ### 4. 開発者向け個別コマンド (単体テスト・API単体起動など)
 
 バックエンド単体でのテストや API 動作確認を行いたい場合のみ、以下を使用します:
