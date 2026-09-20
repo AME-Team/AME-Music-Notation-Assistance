@@ -9,7 +9,15 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 
 from app.config import Settings
-from app.domain.score import Clef, Note, Part, ScoreIR, SourceInfo, Spelling
+from app.domain.score import (
+    Clef,
+    Note,
+    Part,
+    ScoreIR,
+    SourceInfo,
+    Spelling,
+    TimeSignatureEntry,
+)
 from app.infra import storage
 from app.services.score_service import ScoreService
 from fastapi.testclient import TestClient
@@ -28,6 +36,9 @@ def _write_score(settings: Settings, project_id: str, *, quantized: bool) -> Non
     score = ScoreIR(
         project_id=project_id,
         source=SourceInfo(filename="song.wav", duration_sec=2.0, sample_rate=8000),
+        # 量子化済みスコアには拍子が入る(#136)。拍子が無いとpartituraが小節を
+        # 生成できず、MusicXMLがノート0件になる(#137で検知対象にした症状そのもの)。
+        time_signatures=[TimeSignatureEntry(bar=1, numerator=4, denominator=4)],
     )
     part = Part(
         id="piano",
@@ -108,7 +119,10 @@ def test_export_musicxml_returns_valid_document_and_persists_it(
     )
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"] == "application/vnd.recordare.musicxml+xml"
-    ET.fromstring(resp.content)  # 有効なXMLとしてパースできる
+    root = ET.fromstring(resp.content)  # 有効なXMLとしてパースできる
+    # #137: パースできるだけでなく、入力ノートが実際に書き出されていることまで見る
+    # (空のMusicXMLでもXMLとしては妥当なため)。
+    assert len(root.findall(".//note")) == 1
 
     saved = storage.musicxml_export_path(settings.workspace_dir, project_id)
     assert saved.exists()
@@ -168,6 +182,9 @@ def _write_score_with_two_parts(settings: Settings, project_id: str) -> None:
     score = ScoreIR(
         project_id=project_id,
         source=SourceInfo(filename="song.wav", duration_sec=2.0, sample_rate=8000),
+        # 量子化済みスコアには拍子が入る(#136)。拍子が無いとpartituraが小節を
+        # 生成できず、MusicXMLがノート0件になる(#137で検知対象にした症状そのもの)。
+        time_signatures=[TimeSignatureEntry(bar=1, numerator=4, denominator=4)],
     )
     for part_id, name, midi in (("piano", "Piano", 60), ("bass", "Bass", 40)):
         part = Part(
