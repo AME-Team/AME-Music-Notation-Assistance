@@ -356,7 +356,9 @@ def test_implicit_keep_note_voice_is_repaired_without_a_decision() -> None:
     assert result.chunks_ok == 1
     staged_by_id = {note.id: note for note in _staged_notes(result)}
     assert staged_by_id[later.id].voice == 2
-    assert staged_by_id[later.id].provenance == "llm"
+    # #109レビュー指摘: 機械的修復はLLMの判断ではないため、`llm`ではなく
+    # `baseline`(決定論的整音)として区別できること。
+    assert staged_by_id[later.id].provenance == "baseline"
     assert "V-8自動修復" in (staged_by_id[later.id].ai_reason or "")
     assert len(result.voice_repairs) == 1
 
@@ -428,9 +430,12 @@ def test_saturated_overlap_cannot_be_repaired_and_is_still_rejected() -> None:
     assert result.chunks_ok == 0
     assert result.chunks_rejected == 1
     assert result.voice_repairs == []
-    assert any(
-        "V-8自動修復を試行したが" in reason for reason in result.rejected_reasons
-    )
+    reason = next(r for r in result.rejected_reasons if "V-8自動修復を試行したが" in r)
+    # #109レビュー指摘: 列挙した違反(reasons)と件数(len(remaining))が一致すること。
+    remaining_part, attempted_part = reason.split("(修復前の違反: ")
+    assert "が1件の違反が残る" in reason  # 4声に収まらない1件だけが残る
+    assert remaining_part.count("V-8(") == 1  # 件数表示と列挙が一致
+    assert attempted_part.count("V-8(") == 4  # 修復前は暗黙keepも含め4件
 
 
 def test_notes_in_different_bars_with_same_relative_beat_are_not_rejected() -> None:

@@ -58,6 +58,8 @@ def test_system_prompt_repeats_the_voice_rule_right_before_generation() -> None:
     )
     assert "同じvoiceに\n  まとめてはならない" in prompt
     assert "別のvoiceへ回すこと" in prompt
+    # #109レビュー指摘: 文言は実装(検証層の自動修復)と一致していること。
+    assert "決定論的に再割当して自動修復する" in prompt
     assert "チャンク全体の提案が採用されない" in prompt
 
 

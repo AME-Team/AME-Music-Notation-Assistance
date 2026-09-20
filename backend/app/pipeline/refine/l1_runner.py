@@ -371,8 +371,15 @@ def apply_voice_overrides(
     """L1がdecisionを出していない暗黙keepノートのvoiceを修復結果で更新する(#109)。
 
     これらは`staged`の`Note`を直接更新する(`decision`を持たないため
-    `apply_chunk_decisions`では表現できない)。変更の根拠が機械的修復であることを
-    `ai_reason`に残し、`provenance`は`llm`(このrunがstagedへ加えた変更)とする。
+    `apply_chunk_decisions`では表現できない)。
+
+    `provenance`は`baseline`(=決定論的整音。`NoteProvenance`の既存値でUIでも
+    「L0(決定論的整音済み)」と表示される)とする(#109レビュー指摘: LLMの判断と
+    検証層の機械的修復を区別できないと、下流のDiffPanel/L2がAIの選択と混同する)。
+    ここで更新するノートはAIのdecisionを一切持たず、変更全体が機械的修復なので
+    `llm`にできない。一方、AIのdecisionを持つノート(`repair_voice_conflicts`が
+    decisionのvoiceを修正した場合)は、spelling等の他のフィールドがAIの判断のため
+    `llm`のままとし、`decision.reason`に追記した修復内容が`ai_reason`へ伝わる。
     """
     for note_id, voice in sorted(voice_overrides.items()):
         note = notes_by_id.get(note_id)
@@ -380,7 +387,7 @@ def apply_voice_overrides(
             continue
         previous = note.voice
         note.voice = voice
-        note.provenance = "llm"
+        note.provenance = "baseline"
         note.provenance_run_id = run_id
         note.ai_reason = f"V-8自動修復: voice {previous} -> {voice}(L1のdecision無し)"
 
@@ -438,10 +445,14 @@ def verify_and_apply_chunk_decisions(
                     f"bars {chunk.context.bars.target} {repair}" for repair in repairs
                 )
                 return True, None
-            reasons = "; ".join(f"{v.rule}(note {v.note_id}): {v.message}" for v in violations)
+            attempted = "; ".join(f"{v.rule}(note {v.note_id})" for v in violations)
+            remaining_reasons = "; ".join(
+                f"{v.rule}(note {v.note_id}): {v.message}" for v in remaining
+            )
             return False, (
-                f"bars {chunk.context.bars.target}: {reasons} "
-                f"(V-8自動修復を試行したが{len(remaining)}件の違反が残る)"
+                f"bars {chunk.context.bars.target}: V-8自動修復を試行したが"
+                f"{len(remaining)}件の違反が残る: {remaining_reasons} "
+                f"(修復前の違反: {attempted})"
             )
 
     if violations:
