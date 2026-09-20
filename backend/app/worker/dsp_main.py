@@ -26,7 +26,18 @@ import soundfile as sf
 
 from app.config import resolve_workspace_dir
 from app.domain.migrations import migrate_to_current
-from app.domain.score import Clef, Note, Part, Pedal, ScoreIR, SnapCandidate, SourceInfo, Spelling
+from app.domain.score import (
+    Clef,
+    Note,
+    Part,
+    Pedal,
+    ScoreIR,
+    SnapCandidate,
+    SourceInfo,
+    Spelling,
+    TempoMapEntry,
+    TimeSignatureEntry,
+)
 from app.infra import storage
 from app.pipeline.beat import run_beat_estimation
 from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_pedal_ticks
@@ -86,6 +97,50 @@ def _reset_undo_history_or_warn(workspace_dir: Path, project_id: str) -> None:
             f"[dsp_main] warning: failed to reset undo history for project {project_id}: {exc}",
             file=sys.stderr,
         )
+
+
+def _beatmap_time_signatures(beatmap: dict) -> list[TimeSignatureEntry]:
+    """`beatmap.json`の`time_signatures`を`TimeSignatureEntry`へ変換する(#136)。
+
+    beatmap側の生dictを`**entry`でそのまま展開しない(#139レビュー指摘: beatmapに
+    未知キーが増える/キー名が変わると`TypeError`でquantizeステージ全体が落ち、
+    クロスファイル契約が暗黙になる)。既知フィールドだけを明示的に取り出し、
+    欠落・型不正は文脈付きの`ValueError`にする。
+    """
+    entries: list[TimeSignatureEntry] = []
+    for entry in beatmap.get("time_signatures", []):
+        try:
+            entries.append(
+                TimeSignatureEntry(
+                    bar=int(entry["bar"]),
+                    numerator=int(entry["numerator"]),
+                    denominator=int(entry["denominator"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"beatmap.jsonのtime_signaturesが不正です: {entry!r} ({type(exc).__name__}: {exc})"
+            ) from exc
+    return entries
+
+
+def _beatmap_tempo_map(beatmap: dict) -> list[TempoMapEntry]:
+    """`beatmap.json`の`tempo_map`を`TempoMapEntry`へ変換する(#136、上と同方針)。"""
+    entries: list[TempoMapEntry] = []
+    for entry in beatmap.get("tempo_map", []):
+        try:
+            entries.append(
+                TempoMapEntry(
+                    bar=int(entry["bar"]),
+                    beat=float(entry["beat"]),
+                    bpm=float(entry["bpm"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"beatmap.jsonのtempo_mapが不正です: {entry!r} ({type(exc).__name__}: {exc})"
+            ) from exc
+    return entries
 
 
 def _package_version(name: str) -> str:
@@ -398,6 +453,12 @@ QUANTIZABLE_STEM_NAMES = (
 # 導出する(#128レビュー指摘: 別リテラルで二重管理すると、将来パートが増えた際に
 # 片方だけ更新され不整合になる)。
 _SINGLE_STAFF_STEM_NAMES = frozenset(QUANTIZABLE_STEM_NAMES) - {PIANO_STEM_NAME}
+
+# #136: この定数を上げるとquantizeステージの入力ハッシュが変わり、既存プロジェクトも
+# 再実行されて`ScoreIR`が更新される(`beatmap.json`の拍子・テンポの取り込みは
+# 「入力が同じでも出力が変わる」変更のため、`transcribe`の`*_ALGO_VERSION`と同じ
+# 仕組みで明示的に再計算させる)。v2: 拍子・テンポを`ScoreIR`へ取り込む修正。
+QUANTIZE_ALGO_VERSION = 2
 
 
 def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
@@ -1036,9 +1097,13 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         {
             "beats": beatmap.get("beats", []),
             "time_signatures": beatmap.get("time_signatures", []),
+            # #136: テンポマップもこのステージが`ScoreIR`へ取り込む入力になったため、
+            # テンポだけが変わった場合も再実行されるようにする。
+            "tempo_map": beatmap.get("tempo_map", []),
             "parts": parts_snapshot,
             "divisions": score.divisions,
             "music21_version": music21_version,
+            "quantize_algo_version": QUANTIZE_ALGO_VERSION,
         },
         sort_keys=True,
     )
@@ -1060,6 +1125,31 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
             }
         )
         return
+
+    # #136: `beatmap.json`の拍子・テンポを`ScoreIR`へ取り込む。`_initial_score_ir`
+    # のdocstringが「Stage 4(#25)がbeatmap.jsonから取り込む」と明記している処理が
+    # 実装されておらず、**書き出したMusicXMLが空(拍子が無いとpartituraが小節を
+    # 生成できない)**という重大な欠落になっていた(#60の実曲検証で発覚)。
+    # 小節境界(`tick_to_bar_beat`)・コード進行(`ensure_chords`)・L1プロンプトの
+    # 楽曲コンテキストがすべてこの値に依存するため、tick変換より前に確定させる。
+    # スキップ判定の後に行う(スキップ時は`current.json`へ一切書き込まない)。
+    score.time_signatures = _beatmap_time_signatures(beatmap)
+    if not score.time_signatures:
+        # 拍子が1つも無いとpartituraが小節を生成できず、書き出したMusicXMLが
+        # 空になる(#136)。旧形式のbeatmapや拍子推定の失敗に備えて4/4で補い、
+        # 補ったことをログに残す(#139レビュー指摘: 空のまま上書きして再発させない)。
+        print(
+            "[dsp_main] warning: beatmap.jsonにtime_signaturesが無いため4/4(既定)で補います",
+            file=sys.stderr,
+        )
+        score.time_signatures = [TimeSignatureEntry(bar=1, numerator=4, denominator=4)]
+    score.tempo_map = _beatmap_tempo_map(beatmap)
+    if not score.tempo_map:
+        print(
+            "[dsp_main] warning: beatmap.jsonにtempo_mapが無いためテンポ情報なしで"
+            "進みます(既定120bpm扱い)",
+            file=sys.stderr,
+        )
 
     # 全パート分のノートをまとめて1回でtick変換する(スウィング検出・ビート
     # アンカー計算は曲全体で共有すべきであり、パートごとに個別計算すると
@@ -1168,7 +1258,10 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         project_id,
         "quantize",
         params_hash=hash_value,
-        provider_versions={"music21": music21_version},
+        provider_versions={
+            "music21": music21_version,
+            "quantize_algo_version": str(QUANTIZE_ALGO_VERSION),
+        },
     )
     total_notes = len(all_active_notes)
     parts_summary = ", ".join(
