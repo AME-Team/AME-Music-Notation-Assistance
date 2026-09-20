@@ -2,10 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import type { NoteOp } from "../api/client";
 import {
   barBoundariesTicks,
+  drawSaturatedDotPattern,
+  GHOST_FLAG,
   hitTestNote,
+  isVoiceSaturated,
   midiToY,
   type PianoRollNote,
   provenanceStyle,
+  SATURATED_STROKE,
   type TimeSignatureEntry,
   tickToX,
   visibleNoteRange,
@@ -226,11 +230,16 @@ export function PianoRoll({
       ctx.fillStyle = style.fill;
       ctx.fillRect(rectX, rectY, rectW, rectH);
 
-      // #35: `flags: ghost_candidate`は斜線ハッチを塗りの上に重ねる
-      // (現状どのパイプラインも設定しないため実際には描画されないが、
-      // 汎用的なロジックとして実装しておく)。
-      if (note.flags.includes("ghost_candidate")) {
+      // #35: `flags: ghost_candidate`は斜線ハッチを塗りの上に重ねる。
+      if (note.flags.includes(GHOST_FLAG)) {
         drawDiagonalHatch(ctx, rectX, rectY, rectW, rectH);
+      }
+
+      // #142: 4声上限に収まらず重複が残るノート(`voice_saturated`)は、
+      // ghost(斜線)と区別できるドットパターンを重ねる。
+      const isSaturated = isVoiceSaturated(note);
+      if (isSaturated) {
+        drawSaturatedDotPattern(ctx, rectX, rectY, rectW, rectH);
       }
 
       // 枠線: 削除済みは出自のパターンによらず常に破線に上書きする
@@ -238,9 +247,11 @@ export function PianoRoll({
       // (黒系)の太線に上書きし、色覚特性に関わらず輝度差で選択状態を判別
       // できるようにする(`user`出自のオレンジ太線と紛らわしくならないよう、
       // 以前の琥珀色ではなくこちらを使う)。
-      ctx.setLineDash(isDeleted ? [6, 3] : style.dash);
-      ctx.lineWidth = isSelected ? 2 : style.lineWidth;
-      ctx.strokeStyle = isSelected ? "#111827" : style.stroke;
+      // #142: 飽和ノートは「実線・2px・琥珀色」にする(削除=破線/選択=黒太線/
+      // 出自=各色と区別でき、選択中でもドットパターンで飽和だと分かる)。
+      ctx.setLineDash(isDeleted ? [6, 3] : isSaturated ? [] : style.dash);
+      ctx.lineWidth = isSelected ? 2 : isSaturated ? 2 : style.lineWidth;
+      ctx.strokeStyle = isSelected ? "#111827" : isSaturated ? SATURATED_STROKE : style.stroke;
       ctx.strokeRect(rectX + 0.5, rectY + 0.5, rectW - 1, rectH - 1);
       ctx.restore();
     }

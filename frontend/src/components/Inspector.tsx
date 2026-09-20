@@ -1,6 +1,12 @@
 import { type FormEvent, useState } from "react";
 import type { NoteOp, ScoreNote } from "../api/client";
-import { PROVENANCE_LABEL, provenanceStyle } from "../lib/pianoRoll";
+import {
+  isVoiceSaturated,
+  PROVENANCE_LABEL,
+  provenanceStyle,
+  SATURATED_HINT,
+  SATURATED_LABEL,
+} from "../lib/pianoRoll";
 
 interface InspectorProps {
   /** 単一選択時のみノートを渡す(0件/複数選択時は`null`)。 */
@@ -78,6 +84,8 @@ function InspectorForm({
   // ピアノロール上のクリックで復活させるのが本来の操作導線、設計書§12.4)。
   const isEditable = note.status === "active";
   const style = provenanceStyle(note.provenance);
+  // #142: `voice_saturated`(4声上限に収まらず重複が残る)は「要確認」として出す。
+  const isSaturated = isVoiceSaturated(note);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -128,6 +136,12 @@ function InspectorForm({
         <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
           {STATUS_LABEL[note.status] ?? note.status}
         </span>
+        {/* #142: 4声上限に収まらず重複が残るノート(要確認)。 */}
+        {isSaturated && (
+          <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+            {SATURATED_LABEL}
+          </span>
+        )}
         <span className="text-xs text-gray-500">信頼度 {Math.round(note.confidence * 100)}%</span>
       </div>
 
@@ -143,6 +157,12 @@ function InspectorForm({
             : "(未設定)"}
         </dd>
       </dl>
+
+      {isSaturated && (
+        <p className="text-sm text-amber-700" role="status">
+          {SATURATED_HINT}
+        </p>
+      )}
 
       {!isEditable && (
         <p className="text-sm text-amber-600">
