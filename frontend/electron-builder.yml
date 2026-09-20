@@ -22,6 +22,17 @@ extraResources:
 # コード署名は見送り(#80で決定): 本アプリは開発者本人が単独で使うツール
 # (設計書§2.3)であり、証明書取得コストに見合わない。未署名のため初回起動時に
 # Windows SmartScreenの警告が表示される(README/インストーラ説明に明記する)。
+#
+# ネイティブモジュールの自動リビルドを無効化する(#62、実際のwindows-latest CI
+# ビルドで発覚): 本アプリの`dependencies`(package.json)にネイティブモジュールは
+# 一切無い(重い処理は同梱するPythonバックエンド側が担う)。唯一存在するネイティブ
+# モジュールは`opensheetmusicdisplay`の`optionalDependencies`である`gl`
+# (ブラウザ外のヘッドレスWebGL用途、Electron上ではChromium自体がWebGLを提供する
+# ため本アプリでは一切使われない)で、`electron-builder`が既定で行う
+# `@electron/rebuild`がこれを検出してWindows向けにビルドしようとし、MSVCの
+# リンクエラー(v8 ABI不一致によるGetBackingStore未解決シンボル)で必ず失敗して
+# いた。ビルド不要なので無効化する。
+npmRebuild: false
 win:
   target: nsis
   artifactName: ${productName}-${version}-setup.${ext}
