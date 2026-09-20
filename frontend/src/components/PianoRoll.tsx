@@ -247,11 +247,17 @@ export function PianoRoll({
       // (黒系)の太線に上書きし、色覚特性に関わらず輝度差で選択状態を判別
       // できるようにする(`user`出自のオレンジ太線と紛らわしくならないよう、
       // 以前の琥珀色ではなくこちらを使う)。
-      // #142: 飽和ノートは「実線・2px・琥珀色」にする(削除=破線/選択=黒太線/
-      // 出自=各色と区別でき、選択中でもドットパターンで飽和だと分かる)。
+      // #142: 飽和ノートは「実線・2px・琥珀色」にする(選択=黒太線/出自=各色と
+      // 区別でき、選択中でもドットパターンで飽和だと分かる)。ただし**削除済みは
+      // 既存の規約(破線+出自色+半透明)を維持**し、飽和はドットパターンのみで示す
+      // (#142レビュー指摘: 破線+琥珀という凡例に無い組み合わせを作らない)。
       ctx.setLineDash(isDeleted ? [6, 3] : isSaturated ? [] : style.dash);
-      ctx.lineWidth = isSelected ? 2 : isSaturated ? 2 : style.lineWidth;
-      ctx.strokeStyle = isSelected ? "#111827" : isSaturated ? SATURATED_STROKE : style.stroke;
+      ctx.lineWidth = isSelected ? 2 : isSaturated && !isDeleted ? 2 : style.lineWidth;
+      ctx.strokeStyle = isSelected
+        ? "#111827"
+        : isSaturated && !isDeleted
+          ? SATURATED_STROKE
+          : style.stroke;
       ctx.strokeRect(rectX + 0.5, rectY + 0.5, rectW - 1, rectH - 1);
       ctx.restore();
     }
