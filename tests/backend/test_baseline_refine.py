@@ -11,10 +11,19 @@ from app.domain.invariants import ValidationNote, validate_decisions
 from app.pipeline.refine.baseline import (
     GHOST_MAX_DURATION_SEC,
     GHOST_MAX_VELOCITY,
+    MAX_VOICES,
+    VOICE_SATURATION_FLAG,
+    RefinedNote,
     RefineNoteInput,
     estimate_key_fifths,
     refine_baseline,
 )
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+# テスト用の量子化格子(divisions=480、4/4)。1拍=480tick、1小節=1920tick。
+_TICKS_PER_BEAT = 480
+_BAR_TICKS = 4 * _TICKS_PER_BEAT
 
 
 def _note(
@@ -40,6 +49,28 @@ def _note(
         flags=flags,
         is_user=is_user,
     )
+
+
+def _validation_notes(
+    notes: list[RefineNoteInput], result: dict[int, RefinedNote]
+) -> list[ValidationNote]:
+    """L0の出力(voice)を検証層V-8へ渡すための`ValidationNote`群を組み立てる。
+
+    1小節(1〜4拍)に収まる前提で、tick位置を小節内beatへ換算する
+    (`ValidationNote.onset_beat`は小節内相対値のため小節頭を1.0とする)。
+    """
+    return [
+        ValidationNote(
+            id=note.id,
+            editable=True,
+            midi=note.midi,
+            bar=1,
+            onset_beat=1.0 + note.onset_tick / _TICKS_PER_BEAT,
+            duration_beat=(note.duration_tick or 0) / _TICKS_PER_BEAT,
+            voice=result[note.id].voice,
+        )
+        for note in notes
+    ]
 
 
 def _c_major_context(*, start_id: int, start_tick: int) -> list[RefineNoteInput]:
@@ -266,22 +297,163 @@ class TestRefineBaselineIntervalVoiceAssignment:
             _note(3, midi=60, onset_tick=960, duration_tick=480),
         ]
         result = refine_baseline(notes)
-        validation_notes = [
-            ValidationNote(
-                id=n.id,
-                editable=True,
-                midi=n.midi,
-                bar=1,
-                onset_beat=1.0 + n.onset_tick / 480,
-                duration_beat=(n.duration_tick or 0) / 480,
-                voice=result[n.id].voice,
-            )
-            for n in notes
-        ]
+        validation_notes = _validation_notes(notes, result)
 
         violations = validate_decisions([], notes=validation_notes, part_staves=1)
 
         assert violations == []
+
+
+class TestRefineBaselineVoiceSaturation:
+    """4声上限(§7.4/V-7)に達した場合の明示的な挙動(#134)。
+
+    現在の記譜規則では「同一voice・同一時刻の複数ノート」を不正とするため、
+    N音が同時に鳴る所はN声を要する。一方で声部数は4に固定されている
+    (設計書§7.4・記譜ルール集・検証層V-7)ため、**5音以上の同時発音を含む入力に
+    対して重複の無い解は存在しない**(鳩の巣原理)。ここでは「無言で通さない」
+    ことを保証する: 上限は守り、残る重複はフラグで明示し、その件数を固定する。
+    上限の緩和/ノート削除という根本対応は設計判断のため#134で起票済み。
+    """
+
+    def test_four_voice_cap_is_kept_for_five_or_more_simultaneous_notes(self) -> None:
+        notes = [
+            _note(i, midi=60 + i, onset_tick=0, duration_tick=480) for i in range(1, 7)
+        ]
+        result = refine_baseline(notes)
+
+        assert max(r.voice for r in result.values()) <= MAX_VOICES
+
+    def test_excess_notes_are_flagged_as_saturated(self) -> None:
+        notes = [
+            _note(i, midi=60 + i, onset_tick=0, duration_tick=480) for i in range(1, 7)
+        ]
+        result = refine_baseline(notes)
+
+        flagged = {
+            note_id
+            for note_id, refined in result.items()
+            if VOICE_SATURATION_FLAG in refined.flags
+        }
+
+        assert len(flagged) == len(notes) - MAX_VOICES
+
+    def test_remaining_v8_violations_are_never_fewer_than_the_excess(self) -> None:
+        """飽和時のV-8違反は「4声上限を超えた分」だけ残る(上限では消せない)。"""
+        notes = [
+            _note(i, midi=60 + i, onset_tick=0, duration_tick=480) for i in range(1, 7)
+        ]
+        result = refine_baseline(notes)
+
+        violations = [
+            v
+            for v in validate_decisions(
+                [], notes=_validation_notes(notes, result), part_staves=1
+            )
+            if v.rule == "V-8"
+        ]
+
+        assert len(violations) >= len(notes) - MAX_VOICES
+
+    def test_four_simultaneous_notes_are_exactly_at_the_limit_and_have_no_violation(
+        self,
+    ) -> None:
+        notes = [
+            _note(i, midi=60 + i, onset_tick=0, duration_tick=480) for i in range(1, 5)
+        ]
+        result = refine_baseline(notes)
+
+        assert (
+            validate_decisions(
+                [], notes=_validation_notes(notes, result), part_staves=1
+            )
+            == []
+        )
+        assert all(
+            VOICE_SATURATION_FLAG not in refined.flags for refined in result.values()
+        )
+
+    def test_saturation_flag_coexists_with_ghost_flag(self) -> None:
+        """飽和フラグの付与がghostフラグを消さないこと(両者は独立)。"""
+        notes = [
+            _note(i, midi=60 + i, onset_tick=0, duration_tick=480) for i in range(1, 5)
+        ]
+        notes.append(
+            _note(
+                9,
+                midi=60,  # 最も低い音=最後に割り当てられ、飽和する側になる
+                onset_tick=0,
+                duration_tick=480,
+                duration_sec=0.01,
+                velocity=GHOST_MAX_VELOCITY - 1,
+                confidence=0.1,
+            )
+        )
+        result = refine_baseline(notes)
+
+        ghost_and_saturated = [
+            refined
+            for refined in result.values()
+            if VOICE_SATURATION_FLAG in refined.flags
+            and "ghost_candidate" in refined.flags
+        ]
+
+        assert len(ghost_and_saturated) == 1
+        assert ghost_and_saturated[0].flags.count(VOICE_SATURATION_FLAG) == 1
+
+
+class TestRefineBaselineV8WithinTheVoiceEnvelope:
+    """同時発音が4音以内に収まる入力では、L0の出力が**必ず**V-8を通過すること。
+
+    4声上限は「重なりが最大4音までなら重複なく記譜できる」ことを意味する。
+    その範囲でアルゴリズムが破綻しないことをプロパティテストで保証する
+    (飽和時は#134のとおり構造上重複が残りうるため、この前提を明示する)。
+    """
+
+    @staticmethod
+    def _note_stream(data: st.DataObject) -> list[RefineNoteInput]:
+        """同時に鳴る音が常に4音以下になるよう制約した和音列を生成する。"""
+        notes: list[RefineNoteInput] = []
+        next_id = 1
+        onset_tick = 0
+        for _ in range(data.draw(st.integers(min_value=1, max_value=8))):
+            onset_tick += data.draw(st.sampled_from([0, 120, 240, 480, 960]))
+            size = data.draw(st.integers(min_value=1, max_value=4))
+            duration_tick = data.draw(st.sampled_from([120, 240, 480, 960]))
+            sounding = sum(
+                1
+                for note in notes
+                if note.onset_tick + (note.duration_tick or 0) > onset_tick
+            )
+            # 4声で記譜できない入力(同時5音以上)と、小節(1小節=1920tick)を
+            # 越える入力は生成しない。
+            if sounding + size > MAX_VOICES or onset_tick + duration_tick >= _BAR_TICKS:
+                break
+            for index in range(size):
+                notes.append(
+                    _note(
+                        next_id,
+                        midi=60 + index * 3,  # 同一staff(>=MIDDLE_C)内の異なる音高
+                        onset_tick=onset_tick,
+                        duration_tick=duration_tick,
+                    )
+                )
+                next_id += 1
+        return notes
+
+    @given(data=st.data())
+    @settings(max_examples=50, deadline=None)
+    def test_output_never_violates_v8_within_the_envelope(
+        self, data: st.DataObject
+    ) -> None:
+        notes = self._note_stream(data)
+
+        result = refine_baseline(notes)
+        violations = validate_decisions(
+            [], notes=_validation_notes(notes, result), part_staves=1
+        )
+
+        assert violations == []
+        assert all(1 <= refined.voice <= MAX_VOICES for refined in result.values())
 
 
 class TestRefineBaselineSingleStaff:

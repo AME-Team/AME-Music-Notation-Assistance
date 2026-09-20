@@ -32,6 +32,11 @@ GHOST_MAX_CONFIDENCE = 0.35
 GHOST_MAX_DURATION_SEC = 0.06
 GHOST_MAX_VELOCITY = 25
 MAX_VOICES = 4
+# 4声上限(設計書§7.4/検証層V-7)に達し、同一voice内の時間重複を避けられなかった
+# ノートに付与するフラグ(#130/#134)。重複が構造上不可避であることを無言にせず、
+# 下流(L1のチャンク入力、L2の`score_query`の`flags_contains`、将来のUI表示)が
+# 判別できるようにする。
+VOICE_SATURATION_FLAG = "voice_saturated"
 
 
 @dataclass(frozen=True)
@@ -148,7 +153,7 @@ def _conflicts_in_voice(last_onset: int, last_end: int | None, note: RefineNoteI
 
 def _assign_voices_in_interval_order(
     notes: list[RefineNoteInput], *, staff: int
-) -> dict[int, tuple[int, int]]:
+) -> tuple[dict[int, tuple[int, int]], frozenset[int]]:
     """区間(interval)ベースのvoice割当(#130)。
 
     `_assign_staff_and_voice`(ピアノの大譜表、staffごとに呼ぶ)と
@@ -167,10 +172,11 @@ def _assign_voices_in_interval_order(
     従来の挙動(#26/#56)は、同一開始tickのノートを高音順に処理し、各ノートが
     直前のノートと衝突するため自然に保たれる。
 
-    4声すべてが衝突する場合(5音以上の同時発音、または4声を使い切るほど密な
-    重なり)は、**最も早く終わるvoice**へ回す(重なり幅を最小化する。同点は
-    若い番号を優先)。この場合の重複は声部数上限に起因するもので避けられず、
-    検証層(V-8)に掛かる可能性が残る既知の制約として扱う。
+    Returns:
+        `(staff, voice)`のマッピングと、**飽和したノートID**の集合。飽和とは
+        4声すべてが衝突していて、どのvoiceへ回しても同一voice内の重複が残る
+        状態を指す(#134で設計判断を起票済み)。飽和ノートは
+        `VOICE_SATURATION_FLAG`で可視化される(`refine_baseline`参照)。
 
     userノートも「そのタイミングで音が鳴っている」という事実として処理に含める
     (=voice番号を1つ消費させる、#26から継続する挙動)が、userノート自身は戻り値に
@@ -180,6 +186,7 @@ def _assign_voices_in_interval_order(
     last_onset: dict[int, int] = {}
     voice_end: dict[int, int | None] = {}
     result: dict[int, tuple[int, int]] = {}
+    saturated: set[int] = set()
     for note in ordered:
         end_tick = _note_end_tick(note)
         free_voices = [
@@ -188,17 +195,26 @@ def _assign_voices_in_interval_order(
             if voice not in last_onset
             or not _conflicts_in_voice(last_onset[voice], voice_end[voice], note)
         ]
-        voice = (
-            free_voices[0]
-            if free_voices
-            else min(
+        if free_voices:
+            voice = free_voices[0]
+        else:
+            # 4声すべてが衝突している(※)。設計書§7.4の「パートあたり最大4声部」と
+            # 検証層V-7(`1 <= voice <= 4`)を守る限り、5音以上の同時発音を含む
+            # 入力に対して重複の無い解は存在しない(鳩の巣原理)。重複を消すには
+            # 声部数上限の緩和(設計変更)かノートの削除が必要で、いずれも
+            # ここでは選べないため、重なり幅が最小になるvoiceへ回して
+            # `voice_saturated`フラグで可視化するに留める(#134)。
+            #
+            # ※「すべて衝突」= 直前ノートの終了位置が本ノートの開始位置より
+            #   後か、開始位置が同一(同時発音)であるvoiceしか無い状態。
+            voice = min(
                 range(1, MAX_VOICES + 1),
                 key=lambda v: (
                     voice_end[v] if voice_end[v] is not None else note.onset_tick,
                     v,
                 ),
             )
-        )
+            saturated.add(note.id)
         last_onset[voice] = note.onset_tick
         previous_end = voice_end.get(voice)
         # 音価不明のノートは「開始位置で終わる」ものとして扱い、後続ノートとの
@@ -207,10 +223,12 @@ def _assign_voices_in_interval_order(
         voice_end[voice] = new_end if previous_end is None else max(previous_end, new_end)
         if not note.is_user:
             result[note.id] = (staff, voice)
-    return result
+    return result, frozenset(saturated)
 
 
-def _assign_staff_and_voice(notes: list[RefineNoteInput]) -> dict[int, tuple[int, int]]:
+def _assign_staff_and_voice(
+    notes: list[RefineNoteInput],
+) -> tuple[dict[int, tuple[int, int]], frozenset[int]]:
     """MIDI60でstaffを分け(§7.4)、staff内で発音区間の重なりに応じてvoiceを割る
 
     (#26/#130)。大譜表(ト音部/へ音部の2段)を持つピアノパート専用
@@ -219,20 +237,27 @@ def _assign_staff_and_voice(notes: list[RefineNoteInput]) -> dict[int, tuple[int
     参照してしまう)。
 
     voice番号はstaffごとに独立して1から振る(L0の契約。#56で単一譜表パートにも
-    同じ規則を適用した)。
+    同じ規則を適用した)。戻り値の第2要素は飽和ノートIDの集合(#134)。
     """
     by_staff: dict[int, list[RefineNoteInput]] = {1: [], 2: []}
     for note in notes:
         by_staff[1 if note.midi >= MIDDLE_C else 2].append(note)
 
     result: dict[int, tuple[int, int]] = {}
+    saturated: set[int] = set()
     for staff, staff_notes in by_staff.items():
         if staff_notes:
-            result.update(_assign_voices_in_interval_order(staff_notes, staff=staff))
-    return result
+            staff_voices, staff_saturated = _assign_voices_in_interval_order(
+                staff_notes, staff=staff
+            )
+            result.update(staff_voices)
+            saturated |= staff_saturated
+    return result, frozenset(saturated)
 
 
-def _assign_voice_single_staff(notes: list[RefineNoteInput]) -> dict[int, tuple[int, int]]:
+def _assign_voice_single_staff(
+    notes: list[RefineNoteInput],
+) -> tuple[dict[int, tuple[int, int]], frozenset[int]]:
     """単一譜表パート(bass/vocals/guitar/other)向けのvoice割当(#56/#130)。
 
     `_assign_staff_and_voice`のMIDDLE_C分割によるstaff振り分けは行わず、
@@ -240,7 +265,7 @@ def _assign_voice_single_staff(notes: list[RefineNoteInput]) -> dict[int, tuple[
     割り振る。bass/vocalsはモノフォニックなため通常voice=1のみを使うが、
     guitar/otherは和音を弾きうるため、これが無いと同一onset_tickの複数ノートが
     全てvoice=1へ潰れ、MusicXML上不正な重複ノートになりうる
-    (#56 Gate2レビュー指摘への対応)。
+    (#56 Gate2レビュー指摘への対応)。戻り値の第2要素は飽和ノートIDの集合(#134)。
     """
     return _assign_voices_in_interval_order(notes, staff=1)
 
@@ -293,11 +318,15 @@ def refine_baseline(
     #130)であり、`RefineNoteInput.duration_tick`を渡すことで「開始が異なるが
     持続時間が重なる音」も別voiceへ回される。渡さない場合(`None`)は音価不明として
     同一onset_tickのみを衝突とみなす従来相当の挙動になる。
+
+    4声上限に達して重複を避けられなかったノートには`VOICE_SATURATION_FLAG`を
+    付与する(#134で設計判断を起票済み)。ghostフラグと併存しうるため、付与は
+    `_flag_ghost_notes`の結果に対する追加として行う。
     """
     if fifths is None:
         fifths = estimate_key_fifths([n.midi % 12 for n in notes if not n.is_user])
     spellings = _assign_spellings(notes, fifths=fifths)
-    staff_voice = (
+    staff_voice, saturated_ids = (
         _assign_voice_single_staff(notes) if single_staff else _assign_staff_and_voice(notes)
     )
     ghost_flags = _flag_ghost_notes(notes)
@@ -307,10 +336,13 @@ def refine_baseline(
         if note.is_user:
             continue
         staff, voice = staff_voice[note.id]
+        flags = ghost_flags[note.id]
+        if note.id in saturated_ids and VOICE_SATURATION_FLAG not in flags:
+            flags = (*flags, VOICE_SATURATION_FLAG)
         result[note.id] = RefinedNote(
             spelling=spellings[note.id],
             voice=voice,
             staff=staff,
-            flags=ghost_flags[note.id],
+            flags=flags,
         )
     return result
