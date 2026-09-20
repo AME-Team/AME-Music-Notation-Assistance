@@ -113,6 +113,7 @@ def run_l1_batch(
     chunks_rejected = 0
     rejected_reasons: list[str] = []
     skipped_decisions: list[str] = []
+    voice_repairs: list[str] = []
     cost_usd = 0.0
 
     for chunk, call_result in zip(chunks, call_results, strict=True):
@@ -135,6 +136,7 @@ def run_l1_batch(
             beat_anchors=beat_anchors,
             time_signatures_raw=time_signatures_raw,
             skipped_decisions=skipped_decisions,
+            voice_repairs=voice_repairs,
         )
         if ok:
             chunks_ok += 1
@@ -150,6 +152,7 @@ def run_l1_batch(
             "model": model,
             "chunks_ok": chunks_ok,
             "chunks_rejected": chunks_rejected,
+            "voice_repair_count": len(voice_repairs),
             "usage": usage,
             "cost_usd": cost_usd,
         },
@@ -161,6 +164,7 @@ def run_l1_batch(
         chunks_rejected=chunks_rejected,
         rejected_reasons=rejected_reasons,
         skipped_decisions=skipped_decisions,
+        voice_repairs=voice_repairs,
         usage=usage,
         cost_usd=cost_usd,
     )

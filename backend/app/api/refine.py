@@ -67,6 +67,9 @@ class RefineResponse(BaseModel):
     chunks_rejected: int
     rejected_reasons: list[str]
     skipped_decisions: list[str]
+    # #109: 検証層が機械的に修復したvoice再割当(検証・修復の内容を握り潰さず
+    # UIへ表示する経路、NFR-06)。
+    voice_repairs: list[str]
     usage: dict[str, int]
     cost_usd: float
 
@@ -203,6 +206,7 @@ def refine_score(
         chunks_rejected=result.chunks_rejected,
         rejected_reasons=result.rejected_reasons,
         skipped_decisions=result.skipped_decisions,
+        voice_repairs=result.voice_repairs,
         usage=result.usage,
         cost_usd=result.cost_usd,
     )

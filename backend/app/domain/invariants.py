@@ -80,8 +80,32 @@ class ValidationNote(BaseModel):
     # 無いと、decisionで明示的に触られていないノート同士、または明示decisionと
     # 暗黙keepノートとの重複を検出できない偽陰性が生じる)。
     voice: int = 1
+    # 現在のstaff割り当て。**L0はstaffごとにvoice番号を1から振る**(`baseline.py`
+    # の`_assign_staff_and_voice`/`_assign_voice_single_staff`)ため、voice番号は
+    # staff内でのみ意味を持つ。これが無いと、ピアノの大譜表のようにstaff 1と
+    # staff 2が同じvoice番号(例: 各staffのvoice 1)を持つパートで、L0自身の出力
+    # (decisionsが空の状態)にもかかわらずV-8が偽陽性になる(#109 で実測)。
+    staff: int = 1
     snap_candidate_ids: list[str] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TimeOccupancy:
+    """時間を占有するノート1件の、decision適用後の発音区間と声部(#109)。
+
+    V-8(同一voice内の時間重複)の判定と、L1の検証層が行う機械的voice再割当
+    (`l1_runner.repair_voice_conflicts`)が**同じ入力**を使うようにするための
+    共通表現(片方だけ解釈が変わって乖離するのを避ける)。
+    """
+
+    note_id: int
+    midi: int
+    voice: int
+    staff: int
+    bar: int
+    onset_beat: float
+    end_beat: float
 
 
 @dataclass(frozen=True)
@@ -136,6 +160,47 @@ def _delete_rate_violations(
     return violations
 
 
+def time_occupancies(
+    decisions: list[Decision], notes_by_id: dict[int, ValidationNote]
+) -> list[TimeOccupancy]:
+    """時間を占有するノートの、decision適用後の声部と発音区間を列挙する(#109)。
+
+    - delete/merge_with_previousは占有区間から除外する(それ自体は時間を占有
+      しなくなるため、#37設計判断)。
+    - voice/staffは明示decisionが指定していればそれを、無ければノート自身の
+      (L0由来の)値を使う。`onset_beat`(snap適用後)と`duration_beat`が発音区間。
+    - `editable=false`(コンテキスト小節・userノート、§7.4)は対象外。
+
+    V-8(`_overlap_violations`)とL1の機械的修復(`l1_runner.repair_voice_conflicts`)
+    が同じ解釈を共有するための単一の入口として公開する。
+    """
+    decision_by_note_id = {d.note_id: d for d in decisions}
+    result: list[TimeOccupancy] = []
+    for note in notes_by_id.values():
+        if not note.editable:
+            continue
+        decision = decision_by_note_id.get(note.id)
+        if decision is None:
+            voice, staff = note.voice, note.staff
+        elif decision.action in _TIME_OCCUPYING_ACTIONS:
+            voice = decision.voice if decision.voice is not None else note.voice
+            staff = decision.staff if decision.staff is not None else note.staff
+        else:
+            continue
+        result.append(
+            TimeOccupancy(
+                note_id=note.id,
+                midi=note.midi,
+                voice=voice,
+                staff=staff,
+                bar=note.bar,
+                onset_beat=note.onset_beat,
+                end_beat=note.onset_beat + note.duration_beat,
+            )
+        )
+    return result
+
+
 def _overlap_violations(
     decisions: list[Decision], notes_by_id: dict[int, ValidationNote]
 ) -> list[Violation]:
@@ -151,34 +216,29 @@ def _overlap_violations(
     生じる)。voiceは明示decisionが指定していればそれを、無ければノート自身の
     (L0由来の)voiceを使う。
 
-    `(voice, bar)`単位でグルーピングする(#67/#68の実測実験で発覚した実バグの
-    修正: `onset_beat`は小節内相対値のため、`bar`を無視して`voice`だけで
-    グルーピングすると、異なる小節にある無関係な2ノートが数値上の`onset_beat`
-    の近さだけで誤って重複判定されていた)。この方式は小節線をまたいで
-    タイで繋がっていない音価のノート(小節境界を越えて発音が続くノート)を
-    次の小節のノートとの重複判定の対象外にする副作用があるが、記譜ルール上
-    小節線をまたぐノートは`split_tie`で分割される前提(モジュールdocstring・
-    設計書§7.4「小節線をまたぐノートは、小節線上でタイに分割する」)のため、
-    現実的な運用では影響が限定的と判断する。
+    `(staff, voice, bar)`単位でグルーピングする:
+
+    - `bar`(#67/#68の実測実験で発覚した実バグの修正): `onset_beat`は小節内相対値
+      のため、`bar`を無視して`voice`だけでグルーピングすると、異なる小節にある
+      無関係な2ノートが数値上の`onset_beat`の近さだけで誤って重複判定されていた。
+      この方式は小節線をまたいでタイに繋がっていない音価のノート(小節境界を
+      越えて発音が続くノート)を次の小節のノートとの重複判定の対象外にする副作用が
+      あるが、記譜ルール上小節線をまたぐノートは`split_tie`で分割される前提
+      (モジュールdocstring・設計書§7.4「小節線をまたぐノートは、小節線上でタイに
+      分割する」)のため、現実的な運用では影響が限定的と判断する。
+    - `staff`(#109): L0はstaffごとにvoice番号を1から振るため、voice番号は
+      staff内でのみ意味を持つ。`staff`を無視すると、ピアノの大譜表(staff 1と
+      staff 2が同じvoice番号を持つ)で、**decisionsが空(すべて暗黙keep)の状態でも
+      L0自身の出力がV-8違反と判定される**偽陽性が生じる(実測で確認)。
     """
-    decision_by_note_id = {d.note_id: d for d in decisions}
-    by_voice_bar: dict[tuple[int, int], list[tuple[float, float, int]]] = {}
-    for note in notes_by_id.values():
-        if not note.editable:
-            continue
-        decision = decision_by_note_id.get(note.id)
-        if decision is None:
-            voice = note.voice
-        elif decision.action in _TIME_OCCUPYING_ACTIONS:
-            voice = decision.voice if decision.voice is not None else note.voice
-        else:
-            continue
-        by_voice_bar.setdefault((voice, note.bar), []).append(
-            (note.onset_beat, note.onset_beat + note.duration_beat, note.id)
+    by_key: dict[tuple[int, int, int], list[tuple[float, float, int]]] = {}
+    for occupancy in time_occupancies(decisions, notes_by_id):
+        by_key.setdefault((occupancy.staff, occupancy.voice, occupancy.bar), []).append(
+            (occupancy.onset_beat, occupancy.end_beat, occupancy.note_id)
         )
 
     violations: list[Violation] = []
-    for intervals in by_voice_bar.values():
+    for intervals in by_key.values():
         ordered = sorted(intervals, key=lambda item: item[0])
         for (_, end, _), (next_start, _, next_id) in zip(ordered, ordered[1:], strict=False):
             if next_start < end:

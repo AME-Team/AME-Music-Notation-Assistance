@@ -26,12 +26,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.domain.pitch import midi_to_spelling
+from app.pipeline.refine.voice_assignment import VoiceCandidate, assign_voices
 
 MIDDLE_C = 60  # 大譜表(ト音部/へ音部)の分割基準(§7.4)
 GHOST_MAX_CONFIDENCE = 0.35
 GHOST_MAX_DURATION_SEC = 0.06
 GHOST_MAX_VELOCITY = 25
-MAX_VOICES = 4
 # 4声上限(設計書§7.4/検証層V-7)に達し、同一voice内の時間重複を避けられなかった
 # ノートに付与するフラグ(#130/#134)。重複が構造上不可避であることを無言にせず、
 # 下流(L1のチャンク入力、L2の`score_query`の`flags_contains`、将来のUI表示)が
@@ -124,106 +124,45 @@ def _note_end_tick(note: RefineNoteInput) -> int | None:
     """ノートの発音終了tick(排他的終端)。音価不明(`duration_tick is None`)ならNone。
 
     `duration_tick=0`(ゼロ長)は「開始と同じ位置で終わる」= 時間方向の重なりを
-    持たない音として扱う(同時発音の判定は`_conflicts_in_voice`が`onset_tick`の
-    一致で別途行う)。
+    持たない音として扱う(同時発音の判定は`voice_assignment.assign_voices`が
+    `onset`の一致で別途行う)。
     """
     if note.duration_tick is None:
         return None
     return note.onset_tick + max(note.duration_tick, 0)
 
 
-def _conflicts_in_voice(last_onset: int, last_end: int | None, note: RefineNoteInput) -> bool:
-    """同一voice内で、直前に割り当てたノートと`note`が記譜上衝突するか(#130)。
-
-    MusicXMLのvoiceは「常に単旋律」であるべき(同一voice内で時間的に重なる
-    ノートは不正)ため、以下のいずれかで衝突とみなす:
-
-    - `onset_tick`が一致する(和音・同時発音)。音価に関係なく別voiceが必要。
-    - `note.onset_tick`が直前ノートの発音区間内(開始より後、終了より前)に入る。
-
-    直前ノートの音価が不明(`last_end is None`)な場合は時間方向の重なりを
-    判定できないため、同時発音のみを衝突とする。
-    """
-    if last_onset == note.onset_tick:
-        return True
-    if last_end is None:
-        return False
-    return note.onset_tick < last_end
-
-
 def _assign_voices_in_interval_order(
     notes: list[RefineNoteInput], *, staff: int
 ) -> tuple[dict[int, tuple[int, int]], frozenset[int]]:
-    """区間(interval)ベースのvoice割当(#130)。
+    """`RefineNoteInput`を区間ベースのvoice割当へ橋渡しする(#130)。
 
-    `_assign_staff_and_voice`(ピアノの大譜表、staffごとに呼ぶ)と
-    `_assign_voice_single_staff`(単一譜表、staff=1固定で全体に対して呼ぶ)が
-    共有する中核ロジック(#128レビュー指摘の重複実装回避を引き継ぎつつ、
-    #130でグループ化の単位を「同一onset_tick」から「発音区間の重なり」へ
-    一般化した)。
+    アルゴリズム本体は`voice_assignment.assign_voices`(L1の検証層による機械的
+    修復[#109]と共有するため、時間単位非依存の形で分離。片方だけ修正されて
+    両者が乖離するのを避ける)。
 
-    各voiceについて「直前に割り当てたノートの開始tickと終了tick」を保持し、
-    開始tick順(同一開始tickでは高音順)にノートを見て、**直前ノートと衝突しない
-    最小番号のvoice**(1..`MAX_VOICES`)へ割り当てる。これにより、開始タイミングが
-    異なっても持続時間が重なる音(アルペジオ、サステインしたまま次の音が鳴る
-    ケース等)は別voiceへ回され、同一voice内の時間重複(V-8違反)が生じない。
-
-    同一onset_tickの同時発音が高音から順にvoice 1, 2, 3, 4へ割り当てられる
-    従来の挙動(#26/#56)は、同一開始tickのノートを高音順に処理し、各ノートが
-    直前のノートと衝突するため自然に保たれる。
-
-    Returns:
-        `(staff, voice)`のマッピングと、**飽和したノートID**の集合。飽和とは
-        4声すべてが衝突していて、どのvoiceへ回しても同一voice内の重複が残る
-        状態を指す(#134で設計判断を起票済み)。飽和ノートは
-        `VOICE_SATURATION_FLAG`で可視化される(`refine_baseline`参照)。
+    staff内の全ノート(staffの振り分けは呼び出し側の責務)を、量子化済みの
+    `onset_tick`/`duration_tick`で `VoiceCandidate` へ変換して渡す。
 
     userノートも「そのタイミングで音が鳴っている」という事実として処理に含める
     (=voice番号を1つ消費させる、#26から継続する挙動)が、userノート自身は戻り値に
-    含めない(呼び出し元が変更しない)。
+    含めない(呼び出し元が変更しない)。戻り値の第2要素は飽和ノートIDの集合
+    (`VOICE_SATURATION_FLAG`の付与に使う。詳細は`assign_voices`参照)。
     """
-    ordered = sorted(notes, key=lambda n: (n.onset_tick, -n.midi, n.id))
-    last_onset: dict[int, int] = {}
-    voice_end: dict[int, int | None] = {}
-    result: dict[int, tuple[int, int]] = {}
-    saturated: set[int] = set()
-    for note in ordered:
-        end_tick = _note_end_tick(note)
-        free_voices = [
-            voice
-            for voice in range(1, MAX_VOICES + 1)
-            if voice not in last_onset
-            or not _conflicts_in_voice(last_onset[voice], voice_end[voice], note)
-        ]
-        if free_voices:
-            voice = free_voices[0]
-        else:
-            # 4声すべてが衝突している(※)。設計書§7.4の「パートあたり最大4声部」と
-            # 検証層V-7(`1 <= voice <= 4`)を守る限り、5音以上の同時発音を含む
-            # 入力に対して重複の無い解は存在しない(鳩の巣原理)。重複を消すには
-            # 声部数上限の緩和(設計変更)かノートの削除が必要で、いずれも
-            # ここでは選べないため、重なり幅が最小になるvoiceへ回して
-            # `voice_saturated`フラグで可視化するに留める(#134)。
-            #
-            # ※「すべて衝突」= 直前ノートの終了位置が本ノートの開始位置より
-            #   後か、開始位置が同一(同時発音)であるvoiceしか無い状態。
-            voice = min(
-                range(1, MAX_VOICES + 1),
-                key=lambda v: (
-                    voice_end[v] if voice_end[v] is not None else note.onset_tick,
-                    v,
-                ),
-            )
-            saturated.add(note.id)
-        last_onset[voice] = note.onset_tick
-        previous_end = voice_end.get(voice)
-        # 音価不明のノートは「開始位置で終わる」ものとして扱い、後続ノートとの
-        # 時間重複判定に持ち越さない(同時発音の判定は開始tickの一致で別途行う)。
-        new_end = end_tick if end_tick is not None else note.onset_tick
-        voice_end[voice] = new_end if previous_end is None else max(previous_end, new_end)
-        if not note.is_user:
-            result[note.id] = (staff, voice)
-    return result, frozenset(saturated)
+    candidates = [
+        VoiceCandidate(
+            key=note.id,
+            midi=note.midi,
+            onset=float(note.onset_tick),
+            end=_note_end_tick(note),
+        )
+        for note in notes
+    ]
+    voices, saturated = assign_voices(candidates)
+    return (
+        {note.id: (staff, voices[note.id]) for note in notes if not note.is_user},
+        saturated,
+    )
 
 
 def _assign_staff_and_voice(
@@ -261,7 +200,7 @@ def _assign_voice_single_staff(
     """単一譜表パート(bass/vocals/guitar/other)向けのvoice割当(#56/#130)。
 
     `_assign_staff_and_voice`のMIDDLE_C分割によるstaff振り分けは行わず、
-    常に`staff=1`固定で、発音区間の重なりに応じてvoice 1..`MAX_VOICES`へ
+    常に`staff=1`固定で、発音区間の重なりに応じてvoice 1..`voice_assignment.MAX_VOICES`へ
     割り振る。bass/vocalsはモノフォニックなため通常voice=1のみを使うが、
     guitar/otherは和音を弾きうるため、これが無いと同一onset_tickの複数ノートが
     全てvoice=1へ潰れ、MusicXML上不正な重複ノートになりうる

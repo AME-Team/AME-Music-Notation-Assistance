@@ -46,6 +46,33 @@ def test_system_prompt_does_not_contain_volatile_placeholders() -> None:
         assert forbidden not in prompt
 
 
+def test_system_prompt_repeats_the_voice_rule_right_before_generation() -> None:
+    """#109: 同時発音のvoice分割規則の遵守率が低かったため、規則と具体例を
+
+    システムプロンプトの**最後**(モデルが直前に読む位置)に置く。
+    """
+    prompt = build_system_prompt()
+
+    assert prompt.rstrip().endswith(
+        "最高音G4が voice 1(同一staff内でvoice番号1〜4を重複させない)。"
+    )
+    assert "同じvoiceに\n  まとめてはならない" in prompt
+    assert "別のvoiceへ回すこと" in prompt
+    assert "チャンク全体の提案が採用されない" in prompt
+
+
+def test_notation_rules_state_the_interval_rule_for_shared_l2_workspace() -> None:
+    """規則集はL2の`notation_rules.md`と共有のため、区間の規則もここに置く
+
+    (L1とL2で記譜方針が食い違わないようにする、モジュールdocstring参照)。
+    """
+    assert (
+        "同時発音するノートを全て同じvoiceへまとめてはならない"
+        in NOTATION_RULES_MARKDOWN
+    )
+    assert "先行する音が鳴っている途中で新しい音が始まるなら" in NOTATION_RULES_MARKDOWN
+
+
 def test_song_context_message_includes_part_and_tempo() -> None:
     score = ScoreIR(
         project_id="p1",

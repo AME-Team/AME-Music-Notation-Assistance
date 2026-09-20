@@ -251,6 +251,22 @@ export function RefineSection({
             </div>
           )}
 
+          {refineResult.voice_repairs.length > 0 && (
+            /* #109: AIが守らなかったvoice分割規則を検証層が機械的に修復した分。
+               検証・修復の内容を握り潰さず表示する(NFR-06)。 */
+            <div className="mt-2 rounded bg-sky-50 p-2 text-xs text-sky-800 border border-sky-200">
+              <span className="font-semibold">
+                voice自動修復 {refineResult.voice_repairs.length}件 (V-8:
+                同一voice内の時間重複を決定論的に再割当):
+              </span>
+              <ul className="list-disc list-inside mt-1 space-y-0.5">
+                {refineResult.voice_repairs.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <p className="text-xs text-emerald-700 pt-1">
             ※ 整音結果は <code>score/staging/{refineResult.run_id}.json</code> に保存されています。
             下記のDiffPanelで差分を確認し、小節単位で承認/却下してください。
