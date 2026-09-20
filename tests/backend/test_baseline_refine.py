@@ -11,13 +11,13 @@ from app.domain.invariants import ValidationNote, validate_decisions
 from app.pipeline.refine.baseline import (
     GHOST_MAX_DURATION_SEC,
     GHOST_MAX_VELOCITY,
-    MAX_VOICES,
     VOICE_SATURATION_FLAG,
     RefinedNote,
     RefineNoteInput,
     estimate_key_fifths,
     refine_baseline,
 )
+from app.pipeline.refine.voice_assignment import MAX_VOICES
 from hypothesis import given, settings
 from hypothesis import strategies as st
 

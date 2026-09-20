@@ -274,14 +274,17 @@ def test_split_tie_creates_new_note_with_correct_tie_flags() -> None:
     assert second.provenance == "llm"
 
 
-def test_voice_reassignment_causing_post_apply_overlap_is_rejected() -> None:
-    """回帰(#39 Gate2レビュー指摘、2巡目): V-1〜V-9は適用前の(raw_beat・元の
+def test_voice_reassignment_causing_post_apply_overlap_is_auto_repaired() -> None:
+    """回帰(#39 Gate2レビュー指摘、2巡目 / #109): `decision.voice`でvoiceを変更した
 
-    voiceの)状態に対して検証していたため、`decision.voice`でvoiceを変更した
-    結果、適用後に別ノートと同一voice内で時間重複が生じるケースを見逃して
-    いた。2つの重ならないノート(voice 1とvoice 2)のうちvoice 2の方をvoice 1
-    へ再割り当てするdecisionは、適用後に重複するためV-8違反としてチャンク
-    全体が棄却されるべき。
+    結果、適用後に別ノートと同一voice内で時間重複が生じるケース。2つの重ならない
+    ノート(voice 1とvoice 2)のうちvoice 2の方をvoice 1へ再割り当てするdecisionは、
+    適用後に重複する。
+
+    #39時点ではチャンク全体を棄却していたが、#109以降は**V-8のみが違反の場合は
+    違反ノートのvoiceだけを決定論的に再割当して修復**し、同じチャンクの他の
+    decision(ここではspelling)を活かす。適用後に重複が残らないことは従来どおり
+    保証され、修復しきれない場合(4声飽和等)は従来どおりチャンク全体を棄却する。
     """
     score = _score()
     part = _part()
@@ -292,11 +295,12 @@ def test_voice_reassignment_causing_post_apply_overlap_is_rejected() -> None:
     score.parts.append(part)
 
     # note_bをvoice 1へ再割り当て → note_aと同一voice・同一時間区間で重複する。
+    b_sharp = Spelling(step="B", alter=1, octave=3)
     decision = Decision(
         note_id=note_b.id,
         action="keep",
         snap="a",
-        spelling=note_b.spelling,
+        spelling=b_sharp,
         voice=1,
         staff=1,
         reason="voiceの統一",
@@ -312,11 +316,126 @@ def test_voice_reassignment_causing_post_apply_overlap_is_rejected() -> None:
             effort="high",
         )
 
+    assert result.chunks_ok == 1
+    assert result.chunks_rejected == 0
+    staged_by_id = {note.id: note for note in _staged_notes(result)}
+    # AIのvoice=1は衝突するため、最小限の変更(voice 2)で修復される。
+    assert staged_by_id[note_b.id].voice == 2
+    assert staged_by_id[note_b.id].voice != staged_by_id[note_a.id].voice
+    # 他のdecision(spelling)は活かされる(チャンク棄却だと失われていた部分)。
+    assert staged_by_id[note_b.id].spelling == b_sharp
+    assert len(result.voice_repairs) == 1
+    assert "voice 1 -> 2" in result.voice_repairs[0]
+
+
+def test_implicit_keep_note_voice_is_repaired_without_a_decision() -> None:
+    """decisionが無いノート(暗黙keep)同士の重複も修復できること(#109)。
+
+    テンポ的な重なり(開始が異なる)は、`decision`を持たないノート同士でもV-8に
+    掛かる。修復は`decision`の作成ではなくstagedの`Note`直接更新で行うため、
+    ここでは`ai_reason`に修復の根拠が残ることを確認する。
+    """
+    score = _score()
+    part = _part()
+    sustained = _note(score, onset_tick=0, duration_tick=960, voice=1)
+    later = _note(score, onset_tick=480, duration_tick=480, voice=1)
+    part.notes.append(sustained)
+    part.notes.append(later)
+    score.parts.append(part)
+
+    with _mock_call([]):
+        result = run_l1_sequential(
+            score,
+            "piano",
+            run_id="run_abc",
+            beat_anchors=_BEAT_ANCHORS,
+            model="claude-opus-5",
+            effort="high",
+        )
+
+    assert result.chunks_ok == 1
+    staged_by_id = {note.id: note for note in _staged_notes(result)}
+    assert staged_by_id[later.id].voice == 2
+    # #109レビュー指摘: 機械的修復はLLMの判断ではないため、`llm`ではなく
+    # `baseline`(決定論的整音)として区別できること。
+    assert staged_by_id[later.id].provenance == "baseline"
+    assert "V-8自動修復" in (staged_by_id[later.id].ai_reason or "")
+    assert len(result.voice_repairs) == 1
+
+
+def test_non_v8_violation_is_still_rejected_without_repair() -> None:
+    """V-8以外の違反が含まれる場合は従来どおりチャンク全体を棄却する(#109)。"""
+    score = _score()
+    part = _part()
+    note_a = _note(score, onset_tick=0, duration_tick=480, voice=1)
+    note_b = _note(score, onset_tick=0, duration_tick=480, voice=2)
+    part.notes.append(note_a)
+    part.notes.append(note_b)
+    score.parts.append(part)
+
+    decisions = [
+        # snap候補に存在しないID → V-3違反(V-8以外を含む)。
+        Decision(
+            note_id=note_b.id,
+            action="keep",
+            snap="nonexistent",
+            spelling=note_b.spelling,
+            voice=1,
+            staff=1,
+            reason="bad snap",
+        )
+    ]
+
+    with _mock_call(decisions):
+        result = run_l1_sequential(
+            score,
+            "piano",
+            run_id="run_abc",
+            beat_anchors=_BEAT_ANCHORS,
+            model="claude-opus-5",
+            effort="high",
+        )
+
     assert result.chunks_ok == 0
     assert result.chunks_rejected == 1
-    assert any("V-8" in reason for reason in result.rejected_reasons)
-    staged_note_b = next(n for n in _staged_notes(result) if n.id == note_b.id)
-    assert staged_note_b.voice == 2  # 棄却されたため変更されていない
+    assert result.voice_repairs == []
+    staged_by_id = {note.id: note for note in _staged_notes(result)}
+    assert staged_by_id[note_b.id].voice == 2  # 変更されていない
+    assert staged_by_id[note_b.id].provenance == "amt"
+
+
+def test_saturated_overlap_cannot_be_repaired_and_is_still_rejected() -> None:
+    """4声上限で解消できない重複(5音同時)は修復できず棄却されること(#109/#134)。
+
+    修復は「可能な限り」であり、無言で不正なチャンクを通さないことを保証する。
+    """
+    score = _score()
+    part = _part()
+    for index in range(5):
+        part.notes.append(
+            _note(score, onset_tick=0, duration_tick=480, midi=60 + index)
+        )
+    score.parts.append(part)
+
+    with _mock_call([]):
+        result = run_l1_sequential(
+            score,
+            "piano",
+            run_id="run_abc",
+            beat_anchors=_BEAT_ANCHORS,
+            model="claude-opus-5",
+            effort="high",
+        )
+
+    assert result.chunks_ok == 0
+    assert result.chunks_rejected == 1
+    assert result.voice_repairs == []
+    reason = next(r for r in result.rejected_reasons if "V-8自動修復を試行したが" in r)
+    # #109レビュー指摘: 列挙した違反(reasons)と件数(len(remaining))が一致すること。
+    remaining_part, attempted_part = reason.split("(修復前の違反: ")
+    assert "が1件の違反が残る" in reason  # 4声に収まらない1件だけが残る
+    assert remaining_part.count("V-8(") == 1  # 件数表示と列挙が一致
+    assert attempted_part.count("V-8(") == 4  # 修復前は暗黙keepも含め4件
 
 
 def test_notes_in_different_bars_with_same_relative_beat_are_not_rejected() -> None:

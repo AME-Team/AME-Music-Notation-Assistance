@@ -23,12 +23,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
-from app.domain.invariants import Decision, ValidationNote, validate_decisions
+from app.domain.invariants import (
+    Decision,
+    ValidationNote,
+    time_occupancies,
+    validate_decisions,
+)
 from app.domain.score import Note, Tie
 from app.pipeline.quantize import ticks_to_seconds
 from app.pipeline.refine.l1_chunker import ChunkInput, build_chunks
 from app.pipeline.refine.l1_client import L1ClientError, call_l1_chunk
 from app.pipeline.refine.l1_prompt import build_song_context_message, build_system_prompt
+from app.pipeline.refine.voice_assignment import VoiceCandidate, assign_voices
 from app.pipeline.time_signature import bar_start_ticks, tick_to_bar_beat, time_signature_at_bar
 
 if TYPE_CHECKING:
@@ -63,6 +69,9 @@ class L1RunResult:
     # (`total_cost_usd`)を返すため、モデル単価表からの概算(`cost.py`)ではなく
     # 実際に課金された金額の合計をそのまま持ち回る。
     cost_usd: float = 0.0
+    # #109: 検証層が機械的に修復したvoice再割当の内容(NFR-06: 検証・修復の内容を
+    # 握り潰さずログ/UIへ伝播させる)。
+    voice_repairs: list[str] = field(default_factory=list)
 
 
 def validation_notes_for_chunk(
@@ -87,6 +96,11 @@ def validation_notes_for_chunk(
     による候補選択がまれに元の小節を跨ぐケース(#38の`_snap_candidates_for_note`
     参照、候補の`beat`は候補自身が属する小節内の値であり得る)は、この関数の
     対象外の既知の限定的な制約として扱う(発生頻度・影響とも小さいと判断)。
+
+    `staff`(#109): `voice`と同じく、明示decisionがあればその値を、無ければ
+    ノート自身の(L0由来の)値を使う。L0はstaffごとにvoice番号を1から振るため、
+    V-8がvoice番号だけでグルーピングすると、ピアノの大譜表でstaff 1とstaff 2の
+    voice 1が互いに重複判定される偽陽性が生じる(実測で確認)。
     """
     decision_by_id = {d.note_id: d for d in decisions}
     result = []
@@ -94,9 +108,12 @@ def validation_notes_for_chunk(
         decision = decision_by_id.get(chunk_note.id)
         onset_beat = chunk_note.raw_beat
         voice = notes_by_id[chunk_note.id].voice
+        staff = notes_by_id[chunk_note.id].staff
         if decision is not None:
             if decision.voice is not None:
                 voice = decision.voice
+            if decision.staff is not None:
+                staff = decision.staff
             if decision.snap is not None:
                 candidate = next(
                     (c for c in chunk_note.snap_candidates if c.id == decision.snap), None
@@ -112,6 +129,7 @@ def validation_notes_for_chunk(
                 onset_beat=onset_beat,
                 duration_beat=chunk_note.raw_duration_beat,
                 voice=voice,
+                staff=staff,
                 snap_candidate_ids=[c.id for c in chunk_note.snap_candidates],
                 flags=chunk_note.flags,
             )
@@ -264,6 +282,116 @@ def apply_chunk_decisions(
             )
 
 
+def repair_voice_conflicts(
+    decisions: list[Decision], *, validation_notes: list[ValidationNote]
+) -> tuple[list[Decision], dict[int, int], list[str]]:
+    """V-8(同一voice内の時間重複)を決定論的に修復する(#109)。
+
+    L1(LLM)が同時発音ノートのvoice分割規則を守らなかった場合、従来はチャンク
+    全体を棄却してL0の結果へフォールバックしていた(§9「チャンク棄却」)。その
+    結果、1件のvoice重複でチャンク内の他のdecision(異名同音の選択・ghost判定・
+    タイ分割等)までまとめて失われていた(#67/#68の実測では違反率5%〜62%)。
+    ここでは**voiceだけ**を、L0と同じ区間ベースのアルゴリズム
+    (`voice_assignment.assign_voices`)で再割当し、他のdecisionを活かす。
+
+    AIの選択を尊重するため、`preferred`(現在のvoice)を渡して「衝突しない限り
+    現状維持」とし、衝突するノートのみを別voiceへ回す(違反ノートのみの最小
+    変更、Issue #109の提案どおり)。修復の単位はV-8と同じ`(staff, bar)`
+    (`ValidationNote.onset_beat`が小節内相対値のため、小節をまたいで区間比較
+    してはならない)。
+
+    Returns:
+        `(修復後のdecisions, decisionが無いノート向けのvoice上書き, 修復内容の
+        説明リスト)`。修復内容が空(=変更なし)の場合、呼び出し元は従来どおり
+        チャンクを棄却する。
+    """
+    notes_by_id = {n.id: n for n in validation_notes}
+    occupancies = time_occupancies(decisions, notes_by_id)
+    previous_voice = {occupancy.note_id: occupancy.voice for occupancy in occupancies}
+
+    by_staff_bar: dict[tuple[int, int], list] = {}
+    for occupancy in occupancies:
+        by_staff_bar.setdefault((occupancy.staff, occupancy.bar), []).append(occupancy)
+
+    repaired_voices: dict[int, int] = {}
+    for group in by_staff_bar.values():
+        candidates = [
+            VoiceCandidate(
+                key=occupancy.note_id,
+                midi=occupancy.midi,
+                onset=occupancy.onset_beat,
+                end=occupancy.end_beat,
+            )
+            for occupancy in group
+        ]
+        voices, _saturated = assign_voices(
+            candidates,
+            preferred={occupancy.note_id: occupancy.voice for occupancy in group},
+        )
+        repaired_voices.update(voices)
+
+    changed = {
+        note_id: (previous_voice[note_id], voice)
+        for note_id, voice in repaired_voices.items()
+        if note_id in previous_voice and previous_voice[note_id] != voice
+    }
+    if not changed:
+        return decisions, {}, []
+
+    decision_ids = {decision.note_id for decision in decisions}
+    repairs = [
+        f"note {note_id}: voice {previous} -> {repaired}"
+        for note_id, (previous, repaired) in sorted(changed.items())
+    ]
+    voice_overrides = {
+        note_id: repaired
+        for note_id, (_, repaired) in changed.items()
+        if note_id not in decision_ids
+    }
+    updated_decisions = [
+        decision.model_copy(
+            update={
+                "voice": changed[decision.note_id][1],
+                "reason": (
+                    f"{decision.reason} / V-8自動修復: voice "
+                    f"{changed[decision.note_id][0]} -> {changed[decision.note_id][1]}"
+                ),
+            }
+        )
+        if decision.note_id in changed
+        else decision
+        for decision in decisions
+    ]
+    return updated_decisions, voice_overrides, repairs
+
+
+def apply_voice_overrides(
+    voice_overrides: dict[int, int], *, notes_by_id: dict[int, Note], run_id: str
+) -> None:
+    """L1がdecisionを出していない暗黙keepノートのvoiceを修復結果で更新する(#109)。
+
+    これらは`staged`の`Note`を直接更新する(`decision`を持たないため
+    `apply_chunk_decisions`では表現できない)。
+
+    `provenance`は`baseline`(=決定論的整音。`NoteProvenance`の既存値でUIでも
+    「L0(決定論的整音済み)」と表示される)とする(#109レビュー指摘: LLMの判断と
+    検証層の機械的修復を区別できないと、下流のDiffPanel/L2がAIの選択と混同する)。
+    ここで更新するノートはAIのdecisionを一切持たず、変更全体が機械的修復なので
+    `llm`にできない。一方、AIのdecisionを持つノート(`repair_voice_conflicts`が
+    decisionのvoiceを修正した場合)は、spelling等の他のフィールドがAIの判断のため
+    `llm`のままとし、`decision.reason`に追記した修復内容が`ai_reason`へ伝わる。
+    """
+    for note_id, voice in sorted(voice_overrides.items()):
+        note = notes_by_id.get(note_id)
+        if note is None or note.voice == voice:
+            continue
+        previous = note.voice
+        note.voice = voice
+        note.provenance = "baseline"
+        note.provenance_run_id = run_id
+        note.ai_reason = f"V-8自動修復: voice {previous} -> {voice}(L1のdecision無し)"
+
+
 def verify_and_apply_chunk_decisions(
     *,
     chunk: ChunkInput,
@@ -275,14 +403,58 @@ def verify_and_apply_chunk_decisions(
     beat_anchors: list[tuple[float, float]],
     time_signatures_raw: list[dict],
     skipped_decisions: list[str],
+    voice_repairs: list[str],
 ) -> tuple[bool, str | None]:
     """チャンクの決定群を検証(V-1〜V-9)し、合格した場合はstagedへ適用する。
+
+    V-8(同一voice内の時間重複)のみが検出された場合は、チャンク全体を棄却せず
+    `repair_voice_conflicts`でvoiceを機械的に再割当し、**再検証して通れば適用する**
+    (#109)。修復しきれない場合(4声飽和など)やV-8以外の違反が含まれる場合は
+    従来どおりチャンク全体を棄却する。
 
     Returns:
         (ok, rejection_reason): 検証合格時は (True, None)。不合格時は (False, "bars X-Y: reasons")。
     """
     validation_notes = validation_notes_for_chunk(chunk, notes_by_id, decisions)
     violations = validate_decisions(decisions, notes=validation_notes, part_staves=part_staves)
+
+    if violations and all(violation.rule == "V-8" for violation in violations):
+        repaired_decisions, voice_overrides, repairs = repair_voice_conflicts(
+            decisions, validation_notes=validation_notes
+        )
+        if repairs:
+            revalidated_notes = [
+                note.model_copy(update={"voice": voice_overrides.get(note.id, note.voice)})
+                for note in validation_notes
+            ]
+            remaining = validate_decisions(
+                repaired_decisions, notes=revalidated_notes, part_staves=part_staves
+            )
+            if not remaining:
+                apply_chunk_decisions(
+                    repaired_decisions,
+                    staged=staged,
+                    notes_by_id=notes_by_id,
+                    run_id=run_id,
+                    beat_anchors=beat_anchors,
+                    time_signatures_raw=time_signatures_raw,
+                    skipped_decisions=skipped_decisions,
+                )
+                apply_voice_overrides(voice_overrides, notes_by_id=notes_by_id, run_id=run_id)
+                voice_repairs.extend(
+                    f"bars {chunk.context.bars.target} {repair}" for repair in repairs
+                )
+                return True, None
+            attempted = "; ".join(f"{v.rule}(note {v.note_id})" for v in violations)
+            remaining_reasons = "; ".join(
+                f"{v.rule}(note {v.note_id}): {v.message}" for v in remaining
+            )
+            return False, (
+                f"bars {chunk.context.bars.target}: V-8自動修復を試行したが"
+                f"{len(remaining)}件の違反が残る: {remaining_reasons} "
+                f"(修復前の違反: {attempted})"
+            )
+
     if violations:
         reasons = "; ".join(f"{v.rule}(note {v.note_id}): {v.message}" for v in violations)
         return False, f"bars {chunk.context.bars.target}: {reasons}"
@@ -331,6 +503,7 @@ def run_l1_sequential(
     chunks_rejected = 0
     rejected_reasons: list[str] = []
     skipped_decisions: list[str] = []
+    voice_repairs: list[str] = []
     usage = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -367,6 +540,7 @@ def run_l1_sequential(
             beat_anchors=beat_anchors,
             time_signatures_raw=time_signatures_raw,
             skipped_decisions=skipped_decisions,
+            voice_repairs=voice_repairs,
         )
         if ok:
             chunks_ok += 1
@@ -381,6 +555,7 @@ def run_l1_sequential(
             "model": model,
             "chunks_ok": chunks_ok,
             "chunks_rejected": chunks_rejected,
+            "voice_repair_count": len(voice_repairs),
             "usage": usage,
             "cost_usd": cost_usd,
         },
@@ -392,6 +567,7 @@ def run_l1_sequential(
         chunks_rejected=chunks_rejected,
         rejected_reasons=rejected_reasons,
         skipped_decisions=skipped_decisions,
+        voice_repairs=voice_repairs,
         usage=usage,
         cost_usd=cost_usd,
     )

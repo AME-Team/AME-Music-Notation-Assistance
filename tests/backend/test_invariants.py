@@ -11,6 +11,7 @@ from app.domain.invariants import (
     Decision,
     ValidationNote,
     Violation,
+    time_occupancies,
     validate_decisions,
 )
 from app.domain.pitch import midi_to_spelling
@@ -27,6 +28,8 @@ def _note(
     bar: int = 1,
     onset_beat: float = 0.0,
     duration_beat: float = 1.0,
+    voice: int = 1,
+    staff: int = 1,
     snap_ids: tuple[str, ...] = ("a", "b"),
     flags: tuple[str, ...] = (),
 ) -> ValidationNote:
@@ -37,6 +40,8 @@ def _note(
         bar=bar,
         onset_beat=onset_beat,
         duration_beat=duration_beat,
+        voice=voice,
+        staff=staff,
         snap_candidate_ids=list(snap_ids),
         flags=list(flags),
     )
@@ -256,6 +261,49 @@ class TestV7VoiceStaffRange:
         assert "V-7" in _rules(violations)
 
 
+class TestTimeOccupancies:
+    """#109: V-8とL1の機械的修復が共有する「時間を占有するノート」の列挙。"""
+
+    def test_decision_voice_and_staff_overrides_are_reflected(self) -> None:
+        notes = [
+            _note(1, midi=72, voice=1, staff=1),
+            _note(2, midi=48, voice=2, staff=2),
+        ]
+        decisions = [_decision(1, voice=3, staff=2)]
+        occupancies = {
+            o.note_id: o for o in time_occupancies(decisions, {n.id: n for n in notes})
+        }
+
+        assert (occupancies[1].voice, occupancies[1].staff) == (3, 2)
+        assert (occupancies[2].voice, occupancies[2].staff) == (
+            2,
+            2,
+        )  # decisionが無ければ元の値
+
+    def test_interval_is_onset_plus_duration(self) -> None:
+        notes = [_note(1, onset_beat=2.0, duration_beat=1.5)]
+        occupancies = time_occupancies([], {1: notes[0]})
+
+        assert (occupancies[0].onset_beat, occupancies[0].end_beat) == (2.0, 3.5)
+        assert occupancies[0].midi == 60
+        assert occupancies[0].bar == 1
+
+    def test_deleted_and_context_notes_do_not_occupy_time(self) -> None:
+        notes = [
+            _note(1),
+            _note(2, editable=False),
+            _note(3),
+            _note(4),
+        ]
+        decisions = [
+            _decision(3, action="delete"),
+            _decision(4, action="merge_with_previous"),
+        ]
+        occupancies = time_occupancies(decisions, {n.id: n for n in notes})
+
+        assert [o.note_id for o in occupancies] == [1]
+
+
 class TestV8VoiceOverlap:
     def test_overlapping_notes_in_same_voice_is_violation(self) -> None:
         notes = [
@@ -319,6 +367,48 @@ class TestV8VoiceOverlap:
             _note(2, bar=3, onset_beat=2.0, duration_beat=1.0),
         ]
         decisions = [_decision(1, voice=1), _decision(2, voice=1)]
+        violations = validate_decisions(decisions, notes=notes, part_staves=2)
+        assert _rules(violations) == ["V-8"]
+
+    def test_same_voice_number_in_different_staves_is_not_violation(self) -> None:
+        """回帰(#109): L0はstaffごとにvoice番号を1から振るため、voice番号は
+
+        staff内でのみ意味を持つ。staffを無視すると、ピアノの大譜表(staff 1と
+        staff 2が同じvoice番号を持つ)で、**decisionsが空(すべて暗黙keep)の
+        状態でもL0自身の出力がV-8違反と判定される**偽陽性が生じていた。
+        """
+        notes = [
+            _note(1, midi=72, staff=1, onset_beat=1.0, duration_beat=2.0),
+            _note(2, midi=48, staff=2, onset_beat=1.5, duration_beat=2.0),
+        ]
+        violations = validate_decisions([], notes=notes, part_staves=2)
+        assert violations == []
+
+    def test_same_voice_number_in_the_same_staff_is_still_violation(self) -> None:
+        """staff単位のグルーピングが、同一staff内の本物の重複検出を壊していないこと。"""
+        notes = [
+            _note(1, midi=72, staff=1, onset_beat=1.0, duration_beat=2.0),
+            _note(2, midi=64, staff=1, onset_beat=1.5, duration_beat=2.0),
+        ]
+        violations = validate_decisions([], notes=notes, part_staves=2)
+        assert _rules(violations) == ["V-8"]
+
+    def test_decision_staff_override_is_respected_for_grouping(self) -> None:
+        """明示decisionがstaffを変更した場合は、適用後のstaffで重複判定する
+
+        (voiceと同じ扱い。V-8が適用前の状態を見て偽陰性/偽陽性を生まないため)。
+        """
+        notes = [
+            _note(1, midi=72, staff=1, onset_beat=1.0, duration_beat=2.0),
+            _note(2, midi=48, staff=2, onset_beat=1.5, duration_beat=2.0),
+        ]
+        # ノート2をstaff 1へ移すと、staff 1内でノート1と重複する
+        # (spellingはmidi 48に対応するC3を指定し、V-4/V-5のノイズを避ける)。
+        decisions = [
+            _decision(
+                2, voice=1, staff=1, spelling=Spelling(step="C", alter=0, octave=3)
+            )
+        ]
         violations = validate_decisions(decisions, notes=notes, part_staves=2)
         assert _rules(violations) == ["V-8"]
 

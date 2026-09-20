@@ -204,6 +204,8 @@ def test_refine_batch_mode_success(
         staged_score=staged_score,
         chunks_ok=1,
         chunks_rejected=0,
+        # #109: 検証層の機械的修復(NFR-06でUIへ表示する経路)。
+        voice_repairs=["bars (1, 4) note 7: voice 1 -> 2"],
         usage={
             "input_tokens": 2000,
             "output_tokens": 1000,
@@ -228,6 +230,7 @@ def test_refine_batch_mode_success(
     assert body["chunks_ok"] == 1
     assert body["chunks_rejected"] == 0
     assert body["cost_usd"] == 0.5
+    assert body["voice_repairs"] == ["bars (1, 4) note 7: voice 1 -> 2"]
     mock_batch.assert_called_once()
 
 

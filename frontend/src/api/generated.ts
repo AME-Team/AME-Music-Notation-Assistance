@@ -1358,6 +1358,8 @@ export interface components {
             rejected_reasons: string[];
             /** Skipped Decisions */
             skipped_decisions: string[];
+            /** Voice Repairs */
+            voice_repairs: string[];
             /** Usage */
             usage: {
                 [key: string]: number;
