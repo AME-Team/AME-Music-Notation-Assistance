@@ -22,6 +22,9 @@ from app.pipeline.export.musicxml import (
 from app.pipeline.export.musicxml import (
     _inject_score_instruments as inject_score_instruments,
 )
+from app.pipeline.export.musicxml import (
+    _pad_parts_to_equal_measures as pad_parts_to_equal_measures,
+)
 
 
 def _note(
@@ -454,3 +457,105 @@ class TestRenderMusicxmlReparses:
             xml_bytes.decode("utf-8"), format="musicxml"
         )
         assert len(parsed.flatten().notes) >= 2
+
+
+class TestPartsHaveEqualMeasureCounts:
+    """#155: 全パートの小節数を揃える。
+
+    MusicXMLは全パートが同じ小節数を持つ前提で小節番号をパート間に対応させる。
+    partituraの`add_measures`は各パートの最終イベントまでしか小節を作らないため、
+    「長く鳴るパート」と「早く終わるパート」が混在すると小節数がずれ、その状態の
+    MusicXMLはOSMDが読み込めず`ScorePreview`が例外で落ちる(#60の実曲検証で確認:
+    piano=23小節 / 他パート=17小節)。
+    """
+
+    @staticmethod
+    def _part(part_id: str, notes: list[dict]) -> dict:
+        return {
+            "id": part_id,
+            "name": part_id.title(),
+            "midi_program": 0,
+            "staves": 1,
+            "clefs": [{"staff": 1, "sign": "G", "line": 2}],
+            "notes": notes,
+            "pedals": [],
+        }
+
+    @staticmethod
+    def _measure_counts(xml: bytes) -> dict[str, int]:
+        root = ET.fromstring(xml)
+        return {
+            str(part.get("id")): len(part.findall("measure"))
+            for part in root.findall("part")
+        }
+
+    def test_short_part_is_padded_to_the_longest_part(self) -> None:
+        long_notes = [_note(i, i * 480, 480) for i in range(8)]  # 2小節分
+        short_notes = [_note(100, 0, 480)]  # 1小節分
+        score = _score(
+            [self._part("piano", long_notes), self._part("bass", short_notes)]
+        )
+
+        counts = self._measure_counts(render_musicxml(score))
+
+        assert counts["piano"] == 2, counts
+        assert counts["bass"] == counts["piano"], counts
+
+    def test_padded_measures_are_appended_with_sequential_numbers(self) -> None:
+        long_notes = [_note(i, i * 480, 480) for i in range(8)]
+        short_notes = [_note(100, 0, 480)]
+        score = _score(
+            [self._part("piano", long_notes), self._part("bass", short_notes)]
+        )
+
+        root = ET.fromstring(render_musicxml(score))
+        bass = next(part for part in root.findall("part") if part.get("id") == "bass")
+
+        assert [m.get("number") for m in bass.findall("measure")] == ["1", "2"]
+
+    def test_notes_of_the_short_part_stay_in_its_own_measures(self) -> None:
+        """補った空小節に元の音符が混ざらない(詰め直しではなく末尾への追記である)。"""
+        long_notes = [_note(i, i * 480, 480) for i in range(8)]
+        short_notes = [_note(100, 0, 480)]
+        score = _score(
+            [self._part("piano", long_notes), self._part("bass", short_notes)]
+        )
+
+        root = ET.fromstring(render_musicxml(score))
+        bass = next(part for part in root.findall("part") if part.get("id") == "bass")
+        notes_per_measure = [len(m.findall("note")) for m in bass.findall("measure")]
+
+        assert notes_per_measure[0] == 1, notes_per_measure
+        assert notes_per_measure[1:] == [0] * (len(notes_per_measure) - 1), (
+            notes_per_measure
+        )
+
+    def test_aligned_parts_are_left_untouched(self) -> None:
+        notes = [_note(i, i * 480, 480) for i in range(8)]
+        score = _score(
+            [
+                self._part("piano", notes),
+                self._part("bass", [_note(100, i * 480, 480) for i in range(8)]),
+            ]
+        )
+
+        counts = self._measure_counts(render_musicxml(score))
+
+        assert counts == {"piano": 2, "bass": 2}, counts
+
+    def test_single_part_score_is_unchanged(self) -> None:
+        notes = [_note(i, i * 480, 480) for i in range(4)]
+        score = _score([self._part("piano", notes)])
+
+        counts = self._measure_counts(render_musicxml(score))
+
+        assert counts == {"piano": 1}, counts
+
+    def test_helper_is_a_no_op_when_counts_match(self) -> None:
+        xml = '<score-partwise><part id="p"><measure number="1"></measure></part><part id="q"><measure number="1"></measure></part></score-partwise>'
+
+        assert pad_parts_to_equal_measures(xml) == xml
+
+    def test_helper_rejects_xml_without_part_elements(self) -> None:
+        with pytest.raises(ExportError):
+            pad_parts_to_equal_measures("<score-partwise></score-partwise>")
