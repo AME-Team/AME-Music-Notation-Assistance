@@ -32,27 +32,31 @@ test("blob Worker is allowed by the app CSP (Tone.js transport clock)", async ()
     if (text.includes("Content Security Policy")) cspViolations.push(text);
   });
 
-  await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({ timeout: 30_000 });
+  try {
+    await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({ timeout: 30_000 });
 
-  // Tone.jsのTickerと同じ手順(Blob → createObjectURL → new Worker)で、
-  // 実際にメッセージが届く(=クロックが動く)ことを確認する。
-  const ticks = await page.evaluate(async () => {
-    const blob = new Blob(
-      ["self.postMessage('tick'); setInterval(() => self.postMessage('tick'), 20);"],
-      { type: "text/javascript" },
-    );
-    const worker = new Worker(URL.createObjectURL(blob));
-    let count = 0;
-    worker.onmessage = () => {
-      count += 1;
-    };
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    worker.terminate();
-    return count;
-  });
+    // Tone.jsのTickerと同じ手順(Blob → createObjectURL → new Worker)で、
+    // 実際にメッセージが届く(=クロックが動く)ことを確認する。
+    const ticks = await page.evaluate(async () => {
+      const blob = new Blob(
+        ["self.postMessage('tick'); setInterval(() => self.postMessage('tick'), 20);"],
+        { type: "text/javascript" },
+      );
+      const worker = new Worker(URL.createObjectURL(blob));
+      let count = 0;
+      worker.onmessage = () => {
+        count += 1;
+      };
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      worker.terminate();
+      return count;
+    });
 
-  expect(ticks).toBeGreaterThan(0);
-  expect(cspViolations).toEqual([]);
-
-  await app.close();
+    expect(ticks).toBeGreaterThan(0);
+    expect(cspViolations).toEqual([]);
+  } finally {
+    // #145レビュー指摘: 途中のassertで失敗してもElectronを確実に終了させる
+    // (残留プロセスが後続テストを不安定にし、CIがハングするため)。
+    await app.close();
+  }
 });

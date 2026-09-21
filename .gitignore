@@ -37,3 +37,4 @@ Thumbs.db
 # セッション間の引き継ぎメモ(意図的に追跡しない、ローカル専用スクラッチ)
 HANDOFF.md
 frontend/test-results/
+frontend/playwright-report/
