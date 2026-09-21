@@ -57,10 +57,10 @@ export function AudioPlayer({ projectId }: AudioPlayerProps) {
     };
   }, [projectId]);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  if (error) return <p className="text-sm text-red-600 dark:text-red-400">{error}</p>;
 
   return (
-    <div className="rounded border border-gray-200 p-3">
+    <div className="rounded border border-gray-200 dark:border-gray-700 p-3">
       <div ref={containerRef} />
       <button
         type="button"

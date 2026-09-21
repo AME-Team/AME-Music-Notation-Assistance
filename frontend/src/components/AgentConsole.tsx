@@ -18,12 +18,17 @@ const STATUS_LABEL: Record<AgentRunStatus, string> = {
 };
 
 const STATUS_BADGE: Record<AgentRunStatus, string> = {
-  queued: "bg-gray-50 text-gray-600 border-gray-200",
-  running: "bg-blue-50 text-blue-700 border-blue-200",
-  completed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  failed: "bg-red-50 text-red-700 border-red-200",
-  cancelled: "bg-gray-50 text-gray-500 border-gray-200",
-  truncated: "bg-amber-50 text-amber-700 border-amber-200",
+  queued:
+    "bg-gray-50 dark:bg-gray-900 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700",
+  running:
+    "bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-900",
+  completed:
+    "bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200",
+  failed:
+    "bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900",
+  cancelled:
+    "bg-gray-50 dark:bg-gray-900 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700",
+  truncated: "bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200",
 };
 
 interface Violation {
@@ -63,9 +68,11 @@ function EventRow({ event }: { event: AgentEvent }) {
   if (event.kind === "thinking") {
     const text = typeof event.payload.text === "string" ? event.payload.text : "";
     return (
-      <details className="rounded-md border border-gray-100 bg-gray-50 px-3 py-1.5 text-xs text-gray-500">
+      <details className="rounded-md border border-gray-100 bg-gray-50 dark:bg-gray-900 px-3 py-1.5 text-xs text-gray-500 dark:text-gray-400">
         <summary className="cursor-pointer select-none">思考 ({text.length}文字)</summary>
-        <p className="mt-1 whitespace-pre-wrap font-mono text-gray-600">{text}</p>
+        <p className="mt-1 whitespace-pre-wrap font-mono text-gray-600 dark:text-gray-300">
+          {text}
+        </p>
       </details>
     );
   }
@@ -73,7 +80,7 @@ function EventRow({ event }: { event: AgentEvent }) {
   if (event.kind === "text") {
     const text = typeof event.payload.text === "string" ? event.payload.text : "";
     return (
-      <p className="rounded-md border border-indigo-100 bg-indigo-50/40 px-3 py-1.5 text-sm text-gray-800 whitespace-pre-wrap">
+      <p className="rounded-md border border-indigo-100 bg-indigo-50/40 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
         {text}
       </p>
     );
@@ -81,14 +88,14 @@ function EventRow({ event }: { event: AgentEvent }) {
 
   if (event.kind === "tool_use") {
     return (
-      <div className="rounded-md border border-gray-200 px-3 py-1.5 text-xs">
+      <div className="rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs">
         <div className="flex items-center gap-2">
-          <span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono font-semibold text-gray-700">
+          <span className="rounded bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 font-mono font-semibold text-gray-700 dark:text-gray-200">
             {event.tool_name ?? "?"}
           </span>
-          <span className="text-gray-400">呼び出し</span>
+          <span className="text-gray-400 dark:text-gray-500">呼び出し</span>
         </div>
-        <pre className="mt-1 overflow-x-auto font-mono text-gray-500">
+        <pre className="mt-1 overflow-x-auto font-mono text-gray-500 dark:text-gray-400">
           {summarize(event.payload.input)}
         </pre>
       </div>
@@ -102,23 +109,31 @@ function EventRow({ event }: { event: AgentEvent }) {
     return (
       <div
         className={`rounded-md border px-3 py-1.5 text-xs ${
-          hasIssue ? "border-red-200 bg-red-50" : "border-gray-200"
+          hasIssue
+            ? "border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950"
+            : "border-gray-200 dark:border-gray-700"
         }`}
       >
         <div className="flex items-center gap-2">
           <span
             className={`rounded px-1.5 py-0.5 font-mono font-semibold ${
-              hasIssue ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-700"
+              hasIssue
+                ? "bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300"
+                : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200"
             }`}
           >
             {event.tool_name ?? "?"}
           </span>
-          <span className={hasIssue ? "text-red-600" : "text-gray-400"}>
+          <span
+            className={
+              hasIssue ? "text-red-600 dark:text-red-400" : "text-gray-400 dark:text-gray-500"
+            }
+          >
             {isError ? "エラー" : violations.length > 0 ? "検証違反あり" : "結果"}
           </span>
         </div>
         {violations.length > 0 ? (
-          <ul className="mt-1 list-inside list-disc space-y-0.5 font-mono text-red-700">
+          <ul className="mt-1 list-inside list-disc space-y-0.5 font-mono text-red-700 dark:text-red-300">
             {violations.map((v, i) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: violationsは同一runでも重複しうる安定IDを持たない
               <li key={i}>
@@ -127,7 +142,7 @@ function EventRow({ event }: { event: AgentEvent }) {
             ))}
           </ul>
         ) : (
-          <pre className="mt-1 overflow-x-auto font-mono text-gray-500">
+          <pre className="mt-1 overflow-x-auto font-mono text-gray-500 dark:text-gray-400">
             {summarize(event.payload.output)}
           </pre>
         )}
@@ -144,10 +159,10 @@ function EventRow({ event }: { event: AgentEvent }) {
     <div
       className={`rounded-md border px-3 py-2 text-sm font-medium ${
         event.kind === "error"
-          ? "border-red-200 bg-red-50 text-red-700"
+          ? "border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300"
           : event.kind === "cancelled"
-            ? "border-gray-200 bg-gray-50 text-gray-600"
-            : "border-emerald-200 bg-emerald-50 text-emerald-700"
+            ? "border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-600 dark:text-gray-300"
+            : "border-emerald-200 bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
       }`}
     >
       run終了: {status}
@@ -221,11 +236,11 @@ export function AgentConsole({ runId, onDismiss }: AgentConsoleProps) {
   }
 
   return (
-    <section className="space-y-3 rounded-lg border border-gray-200 p-4">
+    <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-gray-700">AgentConsole</h3>
-          <p className="text-xs text-gray-500">
+          <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">AgentConsole</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
             エージェントの実行過程をリアルタイムに表示します(設計書§4.1 FR-20, R-14)
           </p>
         </div>
@@ -242,7 +257,7 @@ export function AgentConsole({ runId, onDismiss }: AgentConsoleProps) {
             <button
               type="button"
               onClick={() => void handleCancel()}
-              className="rounded-md bg-red-50 px-3 py-1 text-xs font-medium text-red-700 border border-red-200 hover:bg-red-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-500"
+              className="rounded-md bg-red-50 dark:bg-red-950 px-3 py-1 text-xs font-medium text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900 hover:bg-red-100 dark:hover:bg-red-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-500"
             >
               キャンセル
             </button>
@@ -251,7 +266,7 @@ export function AgentConsole({ runId, onDismiss }: AgentConsoleProps) {
             <button
               type="button"
               onClick={onDismiss}
-              className="rounded-md px-2 py-1 text-xs text-gray-500 hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400"
+              className="rounded-md px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400"
             >
               閉じる
             </button>
@@ -260,20 +275,26 @@ export function AgentConsole({ runId, onDismiss }: AgentConsoleProps) {
       </div>
 
       {run?.error && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="rounded-md border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 px-3 py-2 text-sm text-red-700 dark:text-red-300">
           {run.error}
         </p>
       )}
 
       {events.length === 0 ? (
-        <p className="text-sm text-gray-500">イベントを待機しています...</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">イベントを待機しています...</p>
       ) : (
         <div
           ref={parentRef}
           onScroll={handleScroll}
-          className="max-h-96 overflow-y-auto rounded-md border border-gray-100 bg-white"
+          className="max-h-96 overflow-y-auto rounded-md border border-gray-100 bg-white dark:bg-gray-900"
         >
-          <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+          <div
+            style={{
+              height: virtualizer.getTotalSize(),
+              position: "relative",
+              width: "100%",
+            }}
+          >
             {virtualizer.getVirtualItems().map((virtualRow) => (
               <div
                 key={virtualRow.key}

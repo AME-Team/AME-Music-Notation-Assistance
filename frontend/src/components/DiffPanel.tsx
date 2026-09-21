@@ -66,8 +66,9 @@ function describeChange(change: NoteChangeResponse): string {
 
 const CHANGE_TYPE_BADGE: Record<NoteChangeResponse["change_type"], string> = {
   keep: "bg-indigo-50 text-indigo-700 border-indigo-200",
-  delete: "bg-red-50 text-red-700 border-red-200",
-  split_tie: "bg-amber-50 text-amber-700 border-amber-200",
+  delete:
+    "bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900",
+  split_tie: "bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200",
 };
 
 /**
@@ -101,11 +102,13 @@ export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: Di
   const mutationError = (accept.error ?? reject.error) as Error | null;
 
   return (
-    <section className="space-y-4 rounded-lg border border-gray-200 p-4">
+    <section className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-gray-700">DiffPanel — L0 / AI提案の差分</h3>
-          <p className="text-xs text-gray-500">
+          <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+            DiffPanel — L0 / AI提案の差分
+          </h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
             小節単位でAIの変更提案を確認し、承認または却下してください (設計書§4.1 FR-10)
           </p>
         </div>
@@ -116,7 +119,7 @@ export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: Di
           <button
             type="button"
             onClick={onDismiss}
-            className="rounded-md px-2 py-1 text-xs text-gray-500 hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400"
+            className="rounded-md px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400"
           >
             閉じる
           </button>
@@ -128,17 +131,17 @@ export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: Di
           <summary className="cursor-pointer font-medium text-indigo-900 select-none">
             AI成果報告 (report.md)
           </summary>
-          <div className="mt-2 max-h-60 overflow-y-auto whitespace-pre-wrap rounded border border-indigo-100 bg-white p-3 font-mono text-xs text-gray-800">
+          <div className="mt-2 max-h-60 overflow-y-auto whitespace-pre-wrap rounded border border-indigo-100 bg-white dark:bg-gray-900 p-3 font-mono text-xs text-gray-800 dark:text-gray-200">
             {report.content}
           </div>
         </details>
       )}
 
-      {isLoading && <p className="text-sm text-gray-500">差分を読み込み中...</p>}
-      {error && <p className="text-sm text-red-600">{error.message}</p>}
+      {isLoading && <p className="text-sm text-gray-500 dark:text-gray-400">差分を読み込み中...</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error.message}</p>}
 
       {diff && changesByBar.length === 0 && (
-        <p className="rounded-md bg-emerald-50 p-3 text-sm text-emerald-800 border border-emerald-200">
+        <p className="rounded-md bg-emerald-50 dark:bg-emerald-950 p-3 text-sm text-emerald-800 border border-emerald-200">
           処理待ちの変更はありません(すべて承認/却下済みです)。
         </p>
       )}
@@ -158,25 +161,32 @@ export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: Di
               type="button"
               onClick={() => reject.mutate({})}
               disabled={isBusy}
-              className="rounded-md bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400 disabled:opacity-50"
+              className="rounded-md bg-gray-100 dark:bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400 disabled:opacity-50"
             >
               すべて却下
             </button>
           </div>
 
-          {mutationError && <p className="text-sm text-red-600">{mutationError.message}</p>}
+          {mutationError && (
+            <p className="text-sm text-red-600 dark:text-red-400">{mutationError.message}</p>
+          )}
 
           <div className="space-y-4">
             {changesByBar.map(([bar, changes]) => (
-              <div key={bar} className="space-y-2 rounded-md border border-gray-200 p-3">
+              <div
+                key={bar}
+                className="space-y-2 rounded-md border border-gray-200 dark:border-gray-700 p-3"
+              >
                 <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-semibold text-gray-700">第{bar}小節</h4>
+                  <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+                    第{bar}小節
+                  </h4>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => accept.mutate({ bar_range: [bar, bar] })}
                       disabled={isBusy}
-                      className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50"
+                      className="rounded-md bg-emerald-50 dark:bg-emerald-950 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300 border border-emerald-200 hover:bg-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50"
                     >
                       承認
                     </button>
@@ -184,7 +194,7 @@ export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: Di
                       type="button"
                       onClick={() => reject.mutate({ bar_range: [bar, bar] })}
                       disabled={isBusy}
-                      className="rounded-md bg-gray-50 px-2 py-1 text-xs font-medium text-gray-600 border border-gray-200 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400 disabled:opacity-50"
+                      className="rounded-md bg-gray-50 dark:bg-gray-900 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400 disabled:opacity-50"
                     >
                       却下
                     </button>
@@ -200,10 +210,12 @@ export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: Di
                         >
                           {change.change_type}
                         </span>
-                        <span className="text-gray-700">{describeChange(change)}</span>
+                        <span className="text-gray-700 dark:text-gray-200">
+                          {describeChange(change)}
+                        </span>
                       </div>
                       {change.ai_reason && (
-                        <p className="ml-1 rounded-md bg-gray-50 px-2 py-1 text-xs text-gray-500 border border-gray-100">
+                        <p className="ml-1 rounded-md bg-gray-50 dark:bg-gray-900 px-2 py-1 text-xs text-gray-500 dark:text-gray-400 border border-gray-100">
                           {change.ai_reason}
                         </p>
                       )}

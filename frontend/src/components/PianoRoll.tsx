@@ -17,6 +17,7 @@ import {
   yToMidi,
 } from "../lib/pianoRoll";
 import { usePlaybackStore } from "../stores/playbackStore";
+import { useThemeStore } from "../stores/themeStore";
 
 const ROW_HEIGHT_PX = 14;
 const DEFAULT_PX_PER_TICK = 0.15;
@@ -26,6 +27,20 @@ const DEFAULT_TOP_MIDI = 84;
 const INITIAL_SCROLL_MARGIN_TICK = 480;
 const MIN_DRAG_DISTANCE_PX = 3; // これ未満の移動はクリック(選択)として扱う
 const HATCH_SPACING_PX = 4;
+
+/** #152: キャンバス配色(テーマ別)。`dark`では下地を暗くし、罫線/ハッチも反転する。 */
+const CANVAS_PALETTE = {
+  light: {
+    background: "#f9fafb",
+    barLine: "#9ca3af",
+    hatch: "rgba(0, 0, 0, 0.35)",
+  },
+  dark: {
+    background: "#111827",
+    barLine: "#4b5563",
+    hatch: "rgba(255, 255, 255, 0.35)",
+  },
+} as const;
 
 /** #35: `flags: ghost_candidate`ノートの斜線ハッチ(設計書§12.4)。
  *
@@ -39,12 +54,13 @@ function drawDiagonalHatch(
   y: number,
   w: number,
   h: number,
+  stroke: string = CANVAS_PALETTE.light.hatch,
 ): void {
   ctx.save();
   ctx.beginPath();
   ctx.rect(x, y, w, h);
   ctx.clip();
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.strokeStyle = stroke;
   ctx.lineWidth = 1;
   for (let offset = -h; offset < w; offset += HATCH_SPACING_PX) {
     ctx.beginPath();
@@ -154,6 +170,11 @@ export function PianoRoll({
 
   // 描画本体はrefのみを参照するため、useCallbackで参照を安定させる
   // (依存配列を空にできる=rAFループ用useEffectを1回だけ登録できる)。
+  // #152: テーマを購読し、キャンバス配色のrefを差し替えて再描画する
+  // (`draw`の依存配列は空のままにしたいので、値ではなくrefで渡す)。
+  const theme = useThemeStore((s) => s.theme);
+  const paletteRef = useRef<(typeof CANVAS_PALETTE)["light" | "dark"]>(CANVAS_PALETTE.light);
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -167,7 +188,7 @@ export function PianoRoll({
     ctx.clearRect(0, 0, widthCss, heightCss);
 
     const { scrollTick, topMidi, pxPerTick } = viewRef.current;
-    ctx.fillStyle = "#f9fafb";
+    ctx.fillStyle = paletteRef.current.background;
     ctx.fillRect(0, 0, widthCss, heightCss);
 
     // 小節線。
@@ -177,7 +198,7 @@ export function PianoRoll({
       divisionsRef.current,
       Math.max(viewEndTick, 0),
     );
-    ctx.strokeStyle = "#9ca3af";
+    ctx.strokeStyle = paletteRef.current.barLine;
     ctx.lineWidth = 1;
     for (const tick of boundaries) {
       const x = tickToX(tick, scrollTick, pxPerTick);
@@ -232,7 +253,7 @@ export function PianoRoll({
 
       // #35: `flags: ghost_candidate`は斜線ハッチを塗りの上に重ねる。
       if (note.flags.includes(GHOST_FLAG)) {
-        drawDiagonalHatch(ctx, rectX, rectY, rectW, rectH);
+        drawDiagonalHatch(ctx, rectX, rectY, rectW, rectH, paletteRef.current.hatch);
       }
 
       // #142: 4声上限に収まらず重複が残るノート(`voice_saturated`)は、
@@ -297,6 +318,12 @@ export function PianoRoll({
 
     ctx.restore();
   }, []);
+
+  // #152: テーマ変更時に配色を差し替えて再描画する。
+  useEffect(() => {
+    paletteRef.current = CANVAS_PALETTE[theme];
+    markDirty();
+  }, [theme, markDirty]);
 
   // 描画ループ(#30: rAFで1フレーム1回に集約)。drawの参照が安定しているため、
   // このエフェクトはマウント時に1度だけ登録される。
@@ -437,7 +464,12 @@ export function PianoRoll({
         for (const note of sortedNotesRef.current) {
           if (targetIds.has(note.id)) noteStarts.set(note.id, note.onset_tick);
         }
-        dragRef.current = { mode: "move", startPointerTick: tick, noteStarts, previewDeltaTick: 0 };
+        dragRef.current = {
+          mode: "move",
+          startPointerTick: tick,
+          noteStarts,
+          previewDeltaTick: 0,
+        };
       }
     } else {
       dragRef.current = {
@@ -494,7 +526,11 @@ export function PianoRoll({
       onApplyOps(ops);
     } else if (drag.mode === "resize" && drag.previewDurationTick !== drag.startDurationTick) {
       onApplyOps([
-        { type: "note.update", note_ids: [drag.noteId], duration_tick: drag.previewDurationTick },
+        {
+          type: "note.update",
+          note_ids: [drag.noteId],
+          duration_tick: drag.previewDurationTick,
+        },
       ]);
     } else if (drag.mode === "select") {
       const lo = Math.min(drag.startTick, drag.currentTick);
@@ -551,7 +587,7 @@ export function PianoRoll({
       <canvas
         ref={canvasRef}
         style={{ height }}
-        className="block w-full cursor-crosshair rounded-md border border-gray-300 touch-none"
+        className="block w-full cursor-crosshair rounded-md border border-gray-300 dark:border-gray-600 touch-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

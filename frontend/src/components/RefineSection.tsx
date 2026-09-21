@@ -92,11 +92,13 @@ export function RefineSection({
   }
 
   return (
-    <section className="space-y-4 rounded-lg border border-gray-200 p-4">
+    <section className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-gray-700">L1 整音 (AI構造化注釈)</h3>
-          <p className="text-xs text-gray-500">
+          <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+            L1 整音 (AI構造化注釈)
+          </h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
             claude CLI による小節単位の記譜注釈・声部・異名同音の最適化 (設計書§7.3)
           </p>
         </div>
@@ -106,13 +108,13 @@ export function RefineSection({
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           対象パート
           <select
             value={selectedPart}
             onChange={(e) => setSelectedPart(e.target.value)}
             disabled={parts.length === 0 || isRunning}
-            className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
             {parts.map((p) => (
               <option key={p.id} value={p.id}>
@@ -122,26 +124,26 @@ export function RefineSection({
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           実行モード
           <select
             value={mode}
             onChange={(e) => setMode(e.target.value as "batch" | "sync")}
             disabled={isRunning}
-            className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
             <option value="sync">同期・逐次実行 (即時・既定)</option>
             <option value="batch">並列実行 (複数チャンク同時処理・高速)</option>
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           推論 Effort
           <select
             value={effort}
             onChange={(e) => setEffort(e.target.value as "high" | "medium")}
             disabled={isRunning}
-            className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
             <option value="high">High (高品質・既定)</option>
             <option value="medium">Medium (低コスト)</option>
@@ -159,11 +161,11 @@ export function RefineSection({
       </div>
 
       {/* 事前コスト見積もり表示 (§7.5) */}
-      <div className="rounded-md bg-gray-50 p-3 text-xs text-gray-700 border border-gray-200">
+      <div className="rounded-md bg-gray-50 dark:bg-gray-900 p-3 text-xs text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-2">
-          <span className="font-semibold text-gray-800">事前見積もり:</span>
+          <span className="font-semibold text-gray-800 dark:text-gray-200">事前見積もり:</span>
           {isEstimating ? (
-            <span className="text-gray-500">計算中...</span>
+            <span className="text-gray-500 dark:text-gray-400">計算中...</span>
           ) : estimate ? (
             <div className="flex flex-wrap items-center gap-3">
               <span>
@@ -180,21 +182,23 @@ export function RefineSection({
               <span className="text-indigo-700 font-semibold">
                 想定コスト: 約 ${estimate.estimated_cost_usd.toFixed(4)}
                 {mode === "batch" && (
-                  <span className="ml-1 text-amber-600">
+                  <span className="ml-1 text-amber-600 dark:text-amber-400">
                     (並列実行はキャッシュ再利用が効きにくく、逐次実行より高くなる場合があります)
                   </span>
                 )}
               </span>
             </div>
           ) : (
-            <span className="text-gray-500">量子化完了後に見積もりが表示されます</span>
+            <span className="text-gray-500 dark:text-gray-400">
+              量子化完了後に見積もりが表示されます
+            </span>
           )}
         </div>
-        {estimateError && <p className="mt-1 text-red-600">{estimateError}</p>}
+        {estimateError && <p className="mt-1 text-red-600 dark:text-red-400">{estimateError}</p>}
       </div>
 
       {refineError && (
-        <div className="rounded-md bg-red-50 p-3 text-sm text-red-700 border border-red-200">
+        <div className="rounded-md bg-red-50 dark:bg-red-950 p-3 text-sm text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900">
           <p className="font-semibold">L1整音に失敗しました</p>
           <p>{refineError}</p>
         </div>
@@ -202,7 +206,7 @@ export function RefineSection({
 
       {/* 実行結果とコスト可視化カード (NFR-07) */}
       {refineResult && (
-        <div className="space-y-2 rounded-md bg-emerald-50 p-4 text-sm text-emerald-900 border border-emerald-200">
+        <div className="space-y-2 rounded-md bg-emerald-50 dark:bg-emerald-950 p-4 text-sm text-emerald-900 border border-emerald-200">
           <div className="flex items-center justify-between">
             <span className="font-semibold flex items-center gap-1.5 text-emerald-800">
               ✓ L1 整音完了 (Staging 保存済み)
@@ -213,27 +217,29 @@ export function RefineSection({
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-xs">
-            <div className="rounded bg-white p-2 border border-emerald-100 shadow-sm">
-              <span className="text-gray-500 block">承認チャンク</span>
-              <span className="text-base font-bold text-emerald-700">{refineResult.chunks_ok}</span>
+            <div className="rounded bg-white dark:bg-gray-900 p-2 border border-emerald-100 shadow-sm">
+              <span className="text-gray-500 dark:text-gray-400 block">承認チャンク</span>
+              <span className="text-base font-bold text-emerald-700 dark:text-emerald-300">
+                {refineResult.chunks_ok}
+              </span>
             </div>
-            <div className="rounded bg-white p-2 border border-emerald-100 shadow-sm">
-              <span className="text-gray-500 block">棄却チャンク</span>
+            <div className="rounded bg-white dark:bg-gray-900 p-2 border border-emerald-100 shadow-sm">
+              <span className="text-gray-500 dark:text-gray-400 block">棄却チャンク</span>
               <span
-                className={`text-base font-bold ${refineResult.chunks_rejected > 0 ? "text-amber-600" : "text-gray-700"}`}
+                className={`text-base font-bold ${refineResult.chunks_rejected > 0 ? "text-amber-600 dark:text-amber-400" : "text-gray-700 dark:text-gray-200"}`}
               >
                 {refineResult.chunks_rejected}
               </span>
             </div>
-            <div className="rounded bg-white p-2 border border-emerald-100 shadow-sm">
-              <span className="text-gray-500 block">消費トークン (入/出)</span>
-              <span className="text-base font-bold text-gray-800">
+            <div className="rounded bg-white dark:bg-gray-900 p-2 border border-emerald-100 shadow-sm">
+              <span className="text-gray-500 dark:text-gray-400 block">消費トークン (入/出)</span>
+              <span className="text-base font-bold text-gray-800 dark:text-gray-200">
                 {refineResult.usage.input_tokens.toLocaleString()} /{" "}
                 {refineResult.usage.output_tokens.toLocaleString()}
               </span>
             </div>
-            <div className="rounded bg-white p-2 border border-emerald-100 shadow-sm">
-              <span className="text-gray-500 block">実測コスト (NFR-07)</span>
+            <div className="rounded bg-white dark:bg-gray-900 p-2 border border-emerald-100 shadow-sm">
+              <span className="text-gray-500 dark:text-gray-400 block">実測コスト (NFR-07)</span>
               <span className="text-base font-bold text-indigo-700">
                 ${refineResult.cost_usd.toFixed(4)}
               </span>
@@ -241,7 +247,7 @@ export function RefineSection({
           </div>
 
           {refineResult.rejected_reasons.length > 0 && (
-            <div className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800 border border-amber-200">
+            <div className="mt-2 rounded bg-amber-50 dark:bg-amber-950 p-2 text-xs text-amber-800 dark:text-amber-200 border border-amber-200">
               <span className="font-semibold">棄却理由:</span>
               <ul className="list-disc list-inside mt-1 space-y-0.5">
                 {refineResult.rejected_reasons.map((r) => (
@@ -272,7 +278,7 @@ export function RefineSection({
             </div>
           )}
 
-          <p className="text-xs text-emerald-700 pt-1">
+          <p className="text-xs text-emerald-700 dark:text-emerald-300 pt-1">
             ※ 整音結果は <code>score/staging/{refineResult.run_id}.json</code> に保存されています。
             下記のDiffPanelで差分を確認し、小節単位で承認/却下してください。
           </p>

@@ -40,10 +40,14 @@ export function ProjectUpload() {
       onDragLeave={() => setIsDragging(false)}
       onDrop={handleDrop}
       className={`flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-10 text-center transition-colors ${
-        isDragging ? "border-blue-500 bg-blue-50" : "border-gray-300 bg-gray-50"
+        isDragging
+          ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
+          : "border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900"
       }`}
     >
-      <p className="text-sm text-gray-600">MP3 / WAV / FLAC / M4A をここにドラッグ&ドロップ</p>
+      <p className="text-sm text-gray-600 dark:text-gray-300">
+        MP3 / WAV / FLAC / M4A をここにドラッグ&ドロップ
+      </p>
       <button
         type="button"
         onClick={handleBrowseClick}
@@ -64,7 +68,9 @@ export function ProjectUpload() {
         }}
       />
       {createProject.isError && (
-        <p className="text-sm text-red-600">{(createProject.error as Error).message}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">
+          {(createProject.error as Error).message}
+        </p>
       )}
     </div>
   );

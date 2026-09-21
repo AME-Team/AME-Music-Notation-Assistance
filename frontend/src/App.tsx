@@ -5,6 +5,7 @@ import { JobMonitor } from "./components/JobMonitor";
 import { ProjectList } from "./components/ProjectList";
 import { ProjectUpload } from "./components/ProjectUpload";
 import { ProjectWorkspace } from "./components/ProjectWorkspace";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { watchBackendStatus } from "./lib/backendStatus";
 import type { BackendStatus } from "./lib/electron-api";
 import { useJobStore } from "./stores/jobStore";
@@ -31,21 +32,26 @@ export function App() {
   if (backendStatus === "starting") {
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-gray-500">バックエンドを起動しています...</p>
+        <p className="text-gray-500 dark:text-gray-400">バックエンドを起動しています...</p>
       </div>
     );
   }
   if (backendStatus === "error") {
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-red-600">バックエンドの起動に失敗しました: {backendDetail}</p>
+        <p className="text-red-600 dark:text-red-400">
+          バックエンドの起動に失敗しました: {backendDetail}
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="w-full space-y-6 px-4 py-4">
-      <h1 className="text-xl font-semibold text-gray-900">AME Music Notation Assistance</h1>
+    <div className="min-h-full w-full space-y-6 bg-white dark:bg-gray-900 px-4 py-4 text-gray-900 dark:text-gray-100 dark:bg-gray-950 dark:text-gray-100">
+      <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 dark:text-gray-100">
+        AME Music Notation Assistance
+      </h1>
+      <SettingsPanel />
       <ProjectUpload />
       <ProjectList selectedId={selected?.id ?? null} onSelect={setSelected} />
       {selected && (

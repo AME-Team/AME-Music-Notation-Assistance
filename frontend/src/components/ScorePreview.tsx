@@ -14,9 +14,9 @@ interface ScorePreviewProps {
 const DEBOUNCE_MS = 500; // NFR-03: 編集後500ms以内にプレビューが更新される
 const AUTO_FOLLOW_WINDOW_BARS = 4; // 選択ノートの前後何小節を表示範囲に含めるか
 
-const INPUT_LABEL_CLASS = "flex flex-col gap-1 text-sm text-gray-600";
+const INPUT_LABEL_CLASS = "flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300";
 const INPUT_CLASS =
-  "w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500";
+  "w-20 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500";
 
 /**
  * #33/#34: OSMDによる楽譜プレビュー(FR-11/NFR-03)+再生カーソル連動(FR-12)。
@@ -211,8 +211,8 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
   }, [currentBar, loaded]);
 
   return (
-    <section className="space-y-3 rounded-lg border border-gray-200 p-4">
-      <h3 className="text-lg font-semibold text-gray-700">楽譜プレビュー</h3>
+    <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+      <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">楽譜プレビュー</h3>
       <div className="flex flex-wrap items-end gap-4">
         <label className={INPUT_LABEL_CLASS}>
           表示小節(開始)
@@ -236,11 +236,11 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
             className={INPUT_CLASS}
           />
         </label>
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-gray-500 dark:text-gray-400">
           空欄なら全体を表示(1件選択中はその小節付近へ自動追従)
         </span>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       <div ref={containerRef} className="w-full overflow-x-auto" />
     </section>
   );

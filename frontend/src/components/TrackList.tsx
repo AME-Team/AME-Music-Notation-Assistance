@@ -78,7 +78,9 @@ function TrackRow({ projectId, name }: TrackRowProps) {
 
   return (
     <li className="flex items-center gap-4 py-2">
-      <span className="w-28 truncate text-sm font-medium text-gray-900">{name}</span>
+      <span className="w-28 truncate text-sm font-medium text-gray-900 dark:text-gray-100">
+        {name}
+      </span>
       <button
         type="button"
         onClick={() => void handlePlayPause()}
@@ -92,7 +94,9 @@ function TrackRow({ projectId, name }: TrackRowProps) {
         aria-pressed={muted}
         onClick={() => toggleMute(name)}
         className={`rounded-md px-3 py-1 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
-          muted ? "bg-red-600 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+          muted
+            ? "bg-red-600 text-white"
+            : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700"
         }`}
       >
         ミュート
@@ -102,12 +106,14 @@ function TrackRow({ projectId, name }: TrackRowProps) {
         aria-pressed={soloed}
         onClick={() => toggleSolo(name)}
         className={`rounded-md px-3 py-1 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
-          soloed ? "bg-amber-500 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+          soloed
+            ? "bg-amber-500 text-white"
+            : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700"
         }`}
       >
         ソロ
       </button>
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
       {/* biome-ignore lint/a11y/useMediaCaption: 楽器音源に字幕は適用対象外 */}
       <audio
         ref={audioRef}
@@ -141,11 +147,14 @@ export function TrackList({ projectId }: TrackListProps) {
     // `key={projectId}` による再マウントで保証する)。
   }, [reset]);
 
-  if (isLoading) return <p className="text-sm text-gray-500">読み込み中...</p>;
-  if (error) return <p className="text-sm text-red-600">{(error as Error).message}</p>;
+  if (isLoading) return <p className="text-sm text-gray-500 dark:text-gray-400">読み込み中...</p>;
+  if (error)
+    return <p className="text-sm text-red-600 dark:text-red-400">{(error as Error).message}</p>;
   if (!stems || stems.length === 0) {
     return (
-      <p className="text-sm text-gray-500">まだステムがありません。音源分離を実行してください。</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        まだステムがありません。音源分離を実行してください。
+      </p>
     );
   }
 

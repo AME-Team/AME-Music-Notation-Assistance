@@ -98,7 +98,9 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     const job = jobs[beatJobId];
     if (job?.status === "succeeded") {
       void queryClient.invalidateQueries({ queryKey: ["beatmap", projectId] });
-      void queryClient.invalidateQueries({ queryKey: ["peaks", projectId, "original"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["peaks", projectId, "original"],
+      });
       void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       setBeatJobId(null);
     } else if (job?.status === "failed") {
@@ -210,15 +212,15 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     <div className="space-y-6">
       <AudioPlayer projectId={projectId} />
 
-      <section className="space-y-3 rounded-lg border border-gray-200 p-4">
-        <h3 className="text-lg font-semibold text-gray-700">分離・ビート推定</h3>
+      <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">分離・ビート推定</h3>
         <div className="flex flex-wrap items-end gap-4">
-          <label className="flex flex-col gap-1 text-sm text-gray-600">
+          <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
             プリセット
             <select
               value={preset}
               onChange={(event) => setPreset(event.target.value as SeparationPreset)}
-              className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+              className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
             >
               {(Object.keys(PRESET_LABEL) as SeparationPreset[]).map((value) => (
                 <option key={value} value={value}>
@@ -227,12 +229,12 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1 text-sm text-gray-600">
+          <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
             実行プロバイダ
             <select
               value={executionProvider}
               onChange={(event) => setExecutionProvider(event.target.value as ExecutionProvider)}
-              className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+              className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
             >
               {(Object.keys(EXECUTION_PROVIDER_LABEL) as ExecutionProvider[]).map((value) => (
                 <option key={value} value={value}>
@@ -258,11 +260,13 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
             {isBeatRunning ? "ビート推定を実行中..." : "ビート推定を実行"}
           </button>
         </div>
-        {stageError && <p className="text-sm text-red-600">{stageError}</p>}
+        {stageError && <p className="text-sm text-red-600 dark:text-red-400">{stageError}</p>}
       </section>
 
-      <section className="space-y-3 rounded-lg border border-gray-200 p-4">
-        <h3 className="text-lg font-semibold text-gray-700">採譜・量子化・エクスポート</h3>
+      <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+          採譜・量子化・エクスポート
+        </h3>
         <div className="flex flex-wrap items-center gap-4">
           <button
             type="button"
@@ -280,7 +284,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
               MusicXMLをエクスポートしうる)。transcribeがstaleの間は
               量子化ボタン自体を無効化する。 */}
           {transcribeStage?.stale && (
-            <span className="text-sm text-amber-600">
+            <span className="text-sm text-amber-600 dark:text-amber-400">
               採譜結果が古い可能性があります(再実行してください)
             </span>
           )}
@@ -293,7 +297,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
             {isQuantizeRunning ? "量子化を実行中..." : "量子化を実行"}
           </button>
           {quantizeStage?.stale && (
-            <span className="text-sm text-amber-600">
+            <span className="text-sm text-amber-600 dark:text-amber-400">
               量子化結果が古い可能性があります(再実行してください)
             </span>
           )}
@@ -319,11 +323,11 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
           </button>
         </div>
         {/* #36: 設計書§6 Stage 6「SMFでは音名表記・声部・大譜表が失われる」を明示する。 */}
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-gray-500 dark:text-gray-400">
           ⚠ MIDI(SMF)形式では音名表記・声部・大譜表の情報は失われます(音高・
           タイミングのみ保持されます)。記譜情報を保持したい場合はMusicXMLを 使用してください。
         </p>
-        {exportError && <p className="text-sm text-red-600">{exportError}</p>}
+        {exportError && <p className="text-sm text-red-600 dark:text-red-400">{exportError}</p>}
       </section>
 
       <RefineSection
@@ -355,15 +359,23 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
         />
       )}
 
-      <section className="space-y-2 rounded-lg border border-gray-200 p-4">
-        <h3 className="text-lg font-semibold text-gray-700">波形とビートグリッド</h3>
-        {peaksLoading && <p className="text-sm text-gray-500">波形を読み込み中...</p>}
-        {peaksError && <p className="text-sm text-red-600">{(peaksError as Error).message}</p>}
+      <section className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+          波形とビートグリッド
+        </h3>
+        {peaksLoading && (
+          <p className="text-sm text-gray-500 dark:text-gray-400">波形を読み込み中...</p>
+        )}
+        {peaksError && (
+          <p className="text-sm text-red-600 dark:text-red-400">{(peaksError as Error).message}</p>
+        )}
         {beatmapError && (
           // beatmapが未実行(404)ならuseBeatmap/getBeatmapがnullを返すため、
           // ここに表示されるのはそれ以外の想定外エラー(#21-M1レビュー指摘:
           // peaksと異なりbeatmapの取得エラーだけ無表示になっていた)。
-          <p className="text-sm text-red-600">{(beatmapError as Error).message}</p>
+          <p className="text-sm text-red-600 dark:text-red-400">
+            {(beatmapError as Error).message}
+          </p>
         )}
         {peaks && (
           <div className="relative">
@@ -377,8 +389,8 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
 
       <PianoRollEditor key={projectId} projectId={projectId} />
 
-      <section className="space-y-2 rounded-lg border border-gray-200 p-4">
-        <h3 className="text-lg font-semibold text-gray-700">トラック</h3>
+      <section className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">トラック</h3>
         <TrackList key={projectId} projectId={projectId} />
       </section>
 

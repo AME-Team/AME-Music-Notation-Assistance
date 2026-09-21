@@ -17,7 +17,9 @@ const BUTTON_CLASS =
 
 const MODE_BUTTON_CLASS = (active: boolean) =>
   `rounded-md px-3 py-1 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 ${
-    active ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+    active
+      ? "bg-blue-600 text-white"
+      : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700"
   }`;
 
 /**
@@ -302,7 +304,7 @@ export function TransportBar({ projectId }: TransportBarProps) {
   if (!score) return null;
 
   return (
-    <section className="flex flex-wrap items-center gap-4 rounded-lg border border-gray-200 p-4">
+    <section className="flex flex-wrap items-center gap-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -329,11 +331,11 @@ export function TransportBar({ projectId }: TransportBarProps) {
           ⏹
         </button>
       </div>
-      <span ref={timeTextRef} className="text-sm text-gray-700">
+      <span ref={timeTextRef} className="text-sm text-gray-700 dark:text-gray-200">
         {formatTime(usePlaybackStore.getState().positionSec)} / {formatTime(durationSec)}
       </span>
-      <span className="text-sm text-gray-700">Bar {currentBar}</span>
-      <span className="text-sm text-gray-700">♩={Math.round(bpm)}</span>
+      <span className="text-sm text-gray-700 dark:text-gray-200">Bar {currentBar}</span>
+      <span className="text-sm text-gray-700 dark:text-gray-200">♩={Math.round(bpm)}</span>
       <div className="flex items-center gap-1">
         <button
           type="button"
@@ -352,7 +354,7 @@ export function TransportBar({ projectId }: TransportBarProps) {
           Audio
         </button>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
     </section>
   );
 }
