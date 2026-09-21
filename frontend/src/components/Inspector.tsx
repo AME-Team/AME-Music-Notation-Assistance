@@ -21,8 +21,8 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const INPUT_CLASS =
-  "w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500";
-const FIELD_LABEL_CLASS = "flex flex-col gap-1 text-sm text-gray-600";
+  "w-20 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500";
+const FIELD_LABEL_CLASS = "flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300";
 const BUTTON_CLASS =
   "rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50";
 
@@ -49,8 +49,8 @@ function parseValidNumber(value: string): number | null {
  */
 export function Inspector({ note, onApplyOps }: InspectorProps) {
   return (
-    <section className="space-y-3 rounded-lg border border-gray-200 p-4">
-      <h3 className="text-lg font-semibold text-gray-700">Inspector</h3>
+    <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+      <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">Inspector</h3>
       {note ? (
         // 選択ノートが変わるたびにフォームのローカルstateをリセットする必要が
         // あるため、`key={note.id}`で丸ごと再マウントする(`ProjectWorkspace`の
@@ -58,7 +58,7 @@ export function Inspector({ note, onApplyOps }: InspectorProps) {
         // リセットする」既存パターン)。
         <InspectorForm key={note.id} note={note} onApplyOps={onApplyOps} />
       ) : (
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
           ノートを1件選択するとプロパティを編集できます(複数選択時は非表示)。
         </p>
       )}
@@ -125,27 +125,29 @@ function InspectorForm({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3 text-sm text-gray-700">
+      <div className="flex flex-wrap items-center gap-3 text-sm text-gray-700 dark:text-gray-200">
         <span className="flex items-center gap-1.5">
           <span
-            className="inline-block h-3 w-3 rounded-sm border border-gray-400"
+            className="inline-block h-3 w-3 rounded-sm border border-gray-400 dark:border-gray-500"
             style={{ backgroundColor: style.fill }}
           />
           {PROVENANCE_LABEL[note.provenance] ?? note.provenance}
         </span>
-        <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+        <span className="rounded-md bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-xs text-gray-600 dark:text-gray-300">
           {STATUS_LABEL[note.status] ?? note.status}
         </span>
         {/* #142: 4声上限に収まらず重複が残るノート(要確認)。 */}
         {isSaturated && (
-          <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+          <span className="rounded-md bg-amber-100 dark:bg-amber-900 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-200">
             {SATURATED_LABEL}
           </span>
         )}
-        <span className="text-xs text-gray-500">信頼度 {Math.round(note.confidence * 100)}%</span>
+        <span className="text-xs text-gray-500 dark:text-gray-400">
+          信頼度 {Math.round(note.confidence * 100)}%
+        </span>
       </div>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-gray-300">
         <dt className="font-medium">AIの判断理由</dt>
         <dd>{note.ai_reason ?? "(AI未整音)"}</dd>
         <dt className="font-medium">出自run ID</dt>
@@ -159,13 +161,13 @@ function InspectorForm({
       </dl>
 
       {isSaturated && (
-        <p className="text-sm text-amber-700" role="status">
+        <p className="text-sm text-amber-700 dark:text-amber-300" role="status">
           {SATURATED_HINT}
         </p>
       )}
 
       {!isEditable && (
-        <p className="text-sm text-amber-600">
+        <p className="text-sm text-amber-600 dark:text-amber-400">
           {note.status === "deleted"
             ? "削除済みのノートです。ピアノロール上でクリックすると復活します。"
             : "このノートは現在編集できません。"}

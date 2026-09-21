@@ -1,7 +1,22 @@
 @import "tailwindcss";
 
+/* #152: Tailwind v4 の既定(`prefers-color-scheme`)ではなく、`<html class="dark">`
+   でダーク/ライトを切り替える(アプリ内の設定で選べるようにするため)。 */
+@custom-variant dark (&:where(.dark, .dark *));
+
 html,
 body,
 #root {
   height: 100%;
+}
+
+/* #152: アプリ全体の下地。既定(ダーク)は`<html class="dark">`で決まる。 */
+body {
+  background-color: var(--color-white);
+  color: var(--color-gray-900);
+}
+
+html.dark body {
+  background-color: var(--color-gray-950);
+  color: var(--color-gray-100);
 }

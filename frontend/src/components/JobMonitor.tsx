@@ -24,17 +24,17 @@ export function JobMonitor() {
         return (
           <div
             key={job.jobId}
-            className="w-72 rounded-lg border border-gray-200 bg-white p-3 shadow-lg"
+            className="w-72 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 shadow-lg"
           >
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-gray-900">
+              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
                 {STATUS_LABEL[job.status] ?? job.status}
               </span>
               {isTerminal ? (
                 <button
                   type="button"
                   onClick={() => dismiss(job.jobId)}
-                  className="text-xs text-gray-400 hover:text-gray-600"
+                  className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   ×
                 </button>
@@ -42,13 +42,13 @@ export function JobMonitor() {
                 <button
                   type="button"
                   onClick={() => void cancel(job.jobId)}
-                  className="text-xs text-red-500 hover:text-red-700"
+                  className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-300"
                 >
                   キャンセル
                 </button>
               )}
             </div>
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
               <div
                 className={`h-full rounded-full transition-all ${
                   job.status === "failed" ? "bg-red-500" : "bg-blue-500"
@@ -56,7 +56,9 @@ export function JobMonitor() {
                 style={{ width: `${Math.round(job.progress * 100)}%` }}
               />
             </div>
-            {job.message && <p className="mt-1 text-xs text-gray-500">{job.message}</p>}
+            {job.message && (
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{job.message}</p>
+            )}
           </div>
         );
       })}

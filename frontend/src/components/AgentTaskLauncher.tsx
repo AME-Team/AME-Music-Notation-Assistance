@@ -102,24 +102,24 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
   }
 
   return (
-    <section className="space-y-4 rounded-lg border border-gray-200 p-4">
+    <section className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div>
-        <h3 className="text-lg font-semibold text-gray-700">
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
           L2 エージェント実行 (AgentTaskLauncher)
         </h3>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-gray-500 dark:text-gray-400">
           標準タスクを選ぶか、自然言語で調査・修正を依頼します(設計書§3 UC-4, §4.1 FR-21)
         </p>
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           タスク
           <select
             value={taskType}
             onChange={(e) => setTaskType(e.target.value)}
             disabled={isLaunching || tasks.length === 0}
-            className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
             {tasks.map((t) => (
               <option key={t.id} value={t.id}>
@@ -129,13 +129,13 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           プロバイダ
           <select
             value={provider}
             onChange={(e) => setProvider(e.target.value)}
             disabled={isLaunching}
-            className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
             {providers.map((p) => (
               <option key={p.name} value={p.name} disabled={!p.configured}>
@@ -146,7 +146,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           モデル(任意)
           <input
             type="text"
@@ -154,11 +154,11 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
             onChange={(e) => setModel(e.target.value)}
             disabled={isLaunching}
             placeholder="既定"
-            className="w-32 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="w-32 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           />
         </label>
 
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           トークン予算(任意)
           <input
             type="number"
@@ -167,19 +167,19 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
             onChange={(e) => setBudget(e.target.value)}
             disabled={isLaunching}
             placeholder="タスク既定値"
-            className="w-32 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="w-32 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           />
         </label>
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           対象パート{scopeRequired ? "(必須)" : "(任意)"}
           <select
             value={partId}
             onChange={(e) => setPartId(e.target.value)}
             disabled={isLaunching}
-            className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
             <option value="">(全体)</option>
             {parts.map((p) => (
@@ -190,7 +190,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           開始小節
           <input
             type="number"
@@ -198,11 +198,11 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
             value={barStart}
             onChange={(e) => setBarStart(e.target.value)}
             disabled={isLaunching || !partId}
-            className="w-24 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="w-24 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           />
         </label>
 
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           終了小節
           <input
             type="number"
@@ -210,20 +210,21 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
             value={barEnd}
             onChange={(e) => setBarEnd(e.target.value)}
             disabled={isLaunching || !partId}
-            className="w-24 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="w-24 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           />
         </label>
       </div>
 
-      <label className="flex flex-col gap-1 text-sm text-gray-600">
-        自然言語での指示{isInvestigate ? "(必須)" : "(任意・タスクの目的に追加する補足指示)"}
+      <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
+        自然言語での指示
+        {isInvestigate ? "(必須)" : "(任意・タスクの目的に追加する補足指示)"}
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           disabled={isLaunching}
           rows={3}
           placeholder="例: 12〜20小節の左手の声部割り当てがおかしい。調べて直して"
-          className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+          className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
         />
       </label>
 
@@ -236,7 +237,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
         {isLaunching ? "起動中..." : "エージェントを実行"}
       </button>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
     </section>
   );
 }

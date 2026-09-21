@@ -83,9 +83,9 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
   if (isLoading) return null;
   if (error) {
     return (
-      <section className="space-y-2 rounded-lg border border-gray-200 p-4">
-        <h3 className="text-lg font-semibold text-gray-700">ピアノロール</h3>
-        <p className="text-sm text-red-600">{(error as Error).message}</p>
+      <section className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">ピアノロール</h3>
+        <p className="text-sm text-red-600 dark:text-red-400">{(error as Error).message}</p>
       </section>
     );
   }
@@ -171,12 +171,14 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
   }
 
   return (
-    <section className="space-y-3 rounded-lg border border-gray-200 p-4">
+    <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex flex-wrap items-center gap-3">
-        <h3 className="text-lg font-semibold text-gray-700">ピアノロール({part.name})</h3>
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+          ピアノロール({part.name})
+        </h3>
         {/* #142: 4声上限に収まらず重複が残るノートの件数(0件なら何も出さない)。 */}
         {saturatedCount > 0 && (
-          <span className="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+          <span className="rounded-md bg-amber-100 dark:bg-amber-900 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-200">
             {SATURATED_LABEL} {saturatedCount}件
           </span>
         )}
@@ -236,15 +238,15 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
         >
           パート全体を-1オクターブ
         </button>
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-gray-500 dark:text-gray-400">
           {selectedArray.length > 0
             ? `${selectedArray.length}件選択中`
             : "クリックで選択(Shiftで複数選択)・ドラッグで移動/範囲選択・右端ドラッグでリサイズ・ダブルクリックで追加・Ctrl+Z/Ctrl+Yで元に戻す/やり直す"}
         </span>
       </div>
       {/* #35: レイヤ表示切替(設計書§12.4)。 */}
-      <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
-        <span className="text-xs font-medium text-gray-500">表示レイヤ:</span>
+      <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600 dark:text-gray-300">
+        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">表示レイヤ:</span>
         {(Object.keys(LAYER_CATEGORY_LABEL) as LayerCategory[]).map((category) => (
           <label key={category} className="flex items-center gap-1.5">
             <input
@@ -257,7 +259,9 @@ export function PianoRollEditor({ projectId }: PianoRollEditorProps) {
         ))}
       </div>
       {applyOps.isError && (
-        <p className="text-sm text-red-600">{(applyOps.error as Error).message}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">
+          {(applyOps.error as Error).message}
+        </p>
       )}
       <PianoRoll
         notes={visibleNotes}

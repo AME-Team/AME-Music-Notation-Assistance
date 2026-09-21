@@ -32,10 +32,12 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
     patch.error instanceof Error ? patch.error.message : patch.error ? String(patch.error) : null;
 
   return (
-    <section className="space-y-4 rounded-lg border border-gray-200 p-4">
+    <section className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-gray-700">ビートグリッド補正</h3>
-        <span className="rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-600">
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+          ビートグリッド補正
+        </h3>
+        <span className="rounded-md bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs text-gray-600 dark:text-gray-300">
           {SOURCE_LABEL[beatmap.source] ?? beatmap.source} · 信頼度{" "}
           {Math.round(beatmap.confidence * 100)}%
         </span>
@@ -61,7 +63,7 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
           );
         }}
       >
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           全体オフセット(秒)
           <input
             type="number"
@@ -69,7 +71,7 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
             placeholder="例: 0.25"
             value={offsetSec}
             onChange={(event) => setOffsetSec(event.target.value)}
-            className="w-28 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="w-28 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           />
         </label>
         <button
@@ -89,7 +91,7 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
           if (Number.isFinite(value) && value > 0) patch.mutate({ bpm_override: value });
         }}
       >
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           固定BPMへ上書き
           <input
             type="number"
@@ -98,7 +100,7 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
             placeholder="例: 120"
             value={bpm}
             onChange={(event) => setBpm(event.target.value)}
-            className="w-28 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="w-28 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           />
         </label>
         <button
@@ -115,7 +117,7 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
           type="button"
           disabled={patch.isPending}
           onClick={() => patch.mutate({ rotate_downbeat: true })}
-          className="rounded-md bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+          className="rounded-md bg-gray-100 dark:bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50"
         >
           ダウンビートを1拍分ずらす
         </button>
@@ -130,11 +132,15 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
           if (!Number.isInteger(bar) || bar < 1) return;
           if (!Number.isInteger(numerator) || numerator < 1) return;
           patch.mutate({
-            time_signature_override: { bar, numerator, denominator: tsDenominator },
+            time_signature_override: {
+              bar,
+              numerator,
+              denominator: tsDenominator,
+            },
           });
         }}
       >
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           小節番号
           <input
             type="number"
@@ -142,10 +148,10 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
             step="1"
             value={tsBar}
             onChange={(event) => setTsBar(event.target.value)}
-            className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="w-20 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm text-gray-600">
+        <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
           拍子
           <div className="flex items-center gap-1">
             <input
@@ -154,15 +160,15 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
               step="1"
               value={tsNumerator}
               onChange={(event) => setTsNumerator(event.target.value)}
-              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+              className="w-16 rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
             />
-            <span className="text-gray-400">/</span>
+            <span className="text-gray-400 dark:text-gray-500">/</span>
             <select
               value={tsDenominator}
               onChange={(event) =>
                 setTsDenominator(Number(event.target.value) as (typeof DENOMINATOR_CHOICES)[number])
               }
-              className="rounded-md border border-gray-300 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+              className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
             >
               {DENOMINATOR_CHOICES.map((value) => (
                 <option key={value} value={value}>
@@ -187,7 +193,7 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
         </button>
       </form>
 
-      {errorMessage && <p className="text-sm text-red-600">{errorMessage}</p>}
+      {errorMessage && <p className="text-sm text-red-600 dark:text-red-400">{errorMessage}</p>}
     </section>
   );
 }
