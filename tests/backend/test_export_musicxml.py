@@ -22,6 +22,9 @@ from app.pipeline.export.musicxml import (
 from app.pipeline.export.musicxml import (
     _inject_score_instruments as inject_score_instruments,
 )
+from app.pipeline.export.musicxml import (
+    _pad_parts_to_equal_measures as pad_parts_to_equal_measures,
+)
 
 
 def _note(
@@ -454,3 +457,202 @@ class TestRenderMusicxmlReparses:
             xml_bytes.decode("utf-8"), format="musicxml"
         )
         assert len(parsed.flatten().notes) >= 2
+
+
+class TestPartsHaveEqualMeasureCounts:
+    """#155: 全パートの小節数を揃える。
+
+    MusicXMLは全パートが同じ小節数を持つ前提で小節番号をパート間に対応させる。
+    partituraの`add_measures`は各パートの最終イベントまでしか小節を作らないため、
+    「長く鳴るパート」と「早く終わるパート」が混在すると小節数がずれ、その状態の
+    MusicXMLはOSMDが読み込めず`ScorePreview`が例外で落ちる(#60の実曲検証で確認:
+    piano=23小節 / 他パート=17小節)。
+    """
+
+    @staticmethod
+    def _part(part_id: str, notes: list[dict]) -> dict:
+        return {
+            "id": part_id,
+            "name": part_id.title(),
+            "midi_program": 0,
+            "staves": 1,
+            "clefs": [{"staff": 1, "sign": "G", "line": 2}],
+            "notes": notes,
+            "pedals": [],
+        }
+
+    @staticmethod
+    def _measure_counts(xml: bytes) -> dict[str, int]:
+        root = ET.fromstring(xml)
+        return {
+            str(part.get("id")): len(part.findall("measure"))
+            for part in root.findall("part")
+        }
+
+    def test_short_part_is_padded_to_the_longest_part(self) -> None:
+        long_notes = [_note(i, i * 480, 480) for i in range(8)]  # 2小節分
+        short_notes = [_note(100, 0, 480)]  # 1小節分
+        score = _score(
+            [self._part("piano", long_notes), self._part("bass", short_notes)]
+        )
+
+        counts = self._measure_counts(render_musicxml(score))
+
+        assert counts["piano"] == 2, counts
+        assert counts["bass"] == counts["piano"], counts
+
+    def test_padded_measures_are_appended_with_sequential_numbers(self) -> None:
+        long_notes = [_note(i, i * 480, 480) for i in range(8)]
+        short_notes = [_note(100, 0, 480)]
+        score = _score(
+            [self._part("piano", long_notes), self._part("bass", short_notes)]
+        )
+
+        root = ET.fromstring(render_musicxml(score))
+        bass = next(part for part in root.findall("part") if part.get("id") == "bass")
+
+        assert [m.get("number") for m in bass.findall("measure")] == ["1", "2"]
+
+    @staticmethod
+    def _sounding_notes(measure: ET.Element) -> list[ET.Element]:
+        return [n for n in measure.findall("note") if n.find("rest") is None]
+
+    def test_notes_of_the_short_part_stay_in_its_own_measures(self) -> None:
+        """補った小節に元の音符が混ざらない(詰め直しではなく末尾への追記である)。"""
+        long_notes = [_note(i, i * 480, 480) for i in range(8)]
+        short_notes = [_note(100, 0, 480)]
+        score = _score(
+            [self._part("piano", long_notes), self._part("bass", short_notes)]
+        )
+
+        root = ET.fromstring(render_musicxml(score))
+        bass = next(part for part in root.findall("part") if part.get("id") == "bass")
+        notes_per_measure = [
+            len(self._sounding_notes(m)) for m in bass.findall("measure")
+        ]
+
+        assert notes_per_measure[0] == 1, notes_per_measure
+        assert notes_per_measure[1:] == [0] * (len(notes_per_measure) - 1), (
+            notes_per_measure
+        )
+
+    def test_padded_measures_carry_a_whole_measure_rest(self) -> None:
+        """補完する小節には全休符と小節長を入れる(空の小節は長さが未定義なため)。"""
+        score = _score(
+            [
+                self._part("piano", [_note(i, i * 480, 480) for i in range(8)]),
+                self._part("bass", [_note(100, 0, 480)]),
+            ]
+        )
+
+        root = ET.fromstring(render_musicxml(score))
+        bass = next(part for part in root.findall("part") if part.get("id") == "bass")
+        padded = bass.findall("measure")[1]
+
+        rest = padded.find("note/rest")
+        assert rest is not None and rest.get("measure") == "yes", ET.tostring(padded)
+        assert padded.findtext("note/duration") == "1920", ET.tostring(padded)  # 4/4
+        assert padded.findtext("note/type") == "whole"
+
+    def test_padded_measure_length_follows_the_bar_position_not_the_number(
+        self,
+    ) -> None:
+        """長さは小節番号ではなく位置で引く(弱起で番号と位置がずれても正しい)。"""
+        xml = (
+            "<score-partwise>"
+            '<part id="p"><measure number="0"></measure><measure number="1"></measure></part>'
+            '<part id="q"><measure number="0"></measure></part>'
+            "</score-partwise>"
+        )
+        score = {
+            "divisions": 480,
+            "time_signatures": [
+                {"bar": 1, "numerator": 4, "denominator": 4},
+                {"bar": 2, "numerator": 2, "denominator": 4},
+            ],
+        }
+
+        padded = pad_parts_to_equal_measures(xml, score)
+
+        padded_measure = ET.fromstring(padded).findall("part")[1].findall("measure")[1]
+        # 補完したのは位置2(2/4=960)であり、番号"1"の4/4(1920)ではない。
+        assert padded_measure.get("number") == "1", ET.tostring(padded_measure)
+        assert padded_measure.findtext("note/duration") == "960", ET.tostring(
+            padded_measure
+        )
+
+    def test_padded_rest_has_explicit_voice_and_staff(self) -> None:
+        score = _score(
+            [
+                self._part("piano", [_note(i, i * 480, 480) for i in range(8)]),
+                self._part("bass", [_note(100, 0, 480)]),
+            ]
+        )
+
+        root = ET.fromstring(render_musicxml(score))
+        bass = next(part for part in root.findall("part") if part.get("id") == "bass")
+        padded = bass.findall("measure")[1]
+
+        assert padded.findtext("note/voice") == "1", ET.tostring(padded)
+        assert padded.findtext("note/staff") == "1", ET.tostring(padded)
+
+    def test_padded_measures_numbering_follows_a_pickup_bar(self) -> None:
+        """弱起(number="0"始まり)でも採番が連番からずれない。"""
+        xml = (
+            "<score-partwise>"
+            '<part id="p"><measure number="0"></measure><measure number="1"></measure></part>'
+            '<part id="q"><measure number="0"></measure></part>'
+            "</score-partwise>"
+        )
+
+        padded = pad_parts_to_equal_measures(xml)
+
+        short = ET.fromstring(padded).findall("part")[1]
+        assert [m.get("number") for m in short.findall("measure")] == ["0", "1"]
+
+    def test_padded_measures_numbering_falls_back_when_numbers_are_missing(
+        self,
+    ) -> None:
+        xml = (
+            "<score-partwise>"
+            '<part id="p"><measure></measure><measure></measure></part>'
+            '<part id="q"><measure></measure></part>'
+            "</score-partwise>"
+        )
+
+        padded = pad_parts_to_equal_measures(xml)
+
+        short_measures = ET.fromstring(padded).findall("part")[1].findall("measure")
+
+        # 番号が無い場合は1始まりの連番にフォールバックする(2小節目 → "2")。
+        assert [m.get("number") for m in short_measures] == [None, "2"]
+
+    def test_aligned_parts_are_left_untouched(self) -> None:
+        notes = [_note(i, i * 480, 480) for i in range(8)]
+        score = _score(
+            [
+                self._part("piano", notes),
+                self._part("bass", [_note(100, i * 480, 480) for i in range(8)]),
+            ]
+        )
+
+        counts = self._measure_counts(render_musicxml(score))
+
+        assert counts == {"piano": 2, "bass": 2}, counts
+
+    def test_single_part_score_is_unchanged(self) -> None:
+        notes = [_note(i, i * 480, 480) for i in range(4)]
+        score = _score([self._part("piano", notes)])
+
+        counts = self._measure_counts(render_musicxml(score))
+
+        assert counts == {"piano": 1}, counts
+
+    def test_helper_is_a_no_op_when_counts_match(self) -> None:
+        xml = '<score-partwise><part id="p"><measure number="1"></measure></part><part id="q"><measure number="1"></measure></part></score-partwise>'
+
+        assert pad_parts_to_equal_measures(xml) == xml
+
+    def test_helper_rejects_xml_without_part_elements(self) -> None:
+        with pytest.raises(ExportError):
+            pad_parts_to_equal_measures("<score-partwise></score-partwise>")
