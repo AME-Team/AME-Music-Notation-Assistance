@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
@@ -15,7 +15,17 @@ import { defineConfig } from "@playwright/test";
 // 親プロセス)で設定すれば起動するバックエンドにも伝わる。既に設定されている場合
 // (CIや手動指定)はそれを尊重する。
 if (!process.env.AME_WORKSPACE_DIR) {
-  process.env.AME_WORKSPACE_DIR = mkdtempSync(path.join(tmpdir(), "ame-e2e-workspace-"));
+  const e2eWorkspace = mkdtempSync(path.join(tmpdir(), "ame-e2e-workspace-"));
+  process.env.AME_WORKSPACE_DIR = e2eWorkspace;
+  // 自分で作った一時ワークスペースは実行終了時に片付ける(レビュー指摘:
+  // 放置すると`tmpdir()`配下に実行のたび蓄積する)。`AME_WORKSPACE_DIR`を
+  // 指定された場合は呼び出し側のディレクトリなので触らない。
+  //
+  // このモジュールはPlaywrightの各プロセスで読み込まれうるが、上のガードにより
+  // 実際に作成するのは最初の1プロセスだけなので、削除も1回だけ登録される。
+  process.on("exit", () => {
+    rmSync(e2eWorkspace, { recursive: true, force: true });
+  });
 }
 
 export default defineConfig({
