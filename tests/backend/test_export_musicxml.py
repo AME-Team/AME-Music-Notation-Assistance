@@ -554,6 +554,48 @@ class TestPartsHaveEqualMeasureCounts:
         assert padded.findtext("note/duration") == "1920", ET.tostring(padded)  # 4/4
         assert padded.findtext("note/type") == "whole"
 
+    def test_padded_measure_length_follows_the_bar_position_not_the_number(
+        self,
+    ) -> None:
+        """長さは小節番号ではなく位置で引く(弱起で番号と位置がずれても正しい)。"""
+        xml = (
+            "<score-partwise>"
+            '<part id="p"><measure number="0"></measure><measure number="1"></measure></part>'
+            '<part id="q"><measure number="0"></measure></part>'
+            "</score-partwise>"
+        )
+        score = {
+            "divisions": 480,
+            "time_signatures": [
+                {"bar": 1, "numerator": 4, "denominator": 4},
+                {"bar": 2, "numerator": 2, "denominator": 4},
+            ],
+        }
+
+        padded = pad_parts_to_equal_measures(xml, score)
+
+        padded_measure = ET.fromstring(padded).findall("part")[1].findall("measure")[1]
+        # 補完したのは位置2(2/4=960)であり、番号"1"の4/4(1920)ではない。
+        assert padded_measure.get("number") == "1", ET.tostring(padded_measure)
+        assert padded_measure.findtext("note/duration") == "960", ET.tostring(
+            padded_measure
+        )
+
+    def test_padded_rest_has_explicit_voice_and_staff(self) -> None:
+        score = _score(
+            [
+                self._part("piano", [_note(i, i * 480, 480) for i in range(8)]),
+                self._part("bass", [_note(100, 0, 480)]),
+            ]
+        )
+
+        root = ET.fromstring(render_musicxml(score))
+        bass = next(part for part in root.findall("part") if part.get("id") == "bass")
+        padded = bass.findall("measure")[1]
+
+        assert padded.findtext("note/voice") == "1", ET.tostring(padded)
+        assert padded.findtext("note/staff") == "1", ET.tostring(padded)
+
     def test_padded_measures_numbering_follows_a_pickup_bar(self) -> None:
         """弱起(number="0"始まり)でも採番が連番からずれない。"""
         xml = (

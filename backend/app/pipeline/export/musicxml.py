@@ -135,13 +135,14 @@ def _rest_measure_element(number: int, length_divisions: int | None) -> str:
     (#154レビュー指摘: 音符も`<forward>`も無い空の小節は長さが未定義で、
     拍子から補われない実装だとレイアウトが崩れうる)。MusicXMLの規約どおり
     `measure="yes"`の休符は`<type>whole</type>`とし、`<duration>`へ実際の
-    小節長を入れる。長さ不明の場合は従来どおり空の小節にする。
+    小節長を入れる。休符の段・声部が不定にならないよう`<voice>`/`<staff>`も明示する
+    (全休符は慣例どおり最上段=staff 1に置く)。長さ不明の場合は従来どおり空の小節にする。
     """
     if length_divisions is None:
         return f'<measure number="{number}"></measure>'
     rest_note = (
         f'<note><rest measure="yes"/><duration>{length_divisions}</duration>'
-        f"<type>whole</type></note>"
+        f"<voice>1</voice><type>whole</type><staff>1</staff></note>"
     )
     return f'<measure number="{number}">{rest_note}</measure>'
 
@@ -182,9 +183,11 @@ def _pad_parts_to_equal_measures(xml_str: str, score: dict[str, Any] | None = No
         if count >= target:
             return match.group(0)
         first = _next_measure_number(body, count)
+        # 長さは**小節番号**ではなく**位置**(1始まり)で引く(#154レビュー指摘):
+        # 小節番号は弱起(`number="0"`始まり)等で位置と一致しない。
         extra = "".join(
-            _rest_measure_element(number, lengths.get(number))
-            for number in range(first, first + target - count)
+            _rest_measure_element(first + offset, lengths.get(count + offset + 1))
+            for offset in range(target - count)
         )
         return match.group(1) + body + extra + match.group(3)
 
