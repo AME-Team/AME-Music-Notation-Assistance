@@ -32,3 +32,36 @@ export function classifyLogLevel(text: string): LogLevel {
   if (WARN_MARKERS.some((marker) => lower.includes(marker))) return "WARN";
   return "INFO";
 }
+
+/** 有効なログレベル(IPCで受け取った値の検証に使う)。 */
+const VALID_LEVELS: readonly LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"];
+
+/**
+ * IPC等の外部入力から来たログレベルを安全に正規化する(#148レビュー指摘)。
+ *
+ * `logger[level.toLowerCase()]`のように未検証のキーで引くと、想定外の文字列で
+ * `undefined`を呼び出して**ログ自体が落ちる**(＝肝心のエラーが残らない)。
+ * 不正な値は「エラー転送経路から来たもの」とみなしてERRORに寄せる。
+ */
+export function normalizeLogLevel(value: unknown): LogLevel {
+  const upper = String(value ?? "").toUpperCase();
+  return VALID_LEVELS.includes(upper as LogLevel) ? (upper as LogLevel) : "ERROR";
+}
+
+/** `ERR_ABORTED`(Chromium)。正常なリダイレクト/遷移中断でも`did-fail-load`が出る。 */
+const ERR_ABORTED = -3;
+
+/**
+ * `did-fail-load`をエラーとして記録すべきか(#148レビュー指摘)。
+ *
+ * このイベントは**サブフレーム**の失敗や、**中断(ERR_ABORTED)**でも発火するため、
+ * 無条件にERRORへ書くと**通常動作でもエラーログが出て**、本当のエラーが埋もれる
+ * (ログを充実させる目的に反する)。メインレームの実失敗だけを対象にする。
+ */
+export function shouldLogDidFailLoad(details: {
+  errorCode: number;
+  isMainFrame?: boolean;
+}): boolean {
+  if (details.isMainFrame === false) return false;
+  return details.errorCode !== ERR_ABORTED;
+}

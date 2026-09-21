@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { app, type WebContents } from "electron";
-import type { LogLevel } from "./logLevel";
+import { type LogLevel, normalizeLogLevel, shouldLogDidFailLoad } from "./logLevel";
 
 /**
  * ログ管理モジュール。
@@ -173,7 +173,6 @@ export function attachWebContentsLogger(webContents: WebContents): void {
   });
 }
 
-/** 旧形式のconsole-messageハンドラ(#148で新形式へ移行。比較用に残さない)。 */
 /**
  * ウィンドウ/レンダラー側の失敗を漏れなくログに記録する(#148)。
  *
@@ -187,10 +186,24 @@ export function attachFatalErrorHandlers(webContents: WebContents): void {
     logger.error("preload", `Failed to load ${preloadPath}:`, error);
   });
 
-  // ページ読み込み失敗(ERR_CONNECTION_REFUSED等。開発サーバの落ちなど)。
-  webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-    logger.error("renderer", `Failed to load ${validatedURL} (${errorCode}: ${errorDescription})`);
-  });
+  // ページ読み込み失敗(ERR_CONNECTION_REFUSED等。開発サーバの落ちなど)。    // サブフレームの失敗・中断(ERR_ABORTED)は通常動作でも出るため除外する
+  // (#148レビュー指摘: 無条件に記録すると本当のエラーが埋もれる)。
+  webContents.on(
+    "did-fail-load",
+    (
+      _event,
+      errorCode: number,
+      errorDescription: string,
+      validatedURL: string,
+      isMainFrame?: boolean,
+    ) => {
+      if (!shouldLogDidFailLoad({ errorCode, isMainFrame })) return;
+      logger.error(
+        "renderer",
+        `Failed to load ${validatedURL} (${errorCode}: ${errorDescription})`,
+      );
+    },
+  );
 }
 
 /**
@@ -211,8 +224,11 @@ export function setupChildProcessErrorHandlers(): void {
  * `console-message`でも多くは拾えるが、コンソール出力を伴わない失敗
  * (`window.onerror`のみ等)を取りこぼさないための明示的な経路。
  */
-export function logFromRenderer(level: LogLevel, source: string, message: string): void {
-  logger[level.toLowerCase() as Lowercase<LogLevel>](`renderer:${source}`, message);
+export function logFromRenderer(level: unknown, source: string, message: string): void {
+  // レンダラーから渡された値は信頼しない(#148レビュー指摘: 未検証のキーで
+  // `logger[...]`を引くとundefined呼び出しになり、ログ自体が落ちる)。
+  const safeLevel = normalizeLogLevel(level);
+  logger[safeLevel.toLowerCase() as Lowercase<LogLevel>](`renderer:${source}`, message);
 }
 
 /**
