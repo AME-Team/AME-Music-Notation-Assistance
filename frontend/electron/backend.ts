@@ -139,14 +139,34 @@ async function waitForHealth(
   return false;
 }
 
+// #146: 直近のバックエンド状態。mainプロセスは`backend:status`を**遷移時に一度だけ**
+// `webContents.send`するため、レンダラーがマウントする前にイベントが送られると
+// 永久に取りこぼす(開発時はVite経由でレンダラーの起動が遅く、実際に
+// 「バックエンドを起動しています」のまま固まった)。`backend:get-status`で現在値を
+// 引けるようにして、購読側が取り戻せるようにする。
+let currentStatus: BackendStatus = "starting";
+let currentDetail: string | undefined;
+
+/** 直近のバックエンド状態(#146)。 */
+export function getBackendStatus(): { status: BackendStatus; detail?: string } {
+  return { status: currentStatus, detail: currentDetail };
+}
+
 export async function startBackend(
   onStatus: (status: BackendStatus, detail?: string) => void,
 ): Promise<BackendHandle> {
+  // #146: 状態遷移を記録してから通知する(購読前に送られた分も`getBackendStatus()`で拾える)。
+  const reportStatus = (status: BackendStatus, detail?: string): void => {
+    currentStatus = status;
+    currentDetail = detail;
+    onStatus(status, detail);
+  };
+
   await cleanupStaleBackend();
 
   const port = await getFreePort();
   const token = generateToken();
-  onStatus("starting");
+  reportStatus("starting");
 
   const { command, args, cwd, extraPathDirs } = resolveBackendCommand(port);
   const child = spawn(command, args, {
@@ -180,10 +200,10 @@ export async function startBackend(
   const ready = await waitForHealth(baseUrl, child);
   if (!ready) {
     logger.error("backend", "Backend failed to start (health check timed out)");
-    onStatus("error", "backend failed to start (health check timed out)");
+    reportStatus("error", "backend failed to start (health check timed out)");
   } else {
     logger.info("backend", "Backend is healthy and ready");
-    onStatus("ready");
+    reportStatus("ready");
   }
 
   // アプリ終了時に stop() が意図的に kill した場合は "error" 通知しない。
@@ -194,7 +214,7 @@ export async function startBackend(
 
   child.on("exit", (code) => {
     if (!stopping && code !== 0 && code !== null) {
-      onStatus("error", `backend exited unexpectedly (code ${code})`);
+      reportStatus("error", `backend exited unexpectedly (code ${code})`);
     }
   });
 

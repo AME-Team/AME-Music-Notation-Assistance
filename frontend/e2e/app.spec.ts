@@ -63,6 +63,15 @@ test("Electron app boots, runs a dummy job over SSE, and cleans up the backend o
 
     backendInfo = await page.evaluate(() => window.api?.getBackendInfo());
     expect(backendInfo).toBeTruthy();
+
+    // #146: 現在値取得(購読前に送られた状態遷移の取り戻し)が実アプリで機能すること。
+    // これを欠くと、レンダラーの起動が遅い場合にUIが「バックエンドを起動しています」
+    // のまま固まる(実際にWindows実機の開発モードで発生した)。
+    await expect
+      .poll(async () => (await page.evaluate(() => window.api?.getBackendStatus()))?.status, {
+        timeout: 15_000,
+      })
+      .toBe("ready");
   } finally {
     // #145レビュー指摘: 途中のassertで失敗してもElectronを確実に終了させる。
     await app.close();
