@@ -172,7 +172,20 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
       osmd.EngravingRules.MinMeasureToDrawNumber = 0;
       osmd.EngravingRules.MaxMeasureToDrawNumber = Number.MAX_VALUE;
     }
-    osmd.render();
+    // #154: `render()`は譜面が壊れていると例外を投げる。このeffectは描画フェーズで
+    // 同期的に走るため、例外をそのまま伝播させると**アプリ全体がエラー画面になる**
+    // (実測: 全パートの小節数が揃っていないMusicXMLで `Cannot read properties of
+    // undefined (reading 'staffEntries')`)。表示範囲の変更は付加的な機能なので
+    // ここで握ってエラー表示に留め、プレビュー以外のUIを巻き込まない。
+    try {
+      osmd.render();
+      // 表示範囲の変更で成功したら、以前の失敗(#154の例: 譜面が壊れていて一時的に
+      // 落ちた等)のメッセージを消す。`loaded`が真のときだけこのeffectが走るため
+      // (ロード失敗では`loaded`が立たない)、ロード失敗のエラーを誤って消すことはない。
+      setError(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }, [effectiveFromBar, effectiveToBar, loaded]);
 
   // #34: 譜面が(再)ロードされた直後は小節1から同期を始める(直前のプロジェクト
