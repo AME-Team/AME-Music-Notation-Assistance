@@ -173,7 +173,7 @@ export function PianoRoll({
   // #152: テーマを購読し、キャンバス配色のrefを差し替えて再描画する
   // (`draw`の依存配列は空のままにしたいので、値ではなくrefで渡す)。
   const theme = useThemeStore((s) => s.theme);
-  const paletteRef = useRef<(typeof CANVAS_PALETTE)["light" | "dark"]>(CANVAS_PALETTE.light);
+  const paletteRef = useRef<(typeof CANVAS_PALETTE)["light" | "dark"]>(CANVAS_PALETTE[theme]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;

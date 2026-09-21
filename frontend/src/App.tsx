@@ -47,8 +47,8 @@ export function App() {
   }
 
   return (
-    <div className="min-h-full w-full space-y-6 bg-white dark:bg-gray-900 px-4 py-4 text-gray-900 dark:text-gray-100 dark:bg-gray-950 dark:text-gray-100">
-      <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 dark:text-gray-100">
+    <div className="min-h-full w-full space-y-6 bg-white dark:bg-gray-950 px-4 py-4 text-gray-900 dark:text-gray-100">
+      <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
         AME Music Notation Assistance
       </h1>
       <SettingsPanel />

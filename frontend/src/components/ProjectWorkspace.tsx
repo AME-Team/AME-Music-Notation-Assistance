@@ -387,14 +387,14 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
 
       {beatmap && <BeatGridEditor projectId={projectId} beatmap={beatmap} />}
 
-      <PianoRollEditor key={projectId} projectId={projectId} />
+      <PianoRollEditor key={`editor-${projectId}`} projectId={projectId} />
 
       <section className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
         <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">トラック</h3>
-        <TrackList key={projectId} projectId={projectId} />
+        <TrackList key={`tracks-${projectId}`} projectId={projectId} />
       </section>
 
-      <TransportBar key={projectId} projectId={projectId} />
+      <TransportBar key={`transport-${projectId}`} projectId={projectId} />
     </div>
   );
 }
