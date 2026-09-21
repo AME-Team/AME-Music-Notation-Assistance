@@ -1,6 +1,6 @@
 import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
-import { type BackendHandle, startBackend } from "./backend";
+import { type BackendHandle, getBackendStatus, startBackend } from "./backend";
 import {
   attachWebContentsLogger,
   getLogsDir,
@@ -102,6 +102,9 @@ function createWindow(): BrowserWindow {
 }
 
 function registerIpcHandlers(): void {
+  // #146: 現在のバックエンド状態を返す(購読前に送られたイベントの取り戻し用)。
+  ipcMain.handle("backend:get-status", () => getBackendStatus());
+
   ipcMain.handle("backend:get-info", () => {
     if (!backend) throw new Error("backend is not ready");
     return { baseUrl: backend.baseUrl, token: backend.token };

@@ -8,6 +8,9 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("api", {
   getBackendInfo: () => ipcRenderer.invoke("backend:get-info"),
 
+  // #146: 購読前に送られた状態遷移を取り戻すための現在値取得。
+  getBackendStatus: () => ipcRenderer.invoke("backend:get-status"),
+
   onBackendStatus: (cb: (status: string, detail?: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, status: string, detail?: string) =>
       cb(status, detail);

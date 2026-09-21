@@ -5,6 +5,7 @@ import { JobMonitor } from "./components/JobMonitor";
 import { ProjectList } from "./components/ProjectList";
 import { ProjectUpload } from "./components/ProjectUpload";
 import { ProjectWorkspace } from "./components/ProjectWorkspace";
+import { watchBackendStatus } from "./lib/backendStatus";
 import type { BackendStatus } from "./lib/electron-api";
 import { useJobStore } from "./stores/jobStore";
 
@@ -17,8 +18,11 @@ export function App() {
   const track = useJobStore((s) => s.track);
 
   useEffect(() => {
-    if (!window.api) return;
-    return window.api.onBackendStatus((status, detail) => {
+    const api = window.api;
+    if (!api) return;
+    // #146: 購読に加えて現在値も取得する(mainが状態遷移を一度しか送らないため、
+    // 購読前に`ready`が送られていると「起動しています」のまま固まってしまう)。
+    return watchBackendStatus(api, ({ status, detail }) => {
       setBackendStatus(status);
       setBackendDetail(detail);
     });

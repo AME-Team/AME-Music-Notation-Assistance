@@ -18,6 +18,8 @@ export interface PickedFile {
 export interface AmeElectronApi {
   getBackendInfo(): Promise<BackendInfo>;
   onBackendStatus(cb: (status: BackendStatus, detail?: string) => void): () => void;
+  /** #146: 現在のバックエンド状態。購読前に送られた遷移を取り戻すために使う。 */
+  getBackendStatus(): Promise<{ status: BackendStatus; detail?: string }>;
   /**
    * ネイティブファイルダイアログで音声ファイルを選択する。sandbox:true の renderer は
    * fs にアクセスできないため、選択されたファイルの中身は main プロセスが読み取って
