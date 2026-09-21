@@ -206,12 +206,12 @@ export function RefineSection({
 
       {/* 実行結果とコスト可視化カード (NFR-07) */}
       {refineResult && (
-        <div className="space-y-2 rounded-md bg-emerald-50 dark:bg-emerald-950 p-4 text-sm text-emerald-900 border border-emerald-200">
+        <div className="space-y-2 rounded-md bg-emerald-50 dark:bg-emerald-950 p-4 text-sm text-emerald-900 dark:text-emerald-200 border border-emerald-200">
           <div className="flex items-center justify-between">
-            <span className="font-semibold flex items-center gap-1.5 text-emerald-800">
+            <span className="font-semibold flex items-center gap-1.5 text-emerald-800 dark:text-emerald-200">
               ✓ L1 整音完了 (Staging 保存済み)
             </span>
-            <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-mono text-emerald-800 border border-emerald-300">
+            <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-mono text-emerald-800 dark:text-emerald-200 border border-emerald-300">
               Run ID: {refineResult.run_id}
             </span>
           </div>

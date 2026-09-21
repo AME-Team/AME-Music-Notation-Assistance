@@ -141,7 +141,7 @@ export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: Di
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error.message}</p>}
 
       {diff && changesByBar.length === 0 && (
-        <p className="rounded-md bg-emerald-50 dark:bg-emerald-950 p-3 text-sm text-emerald-800 border border-emerald-200">
+        <p className="rounded-md bg-emerald-50 dark:bg-emerald-950 p-3 text-sm text-emerald-800 dark:text-emerald-300 border border-emerald-200">
           処理待ちの変更はありません(すべて承認/却下済みです)。
         </p>
       )}

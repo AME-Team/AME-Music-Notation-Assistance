@@ -1,12 +1,18 @@
 import { THEME_LABEL, type ThemeMode } from "../lib/theme";
 import { useThemeStore } from "../stores/themeStore";
 
-const OPTION_CLASS =
-  "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm" +
-  "border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800";
+// 枠線は「幅・線種」だけを共通にし、**色は選択状態ごとに排他**で指定する。
+// 同じプロパティ(border-*)を両方に置くと、Tailwindは生成CSSの順序で勝敗を決めるため
+// 選択状態が意図どおり反映されない(レビュー指摘)。
+const OPTION_CLASS = "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm";
 
 /** 選択中のラジオを強調する(テーマ切替の現在値が一目で分かるように)。 */
-const SELECTED_CLASS = "border-blue-500 bg-blue-50 dark:bg-blue-950 font-medium";
+const SELECTED_CLASS =
+  "border-blue-500 dark:border-blue-400 bg-blue-50 dark:bg-blue-950 font-medium";
+
+/** 非選択時の枠線・ホバー(選択時とは排他)。 */
+const UNSELECTED_CLASS =
+  "border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800";
 
 /**
  * 設定パネル(#152)。現時点ではテーマ(ダーク/ライト)のみ。
@@ -27,7 +33,10 @@ export function SettingsPanel() {
         </p>
         <div className="flex flex-wrap gap-2 pt-1">
           {(["dark", "light"] as const).map((mode: ThemeMode) => (
-            <label key={mode} className={`${OPTION_CLASS} ${theme === mode ? SELECTED_CLASS : ""}`}>
+            <label
+              key={mode}
+              className={`${OPTION_CLASS} ${theme === mode ? SELECTED_CLASS : UNSELECTED_CLASS}`}
+            >
               <input
                 type="radio"
                 name="theme"

@@ -241,7 +241,7 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
         </span>
       </div>
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-      <div ref={containerRef} className="w-full overflow-x-auto" />
+      <div ref={containerRef} className="bg-white w-full overflow-x-auto" />
     </section>
   );
 }
