@@ -59,6 +59,16 @@ function createWindow(): BrowserWindow {
         ...details.responseHeaders,
         "Content-Security-Policy": [
           `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; ` +
+            // #60(Windows実機検証)で発覚した実バグ: Tone.js(再生機能 #34)は
+            // `new Worker(URL.createObjectURL(new Blob([...])))` で自前のクロック用
+            // Workerを作るが、`worker-src`が無いと`script-src`(blob:を含まない)へ
+            // フォールバックして**ブロック**される。しかも`new Worker()`は例外を
+            // 投げず「生成だけ成功してonerrorで無言で死ぬ」ため、Tone側のtimeout
+            // フォールバックも働かず、**contextの"tick"イベントが一度も発火しない**
+            // (＝Transportの予定イベントが鳴らない)状態になっていた。実ブラウザでの
+            // 計測: worker-src無しはticks=0、`worker-src 'self' blob:`でticks=24/1.2s。
+            // 回帰は`e2e/app.spec.ts`のblob Workerテストで検出する。
+            "worker-src 'self' blob:; " +
             "img-src 'self' data: blob:; media-src 'self' blob: http://127.0.0.1:*; " +
             // #27: `<a download href="blob:...">.click()`(エクスポートのファイル
             // 保存)はChromiumではconnect-srcの対象になる(img-src/media-srcの
