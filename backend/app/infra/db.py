@@ -67,10 +67,30 @@ CREATE TABLE IF NOT EXISTS revisions (
 CREATE INDEX IF NOT EXISTS idx_revisions_project ON revisions(project_id);
 """
 
-_lock = threading.Lock()
-# workspace(db_path)ごとにコネクションを保持する。プロセス内で複数のワークスペースを
-# 同時に扱えるようにする(テストが workspace ごとに tmp_path を使うため必須)。
-_connections: dict[str, sqlite3.Connection] = {}
+# #150(Windows実機で発覚した500の原因): **スレッドごと**にコネクションを保持する。
+#
+# 以前は`db_path`ごとに1つのコネクションを全スレッドで共有していた。sqlite3の
+# コネクション/カーソルはスレッド間で同時使用すると
+# `sqlite3.InterfaceError: bad parameter or other API misuse`を送出する
+# (または`fetchone()`がNoneを返して`ProjectNotFoundError`になる)ため、FastAPIの
+# 同期エンドポイントがスレッドプールで並行実行されると`GET /stems`等が500になった。
+# 実際に8スレッドから`get_project`/`list_projects`を叩くと95件のエラーで再現した。
+#
+# スレッドローカルにすることで、接続は常に単一スレッドからしか触られない
+# (SQLiteはWALモードで複数接続の並行読み書きを許容する)。
+_thread_local = threading.local()
+# 同一パスの同時作成を避けるためのロック(`PRAGMA journal_mode=WAL`は排他が必要)。
+_create_lock = threading.Lock()
+
+
+def _thread_connections() -> dict[str, sqlite3.Connection]:
+    """現スレッドが保持する`db_path -> connection`のマップ。"""
+    store = getattr(_thread_local, "by_path", None)
+    if store is None:
+        store = {}
+        _thread_local.by_path = store
+    return store
+
 
 # #49 Gate2レビュー指摘(HIGH): `CREATE TABLE IF NOT EXISTS`は既存テーブルの
 # 列を追加しない。#46/#47時点で作成済みの`agent_runs`(turns/usage_json/
@@ -97,35 +117,63 @@ def _migrate_agent_runs_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {ddl}")  # noqa: S608
 
 
-def get_connection(db_path: Path) -> sqlite3.Connection:
-    """`db_path` ごとに共有するコネクションを返す(NFR-05: 再起動後も復元できる)。
+def _create_connection(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = _row_factory
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    # スレッドごとに独立した接続になるため、書き込みの同時実行で
+    # "database is locked"にならないよう待機時間を持たせる(#150)。
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.executescript(_SCHEMA)
+    _migrate_agent_runs_columns(conn)
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
+        (str(SCHEMA_VERSION),),
+    )
+    conn.commit()
+    return conn
 
-    単一ユーザー・単一プロセス前提(§5.1)のため、書き込みはサービス層で
-    直列化する想定(asyncio.Lock)。ここではスレッド安全性のみ担保する。
+
+def get_connection(db_path: Path) -> sqlite3.Connection:
+    """現スレッド用のコネクションを返す(NFR-05: 再起動後も復元できる)。
+
+    単一ユーザー・単一プロセス前提(§5.1)だが、FastAPIの同期エンドポイントは
+    スレッドプールで並行実行されるため、**コネクションをスレッド間で共有しない**
+    (共有すると`sqlite3.InterfaceError`や`ProjectNotFoundError`が起きる。詳細は
+    モジュール冒頭のコメント参照)。同じスレッド内では同じコネクションを再利用する。
     """
     key = str(db_path.resolve())
-    with _lock:
-        if key not in _connections:
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(db_path, check_same_thread=False)
-            conn.row_factory = _row_factory
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.executescript(_SCHEMA)
-            _migrate_agent_runs_columns(conn)
-            conn.execute(
-                "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
-                (str(SCHEMA_VERSION),),
-            )
-            conn.commit()
-            _connections[key] = conn
-        return _connections[key]
+    store = _thread_connections()
+    conn = store.get(key)
+    if conn is not None:
+        return conn
+    with _create_lock:
+        # `store`はスレッドローカルなのでロック待ち中に他スレッドが書き込むことはない。
+        # ここでの再確認は同一スレッドからの再入に対する防御。
+        conn = store.get(key)
+        if conn is None:
+            conn = _create_connection(db_path)
+            store[key] = conn
+        return conn
 
 
 def close_connection(db_path: Path) -> None:
-    """テストや再起動シミュレーション用に、特定ワークスペースのコネクションを閉じる。"""
+    """テストや再起動シミュレーション用に、**現スレッドが持つ**コネクションを閉じる。
+
+    スレッドごとに独立した接続を持つため、他のスレッドの接続はここでは閉じられない
+    (各スレッドの接続はそのスレッドの終了時にプロセスごと破棄される)。
+    """
     key = str(db_path.resolve())
-    with _lock:
-        conn = _connections.pop(key, None)
-        if conn is not None:
-            conn.close()
+    conn = _thread_connections().pop(key, None)
+    if conn is not None:
+        conn.close()
+
+
+def close_all_connections() -> None:
+    """現スレッドが保持する全コネクションを閉じる(プロセス終了時の後始末用)。"""
+    store = _thread_connections()
+    for conn in store.values():
+        conn.close()
+    store.clear()
