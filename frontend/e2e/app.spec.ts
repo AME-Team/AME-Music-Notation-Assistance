@@ -40,26 +40,33 @@ function makeTinyWavFile(): string {
   return filePath;
 }
 
+/** `window.api.getBackendInfo()` が返すバックエンド接続情報(#15)。 */
+type BackendInfo = { baseUrl: string; token: string };
+
 test("Electron app boots, runs a dummy job over SSE, and cleans up the backend on quit", async () => {
   const mainPath = path.join(__dirname, "..", "dist-electron", "main.js");
   const app = await electron.launch({ args: [mainPath] });
   const page = await app.firstWindow();
 
-  await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({ timeout: 30_000 });
+  let backendInfo: BackendInfo | undefined;
+  try {
+    await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({ timeout: 30_000 });
 
-  const wavPath = makeTinyWavFile();
-  await page.locator('input[type="file"]').setInputFiles(wavPath);
-  await expect(page.getByText("smoke-test.wav")).toBeVisible({ timeout: 10_000 });
+    const wavPath = makeTinyWavFile();
+    await page.locator('input[type="file"]').setInputFiles(wavPath);
+    await expect(page.getByText("smoke-test.wav")).toBeVisible({ timeout: 10_000 });
 
-  await page.getByText("smoke-test.wav").click();
-  await page.getByRole("button", { name: /ダミージョブを実行/ }).click();
+    await page.getByText("smoke-test.wav").click();
+    await page.getByRole("button", { name: /ダミージョブを実行/ }).click();
 
-  await expect(page.getByText("完了")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("完了")).toBeVisible({ timeout: 15_000 });
 
-  const backendInfo = await page.evaluate(() => window.api?.getBackendInfo());
-  expect(backendInfo).toBeTruthy();
-
-  await app.close();
+    backendInfo = await page.evaluate(() => window.api?.getBackendInfo());
+    expect(backendInfo).toBeTruthy();
+  } finally {
+    // #145レビュー指摘: 途中のassertで失敗してもElectronを確実に終了させる。
+    await app.close();
+  }
 
   // アプリ終了後、Python バックエンドがポートに応答しないことを確認する
   // (プロセスが確実に終了していることの間接的な証拠)。
