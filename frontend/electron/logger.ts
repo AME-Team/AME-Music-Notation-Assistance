@@ -1,6 +1,7 @@
 import { appendFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { app, type WebContents } from "electron";
+import type { LogLevel } from "./logLevel";
 
 /**
  * ログ管理モジュール。
@@ -9,7 +10,7 @@ import { app, type WebContents } from "electron";
  * - メインプロセス、レンダラープロセス、バックエンドプロセスの全出力を集約。
  */
 
-export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
+export type { LogLevel } from "./logLevel";
 
 const RETENTION_DAYS = 7;
 const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
@@ -123,26 +124,46 @@ export const logger = {
  * レンダラープロセスのコンソールログおよびクラッシュイベントをログファイルに集約する。
  */
 export function attachWebContentsLogger(webContents: WebContents): void {
-  webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    const loc = sourceId ? ` (${sourceId}:${line})` : "";
-    const msg = `${message}${loc}`;
-    switch (level) {
-      case 0: // Verbose / Debug
-        logger.debug("renderer", msg);
-        break;
-      case 1: // Info
-        logger.info("renderer", msg);
-        break;
-      case 2: // Warning
-        logger.warn("renderer", msg);
-        break;
-      case 3: // Error
-        logger.error("renderer", msg);
-        break;
-      default:
-        logger.info("renderer", msg);
-    }
-  });
+  // Electron 35+ は (event, details) 形式(#148: 旧形式は非推奨の警告が出ていたため
+  // 両対応にする)。
+  webContents.on(
+    "console-message",
+    (
+      _event: unknown,
+      levelOrDetails:
+        | number
+        | { level?: string; message?: string; lineNumber?: number; sourceId?: string },
+      legacyMessage?: string,
+      legacyLine?: number,
+      legacySourceId?: string,
+    ) => {
+      const details =
+        typeof levelOrDetails === "object" && levelOrDetails !== null ? levelOrDetails : null;
+      const rawMessage = details ? (details.message ?? "") : (legacyMessage ?? "");
+      const line = details ? (details.lineNumber ?? 0) : (legacyLine ?? 0);
+      const sourceId = details ? (details.sourceId ?? "") : (legacySourceId ?? "");
+      const levelName = details
+        ? (details.level ?? "info").toLowerCase()
+        : (["verbose", "info", "warning", "error", "verbose"][levelOrDetails as number] ?? "info");
+      const loc = sourceId ? ` (${sourceId}:${line})` : "";
+      const msg = `${rawMessage}${loc}`;
+      switch (levelName) {
+        case "verbose":
+        case "debug":
+          logger.debug("renderer", msg);
+          break;
+        case "warning":
+        case "warn":
+          logger.warn("renderer", msg);
+          break;
+        case "error":
+          logger.error("renderer", msg);
+          break;
+        default:
+          logger.info("renderer", msg);
+      }
+    },
+  );
 
   webContents.on("render-process-gone", (_event, details) => {
     logger.error(
@@ -150,6 +171,48 @@ export function attachWebContentsLogger(webContents: WebContents): void {
       `Render process gone: reason=${details.reason}, exitCode=${details.exitCode}`,
     );
   });
+}
+
+/** 旧形式のconsole-messageハンドラ(#148で新形式へ移行。比較用に残さない)。 */
+/**
+ * ウィンドウ/レンダラー側の失敗を漏れなくログに記録する(#148)。
+ *
+ * `console-message`だけでは「preloadスクリプトの読み込み失敗」「ページ読み込み失敗」
+ * 「レンダラープロセスの異常終了」が**ログに一切残らない**ため、原因究明が
+ * ログだけでは不可能だった(Windows実機で実際に困った)。
+ */
+export function attachFatalErrorHandlers(webContents: WebContents): void {
+  // preload の評価エラー(preload側の例外はレンダラーのconsoleにも出ない)。
+  webContents.on("preload-error", (_event, preloadPath, error) => {
+    logger.error("preload", `Failed to load ${preloadPath}:`, error);
+  });
+
+  // ページ読み込み失敗(ERR_CONNECTION_REFUSED等。開発サーバの落ちなど)。
+  webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    logger.error("renderer", `Failed to load ${validatedURL} (${errorCode}: ${errorDescription})`);
+  });
+}
+
+/**
+ * メインプロセスの子プロセス(レンダラー/GPU/ユーティリティ)の異常終了を記録する(#148)。
+ */
+export function setupChildProcessErrorHandlers(): void {
+  app.on("child-process-gone", (_event, details) => {
+    logger.error(
+      "main",
+      `Child process gone: type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`,
+    );
+  });
+}
+
+/**
+ * レンダラー側の未処理例外/rejectionを、preload経由のIPCで受け取って記録する(#148)。
+ *
+ * `console-message`でも多くは拾えるが、コンソール出力を伴わない失敗
+ * (`window.onerror`のみ等)を取りこぼさないための明示的な経路。
+ */
+export function logFromRenderer(level: LogLevel, source: string, message: string): void {
+  logger[level.toLowerCase() as Lowercase<LogLevel>](`renderer:${source}`, message);
 }
 
 /**

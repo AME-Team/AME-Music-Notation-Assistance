@@ -92,6 +92,25 @@ describe("watchBackendStatus (#146)", () => {
     expect(seen.map((s) => s.status)).not.toContain("starting");
   });
 
+  it("works with an older preload that has no getBackendStatus", async () => {
+    // #148以前のpreload(現在値取得APIなし)でも落ちないこと。開発中はレンダラーと
+    // preloadのビルドがずれるため、実際に`api.getBackendStatus is not a function`で
+    // アプリ全体が落ちた。
+    const fake = fakeApi();
+    const olderApi = {
+      onBackendStatus: fake.api.onBackendStatus,
+    } as unknown as Parameters<typeof watchBackendStatus>[0];
+    const seen: BackendStatusSnapshot[] = [];
+
+    const dispose = watchBackendStatus(olderApi, (snapshot) => seen.push(snapshot));
+    await flush();
+
+    expect(seen).toEqual([]); // イベントは来ないが例外も出ない
+    fake.push("ready");
+    expect(seen.at(-1)).toEqual({ status: "ready" });
+    dispose();
+  });
+
   it("unsubscribes when the returned disposer is called", () => {
     const fake = fakeApi();
     const dispose = watchBackendStatus(fake.api, () => undefined);
