@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 
 from app.api import agent, diff, export, jobs, media, projects, refine, revisions, score
 from app.config import Settings, load_settings
+from app.infra import db
 from app.services.agent_run_manager import AgentRunManager
 from app.services.agent_run_service import AgentRunService
 from app.services.job_service import JobManager
@@ -39,6 +40,9 @@ async def lifespan(app: FastAPI):
             stop_fn = getattr(provider, "stop", None)
             if callable(stop_fn):
                 stop_fn()
+    # #150: SQLiteコネクションを閉じる(スレッドごとに保持しているため、
+    # 終了時にまとめて解放する)。
+    db.close_all_connections()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

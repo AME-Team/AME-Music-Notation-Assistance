@@ -78,18 +78,18 @@ CREATE INDEX IF NOT EXISTS idx_revisions_project ON revisions(project_id);
 #
 # スレッドローカルにすることで、接続は常に単一スレッドからしか触られない
 # (SQLiteはWALモードで複数接続の並行読み書きを許容する)。
-_thread_local = threading.local()
-# 同一パスの同時作成を避けるためのロック(`PRAGMA journal_mode=WAL`は排他が必要)。
-_create_lock = threading.Lock()
-
-
-def _thread_connections() -> dict[str, sqlite3.Connection]:
-    """現スレッドが保持する`db_path -> connection`のマップ。"""
-    store = getattr(_thread_local, "by_path", None)
-    if store is None:
-        store = {}
-        _thread_local.by_path = store
-    return store
+# `db_path -> (Thread -> connection)`。スレッドごとに独立した接続を持ちつつ、
+# **ワークスペース単位で全スレッドの接続を閉じられる**ようにするためのレジストリ
+# (#150レビュー指摘: スレッドローカルだけだと`close_connection`が別スレッドから
+# 呼ばれた場合に黙って何もしなくなり、接続がリークする)。
+#
+# キーは`threading.get_ident()`ではなく**Threadオブジェクト**にする: identは
+# スレッド終了後に**再利用される**ため、死んだスレッドの接続を新しいスレッドへ
+# 誤って渡してしまう(`check_same_thread=True`でProgrammingErrorになる)ことを
+# 実際にテストで踏んだ。
+_connections: dict[str, dict[threading.Thread, sqlite3.Connection]] = {}
+# レジストリと接続生成の保護(`PRAGMA journal_mode=WAL`は排他が必要)。
+_registry_lock = threading.Lock()
 
 
 # #49 Gate2レビュー指摘(HIGH): `CREATE TABLE IF NOT EXISTS`は既存テーブルの
@@ -119,6 +119,13 @@ def _migrate_agent_runs_columns(conn: sqlite3.Connection) -> None:
 
 def _create_connection(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    # `check_same_thread=False`を維持する(#150レビュー指摘への回答):
+    # スレッド局所性はレジストリ(キーがThreadオブジェクト)と「接続を他スレッドへ
+    # 渡さない」ことで構造的に担保しており、SQLite側のチェックに頼っていない。
+    # 一方`True`にすると、**別スレッド(既に終了したスレッドを含む)が作った接続を
+    # 閉じることすら出来なくなり**(`conn.close()`がProgrammingError)、
+    # ワークスペース単位の後始末(`close_connection`/`close_all_connections`)が
+    # 成立しない。両案は排他なので「終了時に確実に閉じられる」を優先する。
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = _row_factory
     conn.execute("PRAGMA journal_mode=WAL")
@@ -145,35 +152,34 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     モジュール冒頭のコメント参照)。同じスレッド内では同じコネクションを再利用する。
     """
     key = str(db_path.resolve())
-    store = _thread_connections()
-    conn = store.get(key)
-    if conn is not None:
-        return conn
-    with _create_lock:
-        # `store`はスレッドローカルなのでロック待ち中に他スレッドが書き込むことはない。
-        # ここでの再確認は同一スレッドからの再入に対する防御。
-        conn = store.get(key)
+    thread = threading.current_thread()
+    with _registry_lock:
+        by_thread = _connections.setdefault(key, {})
+        conn = by_thread.get(thread)
         if conn is None:
             conn = _create_connection(db_path)
-            store[key] = conn
+            by_thread[thread] = conn
         return conn
 
 
 def close_connection(db_path: Path) -> None:
-    """テストや再起動シミュレーション用に、**現スレッドが持つ**コネクションを閉じる。
+    """特定ワークスペースのコネクションを**全スレッド分**閉じる(テストの後始末・再起動シミュレーション用)。
 
-    スレッドごとに独立した接続を持つため、他のスレッドの接続はここでは閉じられない
-    (各スレッドの接続はそのスレッドの終了時にプロセスごと破棄される)。
+    呼び出し元のスレッドに関わらず閉じられる(レジストリで管理しているため)。
+    ただし**使用中の接続を閉じる**ことになるため、並行アクセス中には呼ばないこと。
     """
     key = str(db_path.resolve())
-    conn = _thread_connections().pop(key, None)
-    if conn is not None:
+    with _registry_lock:
+        by_thread = _connections.pop(key, {})
+    for conn in by_thread.values():
         conn.close()
 
 
 def close_all_connections() -> None:
-    """現スレッドが保持する全コネクションを閉じる(プロセス終了時の後始末用)。"""
-    store = _thread_connections()
-    for conn in store.values():
-        conn.close()
-    store.clear()
+    """プロセス内の全コネクションを閉じる(アプリ終了時の後始末。`app.main.lifespan`から呼ぶ)。"""
+    with _registry_lock:
+        all_connections = list(_connections.values())
+        _connections.clear()
+    for by_thread in all_connections:
+        for conn in by_thread.values():
+            conn.close()
