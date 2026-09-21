@@ -23,9 +23,22 @@ if (!process.env.AME_WORKSPACE_DIR) {
   //
   // このモジュールはPlaywrightの各プロセスで読み込まれうるが、上のガードにより
   // 実際に作成するのは最初の1プロセスだけなので、削除も1回だけ登録される。
-  process.on("exit", () => {
-    rmSync(e2eWorkspace, { recursive: true, force: true });
-  });
+  const cleanupE2eWorkspace = () => rmSync(e2eWorkspace, { recursive: true, force: true });
+  process.on("exit", cleanupE2eWorkspace);
+  // `exit`はSIGINT/SIGTERM(Ctrl+Cでの中断)では発火しないため、シグナル側でも
+  // 片付ける(レビュー指摘)。終了処理そのものはPlaywrightの既存ハンドラに
+  // 任せたいので、自分のハンドラだけを外し、他にハンドラが無い場合に限り
+  // 同じシグナルを送り直して既定の終了動作(終了コード付き)へ戻す。
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    const onSignal = () => {
+      cleanupE2eWorkspace();
+      process.off(signal, onSignal);
+      if (process.listenerCount(signal) === 0) {
+        process.kill(process.pid, signal);
+      }
+    };
+    process.on(signal, onSignal);
+  }
 }
 
 export default defineConfig({
