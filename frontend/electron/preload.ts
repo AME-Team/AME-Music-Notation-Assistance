@@ -1,33 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 /**
- * #148: レンダラー側の未処理例外・未処理rejectionをmainへ転送してログに残す。
- *
- * `console-message`でも多くは拾えるが、コンソール出力を伴わない失敗
- * (デバッガを開いていない場合の`window.onerror`等)は**ログに何も残らない**。
- * DOM型はelectron側のtsconfigで有効でないため、最小限の形にキャストして扱う。
- */
-type EventTargetLike = { addEventListener(type: string, listener: (event: unknown) => void): void };
-
-function forwardToMain(level: "error" | "warn", source: string, message: string): void {
-  try {
-    ipcRenderer.send("renderer:log", level, source, message);
-  } catch {
-    // 転送できなくてもアプリの動作は止めない(ログ用途のため)。
-  }
-}
-
-(globalThis as unknown as EventTargetLike).addEventListener("error", (event) => {
-  const e = event as { message?: string; filename?: string; lineno?: number; colno?: number };
-  forwardToMain("error", "window.onerror", `${e.message} (${e.filename}:${e.lineno}:${e.colno})`);
-});
-
-(globalThis as unknown as EventTargetLike).addEventListener("unhandledrejection", (event) => {
-  const e = event as { reason?: unknown };
-  forwardToMain("error", "unhandledrejection", String(e.reason));
-});
-
-/**
  * preload / contextIsolation / IPC ブリッジ(#78, NFR-17)。
  * ここに列挙したもの以外は renderer に公開しない。楽譜データ・ジョブ・エージェントの
  * イベントは含まない(それらは HTTP / SSE で取得する)。

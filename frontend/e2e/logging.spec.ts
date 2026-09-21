@@ -43,7 +43,7 @@ test("renderer errors and backend output are written to the log file", async () 
     // 隔離したuserDataを実際に使っていることを確認する(前提の検証)。
     expect(logsDir.startsWith(userDataDir)).toBe(true);
 
-    // レンダラーで未処理例外を起こす(アプリは落とさず、ログにだけ残す想定)。
+    // (1) 実際の未処理例外。
     await page.evaluate(() => {
       setTimeout(() => {
         throw new Error("e2e-log-probe-renderer-error");
@@ -53,6 +53,21 @@ test("renderer errors and backend output are written to the log file", async () 
     await expect
       .poll(() => readNewestLog(logsDir), { timeout: 15_000 })
       .toContain("e2e-log-probe-renderer-error");
+
+    // (2) 未処理rejection(これも`console-message`経由でcaptured される)。
+    // 実測(#149レビュー指摘への回答): Chromiumは未処理例外と未処理rejectionの
+    // **両方をconsoleへ出す**ため、`console-message`経路で十分に拾える。
+    // 一度preload側で`window.onerror`を捕まえてIPCで転送する実装を入れたが、
+    // `contextIsolation: true`では**preloadの(isolated worldの)リスナーがmain worldの
+    // エラーを受け取らない**ことをe2eで計測して確認したため撤去した
+    // (合成ErrorEventがログに残らない=経路が不発)。
+    await page.evaluate(() => {
+      void Promise.reject(new Error("e2e-log-probe-rejection"));
+    });
+
+    await expect
+      .poll(() => readNewestLog(logsDir), { timeout: 15_000 })
+      .toContain("e2e-log-probe-rejection");
 
     const logText = readNewestLog(logsDir);
     // バックエンド(uvicorn)のINFOがINFOとして記録されていること。

@@ -33,19 +33,15 @@ export function classifyLogLevel(text: string): LogLevel {
   return "INFO";
 }
 
-/** 有効なログレベル(IPCで受け取った値の検証に使う)。 */
-const VALID_LEVELS: readonly LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"];
-
 /**
- * IPC等の外部入力から来たログレベルを安全に正規化する(#148レビュー指摘)。
+ * ログ1行に埋め込むテキストから改行を除去する(#149レビュー指摘)。
  *
- * `logger[level.toLowerCase()]`のように未検証のキーで引くと、想定外の文字列で
- * `undefined`を呼び出して**ログ自体が落ちる**(＝肝心のエラーが残らない)。
- * 不正な値は「エラー転送経路から来たもの」とみなしてERRORに寄せる。
+ * レンダラー由来のテキストをそのまま書くと、改行を含む値で
+ * `[ERROR] [backend] ...` のような**偽のログ行を注入**でき、原因究明に使う
+ * ログの信頼性が落ちる。エスケープして1エントリ=1行を保つ。
  */
-export function normalizeLogLevel(value: unknown): LogLevel {
-  const upper = String(value ?? "").toUpperCase();
-  return VALID_LEVELS.includes(upper as LogLevel) ? (upper as LogLevel) : "ERROR";
+export function escapeLogNewlines(text: string): string {
+  return text.replace(/\r\n|\r|\n/g, "\\n");
 }
 
 /** `ERR_ABORTED`(Chromium)。正常なリダイレクト/遷移中断でも`did-fail-load`が出る。 */

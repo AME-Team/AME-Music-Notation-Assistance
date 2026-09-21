@@ -6,12 +6,10 @@ import {
   attachWebContentsLogger,
   getLogsDir,
   initLogger,
-  logFromRenderer,
   logger,
   setupChildProcessErrorHandlers,
   setupGlobalErrorHandlers,
 } from "./logger";
-import type { LogLevel } from "./logLevel";
 import { buildMenu } from "./menu";
 import { loadWindowState, trackWindowState } from "./window-state";
 
@@ -112,11 +110,6 @@ function createWindow(): BrowserWindow {
 function registerIpcHandlers(): void {
   // #146: 現在のバックエンド状態を返す(購読前に送られたイベントの取り戻し用)。
   ipcMain.handle("backend:get-status", () => getBackendStatus());
-
-  // #148: preload側で捕捉したレンダラーの未処理例外/rejectionをログへ書く。
-  ipcMain.on("renderer:log", (_event, level: LogLevel, source: string, message: string) => {
-    logFromRenderer(level, source, message);
-  });
 
   ipcMain.handle("backend:get-info", () => {
     if (!backend) throw new Error("backend is not ready");

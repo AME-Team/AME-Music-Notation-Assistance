@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyLogLevel, normalizeLogLevel, shouldLogDidFailLoad } from "./logLevel";
+import { classifyLogLevel, escapeLogNewlines, shouldLogDidFailLoad } from "./logLevel";
 
 describe("classifyLogLevel (#148)", () => {
   it("treats plain uvicorn output as INFO", () => {
@@ -30,28 +30,26 @@ describe("classifyLogLevel (#148)", () => {
   });
 });
 
-describe("normalizeLogLevel (#148 review)", () => {
-  it("accepts valid levels case-insensitively", () => {
-    expect(normalizeLogLevel("error")).toBe("ERROR");
-    expect(normalizeLogLevel("Warn")).toBe("WARN");
-    expect(normalizeLogLevel("INFO")).toBe("INFO");
-  });
-
-  it("falls back to ERROR for unknown or missing values", () => {
-    // `logger[undefined]`のようなundefined呼び出しでログ自体が落ちないこと。
-    expect(normalizeLogLevel(undefined)).toBe("ERROR");
-    expect(normalizeLogLevel("fatal")).toBe("ERROR");
-    expect(normalizeLogLevel(42)).toBe("ERROR");
-  });
-});
-
-describe("shouldLogDidFailLoad (#148 review)", () => {
+describe("shouldLogDidFailLoad (#149 review)", () => {
   it("logs main-frame failures", () => {
     expect(shouldLogDidFailLoad({ errorCode: -102, isMainFrame: true })).toBe(true);
   });
 
   it("ignores sub-frame failures and aborted navigations", () => {
+    // 通常動作でも出るもの(サブフレーム・リダイレクト/遷移中断)は記録しない。
     expect(shouldLogDidFailLoad({ errorCode: -102, isMainFrame: false })).toBe(false);
     expect(shouldLogDidFailLoad({ errorCode: -3, isMainFrame: true })).toBe(false);
+  });
+});
+
+describe("escapeLogNewlines (#149 review)", () => {
+  it("keeps one log entry per line", () => {
+    // 偽のログ行(`[ERROR] [backend] ...`)の注入を防ぐ。
+    expect(escapeLogNewlines("ok\n[ERROR] [backend] fake")).toBe("ok\\n[ERROR] [backend] fake");
+    expect(escapeLogNewlines("a\r\nb\rc")).toBe("a\\nb\\nc");
+  });
+
+  it("leaves single-line text untouched", () => {
+    expect(escapeLogNewlines("Uncaught Error: boom")).toBe("Uncaught Error: boom");
   });
 });

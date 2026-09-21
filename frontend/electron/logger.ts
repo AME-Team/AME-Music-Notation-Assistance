@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { app, type WebContents } from "electron";
-import { type LogLevel, normalizeLogLevel, shouldLogDidFailLoad } from "./logLevel";
+import { escapeLogNewlines, type LogLevel, shouldLogDidFailLoad } from "./logLevel";
 
 /**
  * ログ管理モジュール。
@@ -146,7 +146,10 @@ export function attachWebContentsLogger(webContents: WebContents): void {
         ? (details.level ?? "info").toLowerCase()
         : (["verbose", "info", "warning", "error", "verbose"][levelOrDetails as number] ?? "info");
       const loc = sourceId ? ` (${sourceId}:${line})` : "";
-      const msg = `${rawMessage}${loc}`;
+      // #149レビュー指摘: レンダラー由来のテキストは信頼できないため、改行を
+      // エスケープして**1エントリ=1行**を保つ(偽のログ行を注入されると、
+      // 原因究明に使うログの信頼性が落ちる)。
+      const msg = `${escapeLogNewlines(rawMessage)}${loc}`;
       switch (levelName) {
         case "verbose":
         case "debug":
@@ -216,19 +219,6 @@ export function setupChildProcessErrorHandlers(): void {
       `Child process gone: type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`,
     );
   });
-}
-
-/**
- * レンダラー側の未処理例外/rejectionを、preload経由のIPCで受け取って記録する(#148)。
- *
- * `console-message`でも多くは拾えるが、コンソール出力を伴わない失敗
- * (`window.onerror`のみ等)を取りこぼさないための明示的な経路。
- */
-export function logFromRenderer(level: unknown, source: string, message: string): void {
-  // レンダラーから渡された値は信頼しない(#148レビュー指摘: 未検証のキーで
-  // `logger[...]`を引くとundefined呼び出しになり、ログ自体が落ちる)。
-  const safeLevel = normalizeLogLevel(level);
-  logger[safeLevel.toLowerCase() as Lowercase<LogLevel>](`renderer:${source}`, message);
 }
 
 /**
