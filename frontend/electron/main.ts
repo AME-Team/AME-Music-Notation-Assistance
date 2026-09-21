@@ -67,7 +67,7 @@ function createWindow(): BrowserWindow {
             // フォールバックも働かず、**contextの"tick"イベントが一度も発火しない**
             // (＝Transportの予定イベントが鳴らない)状態になっていた。実ブラウザでの
             // 計測: worker-src無しはticks=0、`worker-src 'self' blob:`でticks=24/1.2s。
-            // 回帰は`e2e/app.spec.ts`のblob Workerテストで検出する。
+            // 回帰は`frontend/e2e/csp.spec.ts`のblob Workerテストで検出する。
             "worker-src 'self' blob:; " +
             "img-src 'self' data: blob:; media-src 'self' blob: http://127.0.0.1:*; " +
             // #27: `<a download href="blob:...">.click()`(エクスポートのファイル
