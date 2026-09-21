@@ -20,7 +20,13 @@ export interface BackendStatusSnapshot {
 }
 
 export interface BackendStatusApi {
-  getBackendStatus(): Promise<BackendStatusSnapshot>;
+  /**
+   * 現在値の取得。**旧preload(このAPIを持たないバージョン)では未定義**になり得る
+   * ため optional にしてある。レンダラー(Vite/バンドル)とpreload(dist-electron)は
+   * 別々にビルドされるので、開発中はバージョンがずれる(実際にWindows実機の開発モードで
+   * `api.getBackendStatus is not a function` でアプリ全体が落ちた)。
+   */
+  getBackendStatus?(): Promise<BackendStatusSnapshot>;
   onBackendStatus(cb: (status: BackendStatus, detail?: string) => void): () => void;
 }
 
@@ -54,6 +60,8 @@ export function watchBackendStatus(
 
   // 購読を先に張ってから現在値を引く(この間に届いたイベントを取りこぼさない)。
   const unsubscribe = api.onBackendStatus((status, detail) => apply({ status, detail }));
-  void api.getBackendStatus().then(apply, () => undefined);
+  // 旧preloadには無いので、無ければ購読のみで動く(落とさない)。
+  const pull = api.getBackendStatus?.();
+  if (pull) void pull.then(apply, () => undefined);
   return unsubscribe;
 }

@@ -2,16 +2,20 @@ import path from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { type BackendHandle, getBackendStatus, startBackend } from "./backend";
 import {
+  attachFatalErrorHandlers,
   attachWebContentsLogger,
   getLogsDir,
   initLogger,
   logger,
+  setupChildProcessErrorHandlers,
   setupGlobalErrorHandlers,
 } from "./logger";
 import { buildMenu } from "./menu";
 import { loadWindowState, trackWindowState } from "./window-state";
 
 setupGlobalErrorHandlers();
+// #148: レンダラー/GPU等の子プロセスが落ちた場合もログに残す。
+setupChildProcessErrorHandlers();
 
 // #77: 単一インスタンス制御(2重起動でバックエンド/ポートが衝突するのを防ぐ)。
 const gotLock = app.requestSingleInstanceLock();
@@ -43,6 +47,8 @@ function createWindow(): BrowserWindow {
 
   // レンダラープロセスのコンソールログ・クラッシュログをファイルに集約
   attachWebContentsLogger(win.webContents);
+  // #148: preload読み込み失敗・ページ読み込み失敗もログへ残す。
+  attachFatalErrorHandlers(win.webContents);
 
   // NFR-17: リモートコンテンツを一切読み込まない(全てローカルバンドル)。
   // 開発時(DEV_SERVER_URL)は Vite の Fast Refresh (Preamble) インラインスクリプトおよび

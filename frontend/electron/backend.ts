@@ -4,6 +4,8 @@ import path from "node:path";
 import { app } from "electron";
 import treeKill from "tree-kill";
 import { logger } from "./logger";
+import type { LogLevel } from "./logLevel";
+import { classifyLogLevel } from "./logLevel";
 import { generateToken, getFreePort } from "./port";
 
 /**
@@ -185,15 +187,18 @@ export async function startBackend(
     await writeFile(lockPath(), JSON.stringify({ pid: child.pid, port }), "utf-8");
   }
 
-  child.stdout?.on("data", (chunk: Buffer) => {
+  // #148: バックエンドの出力は**stderrにもINFOが来る**(uvicornの既定)ため、
+  // ストリームではなく内容から重大度を判定して書き分ける。一律WARNでは
+  // エラーが埋もれ、原因究明がログだけでは難しかった。
+  const logBackendOutput = (chunk: Buffer): void => {
     const text = chunk.toString("utf-8").trimEnd();
-    if (text) logger.info("backend", text);
-  });
+    if (!text) return;
+    const level = classifyLogLevel(text);
+    logger[level.toLowerCase() as Lowercase<LogLevel>]("backend", text);
+  };
 
-  child.stderr?.on("data", (chunk: Buffer) => {
-    const text = chunk.toString("utf-8").trimEnd();
-    if (text) logger.warn("backend", text);
-  });
+  child.stdout?.on("data", logBackendOutput);
+  child.stderr?.on("data", logBackendOutput);
 
   const baseUrl = `http://127.0.0.1:${port}`;
   logger.info("backend", `Waiting for backend health check at ${baseUrl}...`);
