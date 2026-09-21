@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 from app.infra import db
 from app.services.agent_run_service import AgentRunService
+from app.services.project_service import ProjectService
 
 
 def _create_legacy_agent_runs_db(db_path: Path) -> None:
@@ -71,3 +73,96 @@ def test_agent_run_service_works_against_migrated_legacy_db(tmp_path: Path) -> N
     )
     assert updated["turns"] == 5
     assert updated["staged_ops_count"] == 2
+
+
+def test_concurrent_reads_from_multiple_threads_do_not_fail(tmp_path: Path) -> None:
+    """#150(Windows実機で発覚した500の回帰テスト): 複数スレッドからの同時アクセス。
+
+    以前は`db_path`ごとに1つのコネクションを全スレッドで共有していたため、FastAPIの
+    同期エンドポイントがスレッドプールで並行実行されると
+    `sqlite3.InterfaceError: bad parameter or other API misuse`や
+    `ProjectNotFoundError`(fetchoneがNone)が発生し、`GET /stems`が500になっていた。
+    スレッドごとに独立したコネクションを返すことで解消している。
+    """
+    workspace = tmp_path
+    service = ProjectService(workspace_dir=workspace)
+    project = service.create_project(
+        original_filename="concurrent.wav", content=b"RIFF0000WAVEfmt "
+    )
+    project_id = project["id"]
+
+    errors: list[str] = []
+
+    def worker() -> None:
+        for _ in range(60):
+            try:
+                service.get_project(project_id)
+                service.list_projects()
+            except Exception as exc:  # noqa: BLE001 — 何が漏れるかを報告したい
+                errors.append(f"{type(exc).__name__}: {exc}")
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+
+
+def test_each_thread_gets_its_own_connection(tmp_path: Path) -> None:
+    """スレッドごとに別のコネクションを返し、同一スレッド内では再利用すること。"""
+    db_path = tmp_path / "db.sqlite3"
+    main_conn = db.get_connection(db_path)
+    assert db.get_connection(db_path) is main_conn
+
+    seen: list[int] = []
+
+    def worker() -> None:
+        seen.append(id(db.get_connection(db_path)))
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    assert seen[0] != id(main_conn)
+
+
+def test_close_connection_closes_connections_created_in_other_threads(
+    tmp_path: Path,
+) -> None:
+    """#150レビュー指摘: スレッドローカル化しても`close_connection`はワークスペース単位。
+
+    以前はスレッドローカルにしたことで、別スレッドで作られた接続をメインスレッドから
+    閉じようとすると**黙ってno-op**になり接続がリークしていた。レジストリで管理する
+    ことで、呼び出し元のスレッドに関わらず（テストの後始末・再起動シミュレーションと
+    して）閉じられることを確認する。
+    """
+    db_path = tmp_path / "db.sqlite3"
+    created: list[sqlite3.Connection] = []
+    errors: list[str] = []
+
+    def create_in_worker() -> None:
+        created.append(db.get_connection(db_path))
+
+    thread = threading.Thread(target=create_in_worker)
+    thread.start()
+    thread.join()
+    assert created, "workerスレッドで接続が作られていること"
+
+    db.close_connection(db_path)
+
+    def use_after_close() -> None:
+        try:
+            # 閉じた後なので**新しい接続**が作られ、そのスレッドで使える。
+            conn = db.get_connection(db_path)
+            assert conn.execute("SELECT 1").fetchone() is not None
+        except Exception as exc:  # noqa: BLE001 — 何が漏れるかを報告したい
+            errors.append(f"{type(exc).__name__}: {exc}")
+
+    thread2 = threading.Thread(target=use_after_close)
+    thread2.start()
+    thread2.join()
+
+    assert errors == []
+    assert db.get_connection(db_path) is not created[0]
