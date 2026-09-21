@@ -179,6 +179,10 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
     // ここで握ってエラー表示に留め、プレビュー以外のUIを巻き込まない。
     try {
       osmd.render();
+      // 表示範囲の変更で成功したら、以前の失敗(#154の例: 譜面が壊れていて一時的に
+      // 落ちた等)のメッセージを消す。`loaded`が真のときだけこのeffectが走るため
+      // (ロード失敗では`loaded`が立たない)、ロード失敗のエラーを誤って消すことはない。
+      setError(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     }

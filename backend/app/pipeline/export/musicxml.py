@@ -16,7 +16,13 @@ import re
 from typing import Any
 from xml.sax.saxutils import escape as _xml_escape
 
-from app.pipeline.export.score_builder import ExportError, build_score, is_exportable_note
+from app.pipeline.export.score_builder import (
+    DEFAULT_DIVISIONS,
+    ExportError,
+    build_score,
+    is_exportable_note,
+)
+from app.pipeline.time_signature import time_signature_at_bar
 
 __all__ = ["ExportError", "render_musicxml"]
 
@@ -24,6 +30,7 @@ __all__ = ["ExportError", "render_musicxml"]
 _NOTE_ELEMENT_PATTERN = re.compile(r"<note\b[^>]*/>|<note\b[^>]*>.*?</note>", re.DOTALL)
 _PART_ELEMENT_PATTERN = re.compile(r"(<part(?:\s[^>]*)?>)(.*?)(</part>)", re.DOTALL)
 _MEASURE_OPEN_PATTERN = re.compile(r"<measure\b[^>]*>")
+_MEASURE_NUMBER_PATTERN = re.compile(r"<measure\b[^>]*\bnumber=\"([^\"]*)\"", re.DOTALL)
 
 
 def _expected_note_count(score: dict[str, Any]) -> int:
@@ -88,8 +95,59 @@ def _inject_score_instruments(xml_str: str, parts_data: list[dict]) -> str:
     return xml_str
 
 
-def _pad_parts_to_equal_measures(xml_str: str) -> str:
-    """全パートの小節数を最大値に揃え、足りないパートへ空の`<measure>`を補う(#155)。
+def _measure_lengths_in_divisions(score: dict[str, Any], bar_count: int) -> dict[int, int]:
+    """小節番号(1始まり) → その小節の長さ(divisions単位) を返す(#154レビュー指摘)。
+
+    補完する小節に全休符を入れて小節長を明示するために使う。長さは
+    `ScoreIR`の拍子から `分子 * divisions * 4 / 分母` で求める
+    (`time_signature_at_bar`は拍子が未定義の小節を直前の拍子で補う)。
+    """
+    divisions = score.get("divisions", DEFAULT_DIVISIONS)
+    time_signatures = score.get("time_signatures", [])
+    lengths: dict[int, int] = {}
+    for bar in range(1, bar_count + 1):
+        numerator, denominator = time_signature_at_bar(time_signatures, bar)
+        lengths[bar] = int(numerator * divisions * 4 / denominator)
+    return lengths
+
+
+def _next_measure_number(body: str, count: int) -> int:
+    """そのパートで次に付ける小節番号を決める(#154レビュー指摘)。
+
+    小節番号は弱起(`number="0"`始まり)や繰り返しで連番にならないことがある
+    (MusicXMLでは小節は**位置**で対応し、番号は目安)。そのため小節数から
+    番号を推測せず、そのパートの最後の`<measure number="...">`の続き番号を
+    使う。番号が無い/数値でない場合は小節数の連番(1始まり)へフォールバックする。
+    """
+    numbers = _MEASURE_NUMBER_PATTERN.findall(body)
+    if numbers:
+        try:
+            return int(numbers[-1]) + 1
+        except ValueError:
+            pass
+    return count + 1
+
+
+def _rest_measure_element(number: int, length_divisions: int | None) -> str:
+    """補完する小節の要素を組み立てる。
+
+    長さが分かる場合は**全休符**(`<rest measure="yes"/>`)を入れて小節長を明示する
+    (#154レビュー指摘: 音符も`<forward>`も無い空の小節は長さが未定義で、
+    拍子から補われない実装だとレイアウトが崩れうる)。MusicXMLの規約どおり
+    `measure="yes"`の休符は`<type>whole</type>`とし、`<duration>`へ実際の
+    小節長を入れる。長さ不明の場合は従来どおり空の小節にする。
+    """
+    if length_divisions is None:
+        return f'<measure number="{number}"></measure>'
+    rest_note = (
+        f'<note><rest measure="yes"/><duration>{length_divisions}</duration>'
+        f"<type>whole</type></note>"
+    )
+    return f'<measure number="{number}">{rest_note}</measure>'
+
+
+def _pad_parts_to_equal_measures(xml_str: str, score: dict[str, Any] | None = None) -> str:
+    """全パートの小節数を最大値に揃え、足りないパートへ補完小節を追記する(#154)。
 
     MusicXML(`score-partwise`)は**全パートが同じ小節数を持つ**ことを前提にしており、
     小節番号がパート間で対応しているものとして扱われる。ところがpartituraの
@@ -99,16 +157,15 @@ def _pad_parts_to_equal_measures(xml_str: str) -> str:
 
     この状態のMusicXMLは譜面表示ライブラリ(OSMD)が読み込めず、
     `<ScorePreview>`が例外で落ちる(実測: `Cannot read properties of undefined
-    (reading 'staffEntries')` / `(reading 'parent')`、#155)。パート単体では読めるのに
+    (reading 'staffEntries')` / `(reading 'parent')`、#154)。パート単体では読めるのに
     複数パートにすると落ちるのがこの不整合の特徴。
 
-    空の`<measure>`は「その小節にそのパートの音符が無い」ことを表し、MusicXMLとして妥当。
-    既存の`xml.etree`を使わない文字列レベル処理の方針は`_inject_score_instruments`と同じ
-    (パース→再シリアライズで`<!DOCTYPE ...>`宣言やpartituraが挿入する小節区切りコメントが
-    失われるのを避ける)。partituraの出力は`<measure number="n">`〜`</measure>`形式なので
-    同じ形式で追記する。
+    `score`を渡すと、補完する小節へ**全休符と小節長**を入れる(渡さない場合は空の
+    小節)。既存の`xml.etree`を使わない文字列レベル処理の方針は
+    `_inject_score_instruments`と同じ(パース→再シリアライズで`<!DOCTYPE ...>`宣言や
+    partituraが挿入する小節区切りコメントが失われるのを避ける)。partituraの出力は
+    `<measure number="n">`〜`</measure>`形式なので同じ形式で追記する。
     """
-    # `<part-list>`は`<part`に一致するため、`<part>`/`<part 属性>`に限定したパターンを使う。
     matches = _PART_ELEMENT_PATTERN.findall(xml_str)
     if not matches:
         raise ExportError("generated MusicXML has no <part> element")
@@ -117,13 +174,18 @@ def _pad_parts_to_equal_measures(xml_str: str) -> str:
     if min(measure_counts) == target:
         return xml_str
 
+    lengths = _measure_lengths_in_divisions(score, target) if score is not None else {}
+
     def _pad(match: re.Match[str]) -> str:
         body = match.group(2)
         count = len(_MEASURE_OPEN_PATTERN.findall(body))
         if count >= target:
             return match.group(0)
-        padded_numbers = range(count + 1, target + 1)
-        extra = "".join(f'<measure number="{number}"></measure>' for number in padded_numbers)
+        first = _next_measure_number(body, count)
+        extra = "".join(
+            _rest_measure_element(number, lengths.get(number))
+            for number in range(first, first + target - count)
+        )
         return match.group(1) + body + extra + match.group(3)
 
     return _PART_ELEMENT_PATTERN.sub(_pad, xml_str)
@@ -182,6 +244,6 @@ def render_musicxml(score: dict[str, Any]) -> bytes:
     # 状態に戻らないよう、ここで明示的に検出する(midi.pyが`strict=True`でトラック数の
     # 前提崩れを検出する方針と揃える)。
     _ensure_notes_written(score, xml_str)
-    # #155: 全パートの小節数をえる(揃っていないMusicXMLは譜面表示ライブラリが読めない)。
-    xml_str = _pad_parts_to_equal_measures(xml_str)
+    # #154: 全パートの小節数を揃える(揃っていないMusicXMLは譜面表示ライブラリが読めない)。
+    xml_str = _pad_parts_to_equal_measures(xml_str, score)
     return xml_str.encode("utf-8")

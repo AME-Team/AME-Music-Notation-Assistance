@@ -513,8 +513,12 @@ class TestPartsHaveEqualMeasureCounts:
 
         assert [m.get("number") for m in bass.findall("measure")] == ["1", "2"]
 
+    @staticmethod
+    def _sounding_notes(measure: ET.Element) -> list[ET.Element]:
+        return [n for n in measure.findall("note") if n.find("rest") is None]
+
     def test_notes_of_the_short_part_stay_in_its_own_measures(self) -> None:
-        """補った空小節に元の音符が混ざらない(詰め直しではなく末尾への追記である)。"""
+        """補った小節に元の音符が混ざらない(詰め直しではなく末尾への追記である)。"""
         long_notes = [_note(i, i * 480, 480) for i in range(8)]
         short_notes = [_note(100, 0, 480)]
         score = _score(
@@ -523,12 +527,63 @@ class TestPartsHaveEqualMeasureCounts:
 
         root = ET.fromstring(render_musicxml(score))
         bass = next(part for part in root.findall("part") if part.get("id") == "bass")
-        notes_per_measure = [len(m.findall("note")) for m in bass.findall("measure")]
+        notes_per_measure = [
+            len(self._sounding_notes(m)) for m in bass.findall("measure")
+        ]
 
         assert notes_per_measure[0] == 1, notes_per_measure
         assert notes_per_measure[1:] == [0] * (len(notes_per_measure) - 1), (
             notes_per_measure
         )
+
+    def test_padded_measures_carry_a_whole_measure_rest(self) -> None:
+        """補完する小節には全休符と小節長を入れる(空の小節は長さが未定義なため)。"""
+        score = _score(
+            [
+                self._part("piano", [_note(i, i * 480, 480) for i in range(8)]),
+                self._part("bass", [_note(100, 0, 480)]),
+            ]
+        )
+
+        root = ET.fromstring(render_musicxml(score))
+        bass = next(part for part in root.findall("part") if part.get("id") == "bass")
+        padded = bass.findall("measure")[1]
+
+        rest = padded.find("note/rest")
+        assert rest is not None and rest.get("measure") == "yes", ET.tostring(padded)
+        assert padded.findtext("note/duration") == "1920", ET.tostring(padded)  # 4/4
+        assert padded.findtext("note/type") == "whole"
+
+    def test_padded_measures_numbering_follows_a_pickup_bar(self) -> None:
+        """弱起(number="0"始まり)でも採番が連番からずれない。"""
+        xml = (
+            "<score-partwise>"
+            '<part id="p"><measure number="0"></measure><measure number="1"></measure></part>'
+            '<part id="q"><measure number="0"></measure></part>'
+            "</score-partwise>"
+        )
+
+        padded = pad_parts_to_equal_measures(xml)
+
+        short = ET.fromstring(padded).findall("part")[1]
+        assert [m.get("number") for m in short.findall("measure")] == ["0", "1"]
+
+    def test_padded_measures_numbering_falls_back_when_numbers_are_missing(
+        self,
+    ) -> None:
+        xml = (
+            "<score-partwise>"
+            '<part id="p"><measure></measure><measure></measure></part>'
+            '<part id="q"><measure></measure></part>'
+            "</score-partwise>"
+        )
+
+        padded = pad_parts_to_equal_measures(xml)
+
+        short_measures = ET.fromstring(padded).findall("part")[1].findall("measure")
+
+        # 番号が無い場合は1始まりの連番にフォールバックする(2小節目 → "2")。
+        assert [m.get("number") for m in short_measures] == [None, "2"]
 
     def test_aligned_parts_are_left_untouched(self) -> None:
         notes = [_note(i, i * 480, 480) for i in range(8)]
