@@ -558,6 +558,42 @@ class TestImportValidation:
         with pytest.raises(InvalidArchiveError, match="non-scalar"):
             import_project_archive(workspace_dir, service, buf.getvalue())
 
+    def test_duplicate_agent_run_ids_are_rejected_as_422_not_500(
+        self, workspace_dir: Path
+    ) -> None:
+        """#65レビュー指摘(3巡目、MIDDLE): `agent_runs`のidが重複すると
+
+        `agent_run_id_map`(旧id→新id)で片方が上書きされ、2行が同じ新規IDへ
+        写像される。結果`INSERT`の2行目でUNIQUE制約違反
+        (`sqlite3.IntegrityError`、未処理例外で500)になっていた。
+        """
+        service = ProjectService(workspace_dir=workspace_dir)
+        manifest = {
+            "archive_schema_version": ARCHIVE_SCHEMA_VERSION,
+            "project": {
+                "name": "x",
+                "original_filename": "x.wav",
+                "audio_format": "wav",
+            },
+            "agent_runs": [
+                {
+                    "id": "run_dup",
+                    "status": "succeeded",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "id": "run_dup",
+                    "status": "failed",
+                    "created_at": "2026-01-01T00:00:01+00:00",
+                },
+            ],
+        }
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest))
+        with pytest.raises(InvalidArchiveError, match="duplicate ids"):
+            import_project_archive(workspace_dir, service, buf.getvalue())
+
     def test_created_at_is_not_required_in_the_manifest(
         self, workspace_dir: Path
     ) -> None:

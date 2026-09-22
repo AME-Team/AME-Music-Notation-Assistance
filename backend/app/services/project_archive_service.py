@@ -263,6 +263,21 @@ def _validate_manifest(manifest: Any) -> dict[str, Any]:
                     f"{_MANIFEST_NAME} {table!r} entry has non-scalar values for {non_scalar}"
                 )
 
+        # レビュー指摘(3巡目、MIDDLE): `agent_runs`は`import_project_archive`が
+        # `{old_id: new_id}`の辞書(`agent_run_id_map`)を作るため、`id`が
+        # 重複した行があると後の行が前の行を上書きし、2行が同じ新規IDへ
+        # 写像される。結果`INSERT INTO agent_runs`の2行目で主キー(`id`)の
+        # UNIQUE制約違反(`sqlite3.IntegrityError`、未処理例外で500)になる。
+        # jobs/revisionsは行ごとに独立して`ids.new_id()`を呼ぶため実害は
+        # 無いが、3テーブルとも元は同一プロジェクトのSQLite主キー(重複
+        # しないはず)なので、一律で重複IDを拒否しておく。
+        seen_ids = [row["id"] for row in rows]
+        duplicate_ids = sorted({rid for rid in seen_ids if seen_ids.count(rid) > 1})
+        if duplicate_ids:
+            raise InvalidArchiveError(
+                f"{_MANIFEST_NAME} {table!r} has duplicate ids: {duplicate_ids}"
+            )
+
     return manifest
 
 
