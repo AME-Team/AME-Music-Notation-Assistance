@@ -15,6 +15,13 @@ const SELECTED_CLASS =
 const UNSELECTED_CLASS =
   "border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800";
 
+/**
+ * フォーカストラップの対象(ダイアログ内で Tab 移動できる要素)。
+ * `tabindex="-1"` は意図的に除外する(ダイアログ自身が該当するため)。
+ */
+const FOCUSABLE_SELECTOR =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
@@ -34,6 +41,15 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const setTheme = useThemeStore((s) => s.setTheme);
   const dialogRef = useRef<HTMLDivElement>(null);
   const lastFocusedRef = useRef<HTMLElement | null>(null);
+  // 最新の`onClose`をrefで参照する。依存配列に入れると、呼び出し側がインライン関数
+  // (`onClose={() => setSettingsOpen(false)}`)を渡している場合に**再レンダリングの
+  // たびeffectが再実行される**。再実行時のcleanupは「元の要素へフォーカスを戻す」
+  // 処理なので、モーダル表示中にフォーカスがダイアログの外へ出てしまい、以降の
+  // 復元先もダイアログ自身に化ける(レビュー指摘)。
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -41,9 +57,39 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      // フォーカストラップ: `aria-modal="true"`は「背景は操作できない」ことを示すが、
+      // Tabキーは背景の要素へ抜けてしまうため、ダイアログ内で循環させる
+      // (レビュー指摘。背景を`inert`にする方法もあるが、モーダルはAppのDOM内に
+      // 描画しているため、その場合はポータル化とセットになる)。
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (element) => !element.hasAttribute("disabled"),
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey) {
+        if (active === first || active === dialog) {
+          event.preventDefault();
+          last.focus();
+        }
+        return;
+      }
+      if (active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     // 背景クリックで閉じる。オーバーレイ自体にハンドラを付けると
     // 静的な要素がインタラクティブ扱いになる(a11y lint)ため、
@@ -51,7 +97,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     const onMouseDown = (event: MouseEvent) => {
       const dialog = dialogRef.current;
       if (!dialog) return;
-      if (event.target instanceof Node && !dialog.contains(event.target)) onClose();
+      if (event.target instanceof Node && !dialog.contains(event.target)) onCloseRef.current();
     };
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("mousedown", onMouseDown);
@@ -60,7 +106,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       document.removeEventListener("mousedown", onMouseDown);
       lastFocusedRef.current?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

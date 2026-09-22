@@ -58,6 +58,16 @@ test("theme defaults to dark, toggles in settings modal opened from the menu, an
     expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
     expect(await page.evaluate(() => window.localStorage.getItem("ame.theme"))).toBe("light");
 
+    // フォーカストラップ: Tabキーで背景へ抜けない(ダイアログ内を循環する)。
+    // 先頭のラジオ→「閉じる」→先頭…の順に回るため、数回押してもダイアログ内に留まる。
+    for (let i = 0; i < 5; i += 1) {
+      await page.keyboard.press("Tab");
+      const insideDialog = await page.evaluate(
+        () => document.activeElement?.closest('[role="dialog"]') !== null,
+      );
+      expect(insideDialog).toBe(true);
+    }
+
     // Escapeキーでも閉じられる。
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
