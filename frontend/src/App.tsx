@@ -5,9 +5,10 @@ import { JobMonitor } from "./components/JobMonitor";
 import { ProjectList } from "./components/ProjectList";
 import { ProjectUpload } from "./components/ProjectUpload";
 import { ProjectWorkspace } from "./components/ProjectWorkspace";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsModal } from "./components/SettingsModal";
 import { watchBackendStatus } from "./lib/backendStatus";
 import type { BackendStatus } from "./lib/electron-api";
+import { watchOpenSettings } from "./lib/settingsMenu";
 import { useJobStore } from "./stores/jobStore";
 
 export function App() {
@@ -16,6 +17,8 @@ export function App() {
   );
   const [backendDetail, setBackendDetail] = useState<string | undefined>();
   const [selected, setSelected] = useState<Project | null>(null);
+  // #158: 設定はメインウィンドウに常設せず、メニュー「編集 > 設定」から開く。
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const track = useJobStore((s) => s.track);
 
   useEffect(() => {
@@ -28,6 +31,8 @@ export function App() {
       setBackendDetail(detail);
     });
   }, []);
+
+  useEffect(() => watchOpenSettings(window.api, () => setSettingsOpen(true)), []);
 
   if (backendStatus === "starting") {
     return (
@@ -51,7 +56,6 @@ export function App() {
       <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
         AME Music Notation Assistance
       </h1>
-      <SettingsPanel />
       <ProjectUpload />
       <ProjectList selectedId={selected?.id ?? null} onSelect={setSelected} />
       {selected && (
@@ -70,6 +74,7 @@ export function App() {
         </div>
       )}
       <JobMonitor />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

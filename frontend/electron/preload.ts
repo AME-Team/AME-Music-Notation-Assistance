@@ -18,6 +18,16 @@ contextBridge.exposeInMainWorld("api", {
     return () => ipcRenderer.removeListener("backend:status", listener);
   },
 
+  // #158: ネイティブメニュー「編集 > 設定」の選択をrendererへ伝える。
+  onOpenSettings: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on("menu:open-settings", listener);
+    // 購読が確立したことをmainへ伝える(それ以前の通知は届かないため、mainは
+    // この通知までメニュー項目を無効にしている)。
+    ipcRenderer.send("menu:settings-ready");
+    return () => ipcRenderer.removeListener("menu:open-settings", listener);
+  },
+
   openFileDialog: () => ipcRenderer.invoke("dialog:open-file"),
 
   saveFileDialog: (options: {
