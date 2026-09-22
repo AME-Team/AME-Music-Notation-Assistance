@@ -245,6 +245,25 @@ class TestExportImportRoundTrip:
         manifest = json.loads(zipfile.ZipFile(archive_path).read("manifest.json"))
         assert manifest["includes_stems"] is False
 
+    def test_include_stems_false_excludes_wav_files_in_stems_subdirectories_too(
+        self, workspace_dir: Path, tiny_wav_bytes: bytes
+    ) -> None:
+        """#65レビュー指摘(LOW): `stems/`直下だけでなく、サブディレクトリ
+
+        構成になった場合でも配下の`.wav`は除外する。
+        """
+        service, project_id = _make_project(workspace_dir, tiny_wav_bytes)
+        nested = storage.stems_dir(workspace_dir, project_id) / "variant"
+        nested.mkdir(parents=True, exist_ok=True)
+        (nested / "piano_v2.wav").write_bytes(b"nested-stem")
+
+        archive_path = export_project_archive(
+            workspace_dir, project_id, service, include_stems=False
+        )
+        with zipfile.ZipFile(archive_path) as zf:
+            names = zf.namelist()
+        assert not any(name.endswith("piano_v2.wav") for name in names)
+
     def test_include_stems_true_includes_stem_wav_files(
         self, workspace_dir: Path, tiny_wav_bytes: bytes
     ) -> None:
@@ -476,6 +495,91 @@ class TestImportValidation:
                 zf.writestr(f"project/extra_{i}.txt", "x")
         with pytest.raises(InvalidArchiveError, match="too many entries"):
             import_project_archive(workspace_dir, service, buf.getvalue())
+
+    def test_non_string_score_snapshot_is_rejected_as_422_not_500(
+        self, workspace_dir: Path
+    ) -> None:
+        """#65レビュー指摘(MIDDLE): 型検証が無いと`score_snapshot`が文字列以外
+
+        (例: JSONオブジェクト)でも`_validate_manifest`を通過し、後段の
+        `json.loads`が`TypeError`を送出して未処理例外(500)になっていた。
+        """
+        service = ProjectService(workspace_dir=workspace_dir)
+        manifest = {
+            "archive_schema_version": ARCHIVE_SCHEMA_VERSION,
+            "project": {
+                "name": "x",
+                "original_filename": "x.wav",
+                "audio_format": "wav",
+            },
+            "revisions": [
+                {
+                    "id": "rev_1",
+                    "name": "r1",
+                    "score_snapshot": {"not": "a string"},
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ],
+        }
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest))
+        with pytest.raises(InvalidArchiveError, match="non-string"):
+            import_project_archive(workspace_dir, service, buf.getvalue())
+
+    def test_non_scalar_optional_field_is_rejected_as_422_not_500(
+        self, workspace_dir: Path
+    ) -> None:
+        """#65レビュー指摘(2巡目、MIDDLE): 必須キーだけでなく任意キー
+
+        (例: agent_runsのusage_json)も、dict/listが混入すると
+        `sqlite3.InterfaceError`(未処理例外、500)になっていた。
+        """
+        service = ProjectService(workspace_dir=workspace_dir)
+        manifest = {
+            "archive_schema_version": ARCHIVE_SCHEMA_VERSION,
+            "project": {
+                "name": "x",
+                "original_filename": "x.wav",
+                "audio_format": "wav",
+            },
+            "agent_runs": [
+                {
+                    "id": "run_1",
+                    "status": "succeeded",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "usage_json": {"tokens": 100},  # 本来はJSON文字列であるべき
+                }
+            ],
+        }
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest))
+        with pytest.raises(InvalidArchiveError, match="non-scalar"):
+            import_project_archive(workspace_dir, service, buf.getvalue())
+
+    def test_created_at_is_not_required_in_the_manifest(
+        self, workspace_dir: Path
+    ) -> None:
+        """#65レビュー指摘(LOW): 読み込みは常に新規作成で元のcreated_atを
+
+        使わないため、manifestに無くても読み込める。
+        """
+        service = ProjectService(workspace_dir=workspace_dir)
+        manifest = {
+            "archive_schema_version": ARCHIVE_SCHEMA_VERSION,
+            "project": {
+                "name": "x",
+                "original_filename": "x.wav",
+                "audio_format": "wav",
+                # created_at を意図的に省略
+            },
+        }
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest))
+        imported = import_project_archive(workspace_dir, service, buf.getvalue())
+        assert imported["original_filename"] == "x.wav"
 
 
 class TestArchiveApi:

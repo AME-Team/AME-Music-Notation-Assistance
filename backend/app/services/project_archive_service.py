@@ -40,6 +40,35 @@ _JOB_REQUIRED_KEYS = ("id", "stage", "status", "created_at", "updated_at")
 _AGENT_RUN_REQUIRED_KEYS = ("id", "status", "created_at")
 _REVISION_REQUIRED_KEYS = ("id", "name", "score_snapshot", "created_at")
 
+# #65レビュー指摘(LOW): exportは`db.py`の`jobs`/`agent_runs`/`revisions`の
+# 全列を明示的に列挙する(`SELECT *`にしない)。`SELECT *`だと、将来テーブルに
+# 列が追加された際に import側の固定INSERT列リストと**気づかないまま**
+# 乖離し、新しい値が黙って欠落する(NOT NULL制約付きなら例外)。
+# `archive_schema_version`のガードも列単位の乖離までは検出できないため、
+# ここを列挙にしておけば、列を追加する変更者がこのファイルも同時に
+# 更新する必要に気づける。
+_JOB_COLUMNS = (
+    "id",
+    "stage",
+    "status",
+    "progress",
+    "message",
+    "params_json",
+    "exit_code",
+    "created_at",
+    "updated_at",
+)
+_AGENT_RUN_COLUMNS = (
+    "id",
+    "status",
+    "turns",
+    "usage_json",
+    "staged_ops_count",
+    "error",
+    "created_at",
+)
+_REVISION_COLUMNS = ("id", "name", "description", "op_count", "score_snapshot", "created_at")
+
 # #65レビュー指摘(LOW): 細工されたzip(zip bomb)でメモリ・ディスクを
 # 枯渇させられないよう、展開前にzipの中央ディレクトリ(メタデータのみ、
 # 実体は読まない)から合計サイズ・件数を見積もって上限を掛ける。単一
@@ -66,14 +95,23 @@ def export_project_archive(
     project = service.get_project(project_id)
     conn = db.get_connection(workspace_dir / "db.sqlite3")
     # `db._row_factory` が常に dict を返すため、ここでの追加ラップは不要。
+    # 列は明示的に列挙する(`SELECT *`にしない、モジュール定数のdocstring参照)。
+    # f-stringでSQLを組み立てここでS608を無効化するのは、このコードベースの
+    # 既存パターン(外部入力ではなくモジュール定数の列名のみを埋め込む、
+    # `agent_run_service.py`のUPDATE/SELECT、`db.py`のALTER TABLEと同じ)。
     jobs = conn.execute(
-        "SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at", (project_id,)
+        f"SELECT {', '.join(_JOB_COLUMNS)} FROM jobs WHERE project_id = ? ORDER BY created_at",  # noqa: S608
+        (project_id,),
     ).fetchall()
     agent_runs = conn.execute(
-        "SELECT * FROM agent_runs WHERE project_id = ? ORDER BY created_at", (project_id,)
+        f"SELECT {', '.join(_AGENT_RUN_COLUMNS)} FROM agent_runs "  # noqa: S608
+        "WHERE project_id = ? ORDER BY created_at",
+        (project_id,),
     ).fetchall()
     revisions = conn.execute(
-        "SELECT * FROM revisions WHERE project_id = ? ORDER BY created_at", (project_id,)
+        f"SELECT {', '.join(_REVISION_COLUMNS)} FROM revisions "  # noqa: S608
+        "WHERE project_id = ? ORDER BY created_at",
+        (project_id,),
     ).fetchall()
 
     score_schema_version = None
@@ -114,7 +152,10 @@ def export_project_archive(
         if path.is_file() and path not in (archive_path, tmp_path)
     ]
     if not include_stems:
-        files = [path for path in files if path.parent != stems_root or path.suffix != ".wav"]
+        # レビュー指摘(LOW): `path.parent != stems_root`だと`stems/`直下しか
+        # 除外できず、将来サブディレクトリ構成になった場合に取りこぼす。
+        # `stems_root`配下全体(サブディレクトリを含む)の`.wav`を対象にする。
+        files = [path for path in files if stems_root not in path.parents or path.suffix != ".wav"]
 
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -163,9 +204,16 @@ def _validate_manifest(manifest: Any) -> dict[str, Any]:
     project_row = manifest.get("project")
     if not isinstance(project_row, dict):
         raise InvalidArchiveError(f"{_MANIFEST_NAME} is missing 'project'")
-    for key in ("name", "original_filename", "audio_format", "created_at"):
+    # `created_at`は必須にしない(レビュー指摘、LOW): 読み込みは常に新規作成
+    # であり(モジュールdocstring参照)、`import_project_archive`は元の
+    # `created_at`を使わず`datetime.now(UTC)`で採番し直す。manifestには
+    # 記録目的(いつエクスポートされた元プロジェクトか)で残すが、無くても
+    # 読み込みは成立するため必須検証の対象からは外す。
+    for key in ("name", "original_filename", "audio_format"):
         if key not in project_row:
             raise InvalidArchiveError(f"{_MANIFEST_NAME} 'project' is missing {key!r}")
+        if not isinstance(project_row[key], str):
+            raise InvalidArchiveError(f"{_MANIFEST_NAME} 'project' {key!r} must be a string")
 
     for table, required_keys in (
         ("jobs", _JOB_REQUIRED_KEYS),
@@ -181,6 +229,39 @@ def _validate_manifest(manifest: Any) -> dict[str, Any]:
             missing = [key for key in required_keys if key not in row]
             if missing:
                 raise InvalidArchiveError(f"{_MANIFEST_NAME} {table!r} entry is missing {missing}")
+            # レビュー指摘(MIDDLE): キーの存在だけでなく型も検証する。例えば
+            # `score_snapshot`が文字列以外だと`_rewrite_project_id_in_score_snapshot`の
+            # `json.loads`が`TypeError`を送出し、`InvalidArchiveError`(422)ではなく
+            # 未処理例外(API層で500)になっていた。全ての必須キー
+            # (`_JOB_REQUIRED_KEYS`/`_AGENT_RUN_REQUIRED_KEYS`/
+            # `_REVISION_REQUIRED_KEYS`)は`db.py`の`TEXT NOT NULL`列に対応する
+            # (`jobs.id/stage/status/created_at/updated_at`、
+            # `agent_runs.id/status/created_at`、
+            # `revisions.id/name/score_snapshot/created_at`はいずれもNOT NULL)。
+            # `None`を許容すると、この検証をすり抜けてもINSERT時にNOT NULL
+            # 制約違反で未処理例外(500)になるだけなので、一律で文字列を要求する
+            # (レビュー指摘2巡目: これらの列がNULL許容だと往復を壊すのではとの
+            # 懸念があったが、上記の通りスキーマ上NOT NULLのため該当しない)。
+            not_strings = [key for key in required_keys if not isinstance(row[key], str)]
+            if not_strings:
+                raise InvalidArchiveError(
+                    f"{_MANIFEST_NAME} {table!r} entry has non-string values for {not_strings}"
+                )
+            # レビュー指摘(2巡目、MIDDLE): 上のチェックは必須キーの文字列型しか
+            # 見ておらず、任意キー(jobsのparams_json/exit_code/progress、
+            # agent_runsのturns/usage_json/staged_ops_count/error、revisionsの
+            # description/op_count)は未検証のままだった。これらはSQLiteの
+            # 列へそのままバインドされるため、dict/listが紛れ込むと
+            # `sqlite3.InterfaceError`(未処理例外、500)になる。SQLiteへ
+            # バインド可能な値はJSONのスカラー(文字列/数値/真偽値/null)のみ
+            # なので、行の全キーについて非スカラー(dict/list)だけを一律で
+            # 拒否する(列ごとの型までは要求しない、他の型不一致はSQLite自体の
+            # 型親和性で許容されるため実害が無い)。
+            non_scalar = [key for key, value in row.items() if isinstance(value, dict | list)]
+            if non_scalar:
+                raise InvalidArchiveError(
+                    f"{_MANIFEST_NAME} {table!r} entry has non-scalar values for {non_scalar}"
+                )
 
     return manifest
 
@@ -248,7 +329,7 @@ def _rewrite_project_id_in_file(path: Path, new_project_id: str) -> None:
     """
     try:
         data = storage.read_json(path)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return
     if isinstance(data, dict) and "project_id" in data:
         data["project_id"] = new_project_id
