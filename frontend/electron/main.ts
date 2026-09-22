@@ -179,7 +179,17 @@ app.on("second-instance", () => {
 app.whenReady().then(async () => {
   await initLogger();
   logger.info("main", "AME Music Notation Assistance starting...");
-  Menu.setApplicationMenu(buildMenu());
+  // #158: 「編集 > 設定」からrendererへ通知する。windowは既に破棄されている
+  // ことがあるため(終了処理中)、backend:status と同じく存在確認してから送る。
+  Menu.setApplicationMenu(
+    buildMenu({
+      openSettings: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("menu:open-settings");
+        }
+      },
+    }),
+  );
   registerIpcHandlers();
   mainWindow = createWindow();
 

@@ -21,6 +21,12 @@ export interface AmeElectronApi {
   /** #146: 現在のバックエンド状態。購読前に送られた遷移を取り戻すために使う。 */
   getBackendStatus(): Promise<{ status: BackendStatus; detail?: string }>;
   /**
+   * #158: ネイティブメニュー「編集 > 設定」が選ばれたときに呼ばれる。
+   * 戻り値は購読解除の関数。**旧preloadには存在しない**ため optional にしてある
+   * (`getBackendStatus`と同じく、rendererとpreloadは別々にビルドされる)。
+   */
+  onOpenSettings?(cb: () => void): () => void;
+  /**
    * ネイティブファイルダイアログで音声ファイルを選択する。sandbox:true の renderer は
    * fs にアクセスできないため、選択されたファイルの中身は main プロセスが読み取って
    * ここで返す(楽譜/ジョブデータをIPCに乗せない、という制約とは無関係の入力経路)。

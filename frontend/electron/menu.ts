@@ -1,8 +1,19 @@
 import { Menu, type MenuItemConstructorOptions, shell } from "electron";
 import { getLogsDir } from "./logger";
 
+/** #158: メニュー項目が実行する操作(mainプロセス側のコールバック)。 */
+export interface MenuActions {
+  /**
+   * 「編集 > 設定」が選ばれたときに呼ぶ。
+   *
+   * メニューは`mainWindow`の生成前に組まれるため、ここでは「どう通知するか」だけを
+   * 受け取り、windowの存在確認は呼び出し側(`main.ts`)が行う。
+   */
+  openSettings: () => void;
+}
+
 /** ネイティブメニュー(#15)。M0 では最小限(標準ロールのみ)。 */
-export function buildMenu(): Menu {
+export function buildMenu(actions: MenuActions): Menu {
   const template: MenuItemConstructorOptions[] = [
     {
       label: "ファイル",
@@ -17,6 +28,15 @@ export function buildMenu(): Menu {
         { role: "cut", label: "切り取り" },
         { role: "copy", label: "コピー" },
         { role: "paste", label: "貼り付け" },
+        { type: "separator" },
+        // #158: 設定モーダルを開く(画面デザイン上、設定はメインウィンドウに常設せず
+        // メニューから開くダイアログに置く)。acceleratorは一般的な
+        // 「環境設定」のショートカットに合わせる。
+        {
+          label: "設定",
+          accelerator: "CmdOrCtrl+,",
+          click: () => actions.openSettings(),
+        },
       ],
     },
     {
