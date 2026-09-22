@@ -85,6 +85,48 @@
         }
       }
     },
+    "/api/projects/import": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Import Project",
+        "description": "#65 FR-18: 単一アーカイブ(`.ameproj`)からプロジェクトを新規作成する。\n\n`export_project_archive`と対になる読み込み側。`create_project`と異なり\n`async def`にしない(`export_score`/`get_peaks`と同じ理由、#27-M2レビュー\n指摘): zip展開・DB書き込みはCPU/IOバウンドな同期処理で、`include_stems`\n付きのアーカイブは数十MB規模になりうるため、`async def`のままだと\nイベントループを直接ブロックし、SSEでのジョブ進捗配信など他の同時\nリクエストを止めてしまう。`UploadFile.file`(同期`SpooledTemporaryFile`)\n経由で読む。",
+        "operationId": "import_project_api_projects_import_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_project_api_projects_import_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{project_id}": {
       "get": {
         "tags": [
@@ -146,6 +188,60 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/archive": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Project Archive",
+        "description": "#65 FR-18: プロジェクトを単一アーカイブ(`.ameproj`)として書き出す。\n\n`export_score`と同じ理由で`async def`にしない(zip書き込みはCPU/IOバウンドな\n同期処理)。`include_stems=false`でステムWAV(サイズの大半を占める)を除外できる。",
+        "operationId": "get_project_archive_api_projects__project_id__archive_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "include_stems",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Include Stems"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -2423,6 +2519,20 @@
           "file"
         ],
         "title": "Body_create_project_api_projects_post"
+      },
+      "Body_import_project_api_projects_import_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_project_api_projects_import_post"
       },
       "CancelResponse": {
         "properties": {

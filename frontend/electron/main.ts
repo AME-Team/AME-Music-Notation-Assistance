@@ -105,6 +105,23 @@ function createWindow(): BrowserWindow {
     return { action: "deny" };
   });
 
+  // #65: e2eテストのみ、ダウンロードを`AME_E2E_DOWNLOADS_DIR`(隔離先)へ
+  // ダイアログ無しで即保存する。`page.on('download')`はElectronアプリでは
+  // 信頼できない(upstream既知の制限: microsoft/playwright#20445)ため、
+  // e2eはファイルの出現をポーリングして検証する(`will-download`が
+  // 無いとOSネイティブの「保存」ダイアログが出て待機し続けることを実測で
+  // 確認済み)。本番(通常起動)ではこのハンドラを登録せず、Electronの既定の
+  // 保存ダイアログ挙動(`MusicXML`/`MIDI`/プロジェクトアーカイブいずれも
+  // 共通)をそのまま維持する(precommitレビュー指摘、MIDDLE: 全ダウンロード
+  // を無条件でダイアログ無し・同名上書きへ変えると、既存のエクスポート
+  // 機能のユーザー体験を意図せず変更してしまうため)。
+  if (process.env.AME_E2E_DOWNLOADS_DIR) {
+    const e2eDownloadsDir = process.env.AME_E2E_DOWNLOADS_DIR;
+    win.webContents.session.on("will-download", (_event, item) => {
+      item.setSavePath(path.join(e2eDownloadsDir, item.getFilename()));
+    });
+  }
+
   if (state.isMaximized) win.maximize();
   trackWindowState(win);
 

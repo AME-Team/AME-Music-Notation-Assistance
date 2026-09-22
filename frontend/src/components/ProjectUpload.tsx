@@ -59,6 +59,7 @@ export function ProjectUpload() {
       <input
         ref={inputRef}
         type="file"
+        aria-label="音声ファイルを選択"
         accept={ACCEPTED_EXTENSIONS.join(",")}
         className="hidden"
         onChange={(e) => {
