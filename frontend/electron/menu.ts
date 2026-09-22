@@ -2,6 +2,9 @@ import { Menu, type MenuItemConstructorOptions, shell } from "electron";
 import { getLogsDir } from "./logger";
 
 /** #158: メニュー項目が実行する操作(mainプロセス側のコールバック)。 */
+/** レンダラーが購読を確立したかを判定するためのチャンネル(preloadが送る)。 */
+export const RENDERER_SETTINGS_READY_CHANNEL = "menu:settings-ready";
+
 export interface MenuActions {
   /**
    * 「編集 > 設定」が選ばれたときに呼ぶ。
@@ -10,6 +13,12 @@ export interface MenuActions {
    * 受け取り、windowの存在確認は呼び出し側(`main.ts`)が行う。
    */
   openSettings: () => void;
+  /**
+   * 「設定」項目を有効にするか。#146 と同種の問題(購読前に通知を送ると失われる)を
+   * 避けるため、rendererが購読を確立するまでは**無効**にして「押しても何も起きない」
+   * 状態を作らない。有効化のタイミングでメニューを組み直す。
+   */
+  openSettingsEnabled: boolean;
 }
 
 /** ネイティブメニュー(#15)。M0 では最小限(標準ロールのみ)。 */
@@ -35,6 +44,7 @@ export function buildMenu(actions: MenuActions): Menu {
         {
           label: "設定",
           accelerator: "CmdOrCtrl+,",
+          enabled: actions.openSettingsEnabled,
           click: () => actions.openSettings(),
         },
       ],

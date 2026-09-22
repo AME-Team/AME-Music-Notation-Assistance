@@ -17,10 +17,22 @@ const UNSELECTED_CLASS =
 
 /**
  * フォーカストラップの対象(ダイアログ内で Tab 移動できる要素)。
- * `tabindex="-1"` は意図的に除外する(ダイアログ自身が該当するため)。
+ *
+ * - `tabindex="-1"` は除外する(ダイアログ自身が該当するため)
+ * - **ラジオはタブ順に入るのはチェック済みの1つだけ**なので、未チェックのラジオを
+ *   対象に含めると「末尾」の判定が実際のタブ順とずれ、Tabで背景へ抜ける
+ *   (レビュー指摘: 既定ダーク=先頭がチェック済みのとき、末尾と比較しても一致せず
+ *   トラップが効かなかった)
  */
-const FOCUSABLE_SELECTOR =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE_SELECTOR = [
+  "button",
+  "[href]",
+  'input:not([type="radio"])',
+  'input[type="radio"]:checked',
+  "select",
+  "textarea",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
 
 interface SettingsModalProps {
   open: boolean;
@@ -79,6 +91,12 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
+      // フォーカスが既にダイアログの外にある場合(背景クリック等)は、まず内側へ戻す。
+      if (!(active instanceof HTMLElement) || !dialog.contains(active)) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
       if (event.shiftKey) {
         if (active === first || active === dialog) {
           event.preventDefault();

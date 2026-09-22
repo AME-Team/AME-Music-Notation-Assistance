@@ -2,7 +2,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { type ElectronApplication, _electron as electron, expect, test } from "@playwright/test";
+import {
+  type ElectronApplication,
+  _electron as electron,
+  expect,
+  type Page,
+  test,
+} from "@playwright/test";
 
 // package.json の "type": "module" により __dirname は使えないため import.meta.url から導出する。
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,6 +31,24 @@ async function clickSettingsMenuItem(app: ElectronApplication): Promise<void> {
     if (!settings) throw new Error("ネイティブメニューに 編集 > 設定 が見つかりません");
     settings.click();
   });
+}
+
+/**
+ * Tabキーでフォーカスがダイアログ内に留まることを確認する(#158レビュー指摘)。
+ *
+ * チェック済みラジオの位置でタブ順が変わるため、**ダーク/ライト両方の状態**で
+ * 実行する(既定ダークのときだけトラップが破綻していた)。
+ */
+async function expectFocusStaysInDialog(page: Page): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    await page.keyboard.press("Tab");
+    // `document.activeElement?.closest(...) !== null` は activeElement が null のとき
+    // `undefined !== null` で true になり偽陽性になるため、真偽値へ畳む。
+    const insideDialog = await page.evaluate(() =>
+      Boolean(document.activeElement?.closest('[role="dialog"]')),
+    );
+    expect(insideDialog).toBe(true);
+  }
 }
 
 test("theme defaults to dark, toggles in settings modal opened from the menu, and persists", async () => {
@@ -52,21 +76,17 @@ test("theme defaults to dark, toggles in settings modal opened from the menu, an
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("dialog").getByText("画面テーマ")).toBeVisible();
 
+    // フォーカストラップ(既定ダーク=チェック済みが先頭の状態)。
+    await expectFocusStaysInDialog(page);
+
     // 設定の「ライト」を選ぶと即座にライトへ。
     await page.getByRole("radio", { name: "ライト" }).check();
     await expect.poll(() => page.evaluate(() => document.documentElement.className)).toBe("");
     expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
     expect(await page.evaluate(() => window.localStorage.getItem("ame.theme"))).toBe("light");
 
-    // フォーカストラップ: Tabキーで背景へ抜けない(ダイアログ内を循環する)。
-    // 先頭のラジオ→「閉じる」→先頭…の順に回るため、数回押してもダイアログ内に留まる。
-    for (let i = 0; i < 5; i += 1) {
-      await page.keyboard.press("Tab");
-      const insideDialog = await page.evaluate(
-        () => document.activeElement?.closest('[role="dialog"]') !== null,
-      );
-      expect(insideDialog).toBe(true);
-    }
+    // フォーカストラップ(チェック済みが末尾=ライトの状態)。
+    await expectFocusStaysInDialog(page);
 
     // Escapeキーでも閉じられる。
     await page.keyboard.press("Escape");

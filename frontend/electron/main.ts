@@ -10,7 +10,7 @@ import {
   setupChildProcessErrorHandlers,
   setupGlobalErrorHandlers,
 } from "./logger";
-import { buildMenu } from "./menu";
+import { buildMenu, RENDERER_SETTINGS_READY_CHANNEL } from "./menu";
 import { loadWindowState, trackWindowState } from "./window-state";
 
 setupGlobalErrorHandlers();
@@ -107,7 +107,37 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+/** rendererが購読を確立したか(#158)。メニュー項目の有効/無効に使う。 */
+let settingsMenuReady = false;
+
+/**
+ * アプリケーションメニューを組み直す(#158)。
+ *
+ * メニューは`mainWindow`の生成前に組まれるため、通知方法(コールバック)だけを渡す。
+ * rendererの購読が確立するまでは「設定」項目を無効にして「押しても何も起きない」
+ * 状態を避け、準備完了の通知を受けてから組み直す。
+ */
+function installMenu(): void {
+  Menu.setApplicationMenu(
+    buildMenu({
+      openSettings: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("menu:open-settings");
+        }
+      },
+      openSettingsEnabled: settingsMenuReady,
+    }),
+  );
+}
+
 function registerIpcHandlers(): void {
+  // #158: rendererが「設定」の購読を張ったら有効化する(それ以前の通知は届かない)。
+  ipcMain.on(RENDERER_SETTINGS_READY_CHANNEL, () => {
+    if (settingsMenuReady) return;
+    settingsMenuReady = true;
+    installMenu();
+  });
+
   // #146: 現在のバックエンド状態を返す(購読前に送られたイベントの取り戻し用)。
   ipcMain.handle("backend:get-status", () => getBackendStatus());
 
@@ -179,17 +209,7 @@ app.on("second-instance", () => {
 app.whenReady().then(async () => {
   await initLogger();
   logger.info("main", "AME Music Notation Assistance starting...");
-  // #158: 「編集 > 設定」からrendererへ通知する。windowは既に破棄されている
-  // ことがあるため(終了処理中)、backend:status と同じく存在確認してから送る。
-  Menu.setApplicationMenu(
-    buildMenu({
-      openSettings: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("menu:open-settings");
-        }
-      },
-    }),
-  );
+  installMenu();
   registerIpcHandlers();
   mainWindow = createWindow();
 

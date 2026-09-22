@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld("api", {
   onOpenSettings: (cb: () => void) => {
     const listener = () => cb();
     ipcRenderer.on("menu:open-settings", listener);
+    // 購読が確立したことをmainへ伝える(それ以前の通知は届かないため、mainは
+    // この通知までメニュー項目を無効にしている)。
+    ipcRenderer.send("menu:settings-ready");
     return () => ipcRenderer.removeListener("menu:open-settings", listener);
   },
 
