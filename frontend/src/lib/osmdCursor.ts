@@ -23,6 +23,17 @@ export interface SheetWithCursorLike {
   cursor?: SheetCursorLike | undefined;
 }
 
+/** `SheetCursorLike`が要求する全メソッド(#160レビュー指摘: `hide`/`show`だけの
+ * 検証だと`nextMeasure`等が欠けた部分的なオブジェクトも通過してしまい、
+ * 呼び出し側の別effectで無関係な例外を招きうる)。 */
+const CURSOR_METHOD_NAMES = [
+  "show",
+  "hide",
+  "nextMeasure",
+  "previousMeasure",
+  "reset",
+] as const satisfies readonly (keyof SheetCursorLike)[];
+
 /**
  * 描画済みのカーソルを返す(未描画・描画失敗時は`null`)。
  *
@@ -33,7 +44,7 @@ export function getSheetCursor(
   sheet: SheetWithCursorLike | null | undefined,
 ): SheetCursorLike | null {
   const cursor = sheet?.cursor;
-  if (!cursor || typeof cursor.hide !== "function" || typeof cursor.show !== "function") {
+  if (!cursor || !CURSOR_METHOD_NAMES.every((name) => typeof cursor[name] === "function")) {
     return null;
   }
   return cursor;
