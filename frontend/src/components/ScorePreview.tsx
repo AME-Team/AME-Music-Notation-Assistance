@@ -2,6 +2,7 @@ import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
 import { useEffect, useRef, useState } from "react";
 import type { ScoreIR } from "../api/client";
 import { getScorePreviewMusicXml } from "../api/client";
+import { getSheetCursor, setSheetCursorVisible } from "../lib/osmdCursor";
 import { barBoundariesTicks, barNumberForTick } from "../lib/pianoRoll";
 import { usePlaybackStore } from "../stores/playbackStore";
 
@@ -202,23 +203,36 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
   useEffect(() => {
     const osmd = osmdRef.current;
     if (!osmd || !loaded) return;
-    if (isPlaying) osmd.cursor.show();
-    else osmd.cursor.hide();
+    // #160: OSMDの`cursor`は`render()`成功まで存在しない。描画が失敗した状態で
+    // `cursor.hide()`を呼ぶと`reading 'hide'`で例外になり、effect内の例外は
+    // アプリ全体のエラー画面につながるため、ヘルパ経由で安全に扱う。
+    try {
+      setSheetCursorVisible(osmd, isPlaying);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }, [isPlaying, loaded]);
 
   useEffect(() => {
     const osmd = osmdRef.current;
     if (!osmd || !loaded) return;
+    // #160: カーソルは描画成功まで存在しないため、ヘルパで取得して確認する。
+    const cursor = getSheetCursor(osmd);
+    if (!cursor) return;
     const delta = currentBar - lastSyncedBarRef.current;
-    if (delta === 1) {
-      osmd.cursor.nextMeasure();
-    } else if (delta === -1) {
-      osmd.cursor.previousMeasure();
-    } else if (delta !== 0) {
-      // 連続していない移動(シーク・巻き戻し・初回同期)は一旦先頭へ戻してから
-      // 目的の小節まで進める。
-      osmd.cursor.reset();
-      for (let i = 1; i < currentBar; i += 1) osmd.cursor.nextMeasure();
+    try {
+      if (delta === 1) {
+        cursor.nextMeasure();
+      } else if (delta === -1) {
+        cursor.previousMeasure();
+      } else if (delta !== 0) {
+        // 連続していない移動(シーク・巻き戻し・初回同期)は一旦先頭へ戻してから
+        // 目的の小節まで進める。
+        cursor.reset();
+        for (let i = 1; i < currentBar; i += 1) cursor.nextMeasure();
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
     lastSyncedBarRef.current = currentBar;
   }, [currentBar, loaded]);
