@@ -39,6 +39,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Project
+         * @description #65 FR-18: 単一アーカイブ(`.ameproj`)からプロジェクトを新規作成する。
+         *
+         *     `export_project_archive`と対になる読み込み側。`create_project`と異なり
+         *     `async def`にしない(`export_score`/`get_peaks`と同じ理由、#27-M2レビュー
+         *     指摘): zip展開・DB書き込みはCPU/IOバウンドな同期処理で、`include_stems`
+         *     付きのアーカイブは数十MB規模になりうるため、`async def`のままだと
+         *     イベントループを直接ブロックし、SSEでのジョブ進捗配信など他の同時
+         *     リクエストを止めてしまう。`UploadFile.file`(同期`SpooledTemporaryFile`)
+         *     経由で読む。
+         */
+        post: operations["import_project_api_projects_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{project_id}": {
         parameters: {
             query?: never;
@@ -52,6 +80,29 @@ export interface paths {
         post?: never;
         /** Delete Project */
         delete: operations["delete_project_api_projects__project_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Archive
+         * @description #65 FR-18: プロジェクトを単一アーカイブ(`.ameproj`)として書き出す。
+         *
+         *     `export_score`と同じ理由で`async def`にしない(zip書き込みはCPU/IOバウンドな
+         *     同期処理)。`include_stems=false`でステムWAV(サイズの大半を占める)を除外できる。
+         */
+        get: operations["get_project_archive_api_projects__project_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -980,6 +1031,11 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_import_project_api_projects_import_post */
+        Body_import_project_api_projects_import_post: {
+            /** File */
+            file: string;
+        };
         /** CancelResponse */
         CancelResponse: {
             /** Run Id */
@@ -1612,6 +1668,39 @@ export interface operations {
             };
         };
     };
+    import_project_api_projects_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_project_api_projects_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_project_api_projects__project_id__get: {
         parameters: {
             query?: never;
@@ -1660,6 +1749,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_archive_api_projects__project_id__archive_get: {
+        parameters: {
+            query?: {
+                include_stems?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
             };
             /** @description Validation Error */
             422: {

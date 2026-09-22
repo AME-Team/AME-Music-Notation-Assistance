@@ -146,7 +146,7 @@ test("score preview keeps the app alive when the sheet fails to render (#160)", 
     );
 
     // プロジェクトを作って開く(譜面プレビューはこの中で描画される)。
-    await page.locator('input[type="file"]').setInputFiles(makeTinyWavFile());
+    await page.getByLabel("音声ファイルを選択").setInputFiles(makeTinyWavFile());
     await expect(page.getByText("smoke-test.wav")).toBeVisible({ timeout: 10_000 });
     await page.getByText("smoke-test.wav").click();
 

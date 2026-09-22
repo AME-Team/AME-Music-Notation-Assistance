@@ -156,6 +156,7 @@ CI(`typegen-check` job)がこの2ファイルの最新性を `git diff --exit-co
 - **DSP Worker は API サーバと別プロセス**(`asyncio.create_subprocess_exec` で起動し、stdout の JSON Lines を進捗として読む。NFR-04)
 - **ローカル認証**: Electron main が起動時にトークンを生成し環境変数でバックエンドへ渡す。全API(`/health`除く)で `X-AME-Token` を検証する(NFR-10′)
 - **ブラウザ標準の `EventSource` は認証ヘッダを送れない**ため、フロントの SSE 購読は `fetch` + `ReadableStream` を自前実装している(`frontend/src/lib/sse.ts`)
+- **プロジェクトアーカイブ(`.ameproj`、#65 FR-18)は zip 形式**(`GET /api/projects/{id}/archive?include_stems=`)。`include_stems=false` でステムWAV(サイズの大半を占める)を除外できる。**読み込み(`POST /api/projects/import`)は既存プロジェクトへの上書きではなく、常に新規プロジェクトとして複製を作る**(`project_id`を含む全ID・ファイル内容の該当箇所を新規採番して張り替える)
 
 ## DSP パイプライン(M1/M2)
 

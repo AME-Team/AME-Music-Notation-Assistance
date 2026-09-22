@@ -126,6 +126,14 @@ def midi_export_path(workspace_dir: Path, project_id: str) -> Path:
     return project_dir(workspace_dir, project_id) / "export" / "score.mid"
 
 
+def project_archive_path(workspace_dir: Path, project_id: str) -> Path:
+    """#65 FR-18: プロジェクト単一アーカイブの書き出し先。
+
+    固定名にする方針は`musicxml_export_path`/`midi_export_path`と同じ。
+    """
+    return project_dir(workspace_dir, project_id) / "export" / "archive.ameproj"
+
+
 def invalidate_peaks_cache(workspace_dir: Path, project_id: str, names: list[str]) -> None:
     """再分離でステムが上書きされた際、古い波形ピークキャッシュを消す。
 

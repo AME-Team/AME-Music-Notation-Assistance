@@ -53,7 +53,7 @@ test("Electron app boots, runs a dummy job over SSE, and cleans up the backend o
     await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({ timeout: 30_000 });
 
     const wavPath = makeTinyWavFile();
-    await page.locator('input[type="file"]').setInputFiles(wavPath);
+    await page.getByLabel("音声ファイルを選択").setInputFiles(wavPath);
     await expect(page.getByText("smoke-test.wav")).toBeVisible({ timeout: 10_000 });
 
     await page.getByText("smoke-test.wav").click();

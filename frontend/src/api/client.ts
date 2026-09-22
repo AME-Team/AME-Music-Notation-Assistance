@@ -164,6 +164,37 @@ export async function deleteProject(projectId: string): Promise<void> {
   await apiFetch(`/api/projects/${projectId}`, { method: "DELETE" });
 }
 
+const ARCHIVE_FILENAME = "archive.ameproj";
+
+/**
+ * #65 FR-18: プロジェクトを単一アーカイブ(`.ameproj`)としてダウンロードする。
+ * `exportScore`と同じ`<a download>`方式(認証ヘッダ付きfetchが必要なため
+ * `<a href>`直リンクは使えない)。
+ */
+export async function exportProjectArchive(
+  projectId: string,
+  { includeStems = true }: { includeStems?: boolean } = {},
+): Promise<void> {
+  const resp = await apiFetch(`/api/projects/${projectId}/archive?include_stems=${includeStems}`);
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = ARCHIVE_FILENAME;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** #65 FR-18: アーカイブ(`.ameproj`)から新規プロジェクトを作成する。 */
+export async function importProjectArchive(file: File): Promise<Project> {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await apiFetch("/api/projects/import", { method: "POST", body: form });
+  return (await resp.json()) as Project;
+}
+
 export async function getOriginalAudioUrl(projectId: string): Promise<string> {
   const { baseUrl, token } = await getBackendInfo();
   // wavesurfer.js は独自に fetch するため、トークンを付けたヘッダを渡せるよう
