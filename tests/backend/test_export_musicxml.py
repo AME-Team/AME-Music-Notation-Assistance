@@ -358,7 +358,10 @@ class TestRenderMusicxmlPedal:
         )
         root = _parse(render_musicxml(score))
         pedals = root.findall(".//direction-type/pedal")
-        assert {p.get("type") for p in pedals} == {"start", "end"}
+        # #162: partituraは終端要素に`type="end"`を出力するが、MusicXMLスキーマの
+        # `pedal-type`列挙値には含まれず(有効なのは`stop`)、Doricoが検証エラーで
+        # 拒否する。`render_musicxml`が`stop`へ補正することを確認する。
+        assert {p.get("type") for p in pedals} == {"start", "stop"}
 
 
 class TestRenderMidi:
