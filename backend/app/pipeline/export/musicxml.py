@@ -31,6 +31,7 @@ _NOTE_ELEMENT_PATTERN = re.compile(r"<note\b[^>]*/>|<note\b[^>]*>.*?</note>", re
 _PART_ELEMENT_PATTERN = re.compile(r"(<part(?:\s[^>]*)?>)(.*?)(</part>)", re.DOTALL)
 _MEASURE_OPEN_PATTERN = re.compile(r"<measure\b[^>]*>")
 _MEASURE_NUMBER_PATTERN = re.compile(r"<measure\b[^>]*\bnumber=\"([^\"]*)\"", re.DOTALL)
+_PEDAL_END_TYPE_PATTERN = re.compile(r'(<pedal\b[^>]*\btype=")end(")')
 
 
 def _expected_note_count(score: dict[str, Any]) -> int:
@@ -46,6 +47,17 @@ def _expected_note_count(score: dict[str, Any]) -> int:
 def _count_sounding_notes(xml_str: str) -> int:
     """生成されたMusicXML内で音を出す`<note>`要素の数(休符は数えない)。"""
     return sum(1 for block in _NOTE_ELEMENT_PATTERN.findall(xml_str) if "<rest" not in block)
+
+
+def _fix_pedal_stop_type(xml_str: str) -> str:
+    """partituraが出力するペダル終端の`type="end"`を`type="stop"`へ補正する(#162)。
+
+    MusicXMLスキーマの`pedal-type`列挙値は`start`/`stop`/`sostenuto`/`change`/
+    `continue`/`discontinue`/`resume`のみで`end`は含まれない。partitura自身の
+    バグ(`exportmusicxml.py`がペダル終端要素に`type="end"`をハードコード)で、
+    Doricoは実機で検証エラーとしてこれを拒否する(実測)。
+    """
+    return _PEDAL_END_TYPE_PATTERN.sub(r"\1stop\2", xml_str)
 
 
 def _inject_score_instruments(xml_str: str, parts_data: list[dict]) -> str:
@@ -239,6 +251,9 @@ def render_musicxml(score: dict[str, Any]) -> bytes:
     if isinstance(xml_bytes, str):
         xml_bytes = xml_bytes.encode("utf-8")
     xml_str = _inject_score_instruments(xml_bytes.decode("utf-8"), score.get("parts", []))
+    # #162: partituraが出力するペダル終端の`type="end"`はMusicXMLスキーマ違反
+    # (Doricoが検証エラーで拒否する)。`type="stop"`へ補正する。
+    xml_str = _fix_pedal_stop_type(xml_str)
 
     # #137: 入出力のノート数を突き合わせ、書き出しの黙った失敗を検出する。
     # #60の実曲検証で、`ScoreIR`の拍子が空だとpartituraが**小節を1つも生成せず、
