@@ -144,11 +144,33 @@ test("score preview keeps the app alive when the sheet fails to render (#160)", 
         body: JSON.stringify(MINIMAL_SCORE),
       }),
     );
+    // UI刷新: 楽譜プレビュー(PianoRollEditor経由)はワークフローの⑥確認・編集
+    // ステップの中にあり、④リズム補正までが完了扱いでないと到達できない
+    // (ステップのロック)。このテストは実際にDSPジョブを走らせずに描画失敗の
+    // 経路だけを検証したいため、単一プロジェクト取得(`useProject`)の応答を
+    // 差し替えて①〜④が完了済みであるかのように見せかける。
+    await page.route(/\/api\/projects\/[^/]+$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const body = await response.json();
+      const doneStage = { status: "succeeded", progress: 1, stale: false };
+      body.stages = {
+        separate: doneStage,
+        beat: doneStage,
+        transcribe: doneStage,
+        quantize: doneStage,
+      };
+      return route.fulfill({ response, json: body });
+    });
 
-    // プロジェクトを作って開く(譜面プレビューはこの中で描画される)。
+    // プロジェクトを作って開く。
     await page.getByLabel("音声ファイルを選択").setInputFiles(makeTinyWavFile());
     await expect(page.getByText("smoke-test.wav")).toBeVisible({ timeout: 10_000 });
     await page.getByText("smoke-test.wav").click();
+
+    // ④まで完了扱いにしたことで⑥確認・編集がロック解除されている(上のroute参照)。
+    // ここで開くと、その中のPianoRollEditor経由で譜面プレビューが描画される。
+    await page.getByRole("button", { name: /確認・編集/ }).click();
 
     // 描画は失敗し、その理由が「楽譜プレビュー」セクション内に表示される(例外は
     // 外へ漏れない)。メッセージ文言はOSMD内部の例外(`ScorePreview.tsx`の
@@ -161,7 +183,9 @@ test("score preview keeps the app alive when the sheet fails to render (#160)", 
     await expect(previewError).not.toBeEmpty();
 
     // アプリは生きている(#160の修正前はここでReactツリーごとアンマウントされていた)。
-    await expect(page.getByText("AME Music Notation Assistance")).toBeVisible();
+    // UI刷新でプロジェクト選択中はヘッダーがプロジェクト名表示に変わるため、
+    // 「プロジェクト一覧に戻る」ボタン(常設)の健在で生存を確認する。
+    await expect(page.getByRole("button", { name: /プロジェクト一覧/ })).toBeVisible();
     await expect(page.getByText("楽譜プレビュー")).toBeVisible();
   } finally {
     await app.close();

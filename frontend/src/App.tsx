@@ -68,13 +68,36 @@ export function App() {
   }
 
   return (
-    <div className="min-h-full w-full space-y-6 bg-white dark:bg-gray-950 px-4 py-4 text-gray-900 dark:text-gray-100">
-      <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-        AME Music Notation Assistance
-      </h1>
-      <ProjectUpload />
-      <ProjectList selectedId={selected?.id ?? null} onSelect={setSelected} />
-      {selected && <ProjectWorkspace key={selected.id} projectId={selected.id} />}
+    <div className="min-h-full w-full space-y-4 bg-white dark:bg-gray-950 px-4 py-4 text-gray-900 dark:text-gray-100">
+      {/* UI刷新: プロジェクト一覧とワークスペース(7ステップの作業画面)を
+          常に縦積みで両方表示していると、選択直後から画面が全体的に
+          ゴチャゴチャして見える原因になっていた。プロジェクトを選んだら
+          一覧は隠し、ワークスペースだけに集中できるようにする。 */}
+      {selected ? (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="rounded-md px-2 py-1 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-gray-400"
+            >
+              ← プロジェクト一覧
+            </button>
+            <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              {selected.name}
+            </h1>
+          </div>
+          <ProjectWorkspace key={selected.id} projectId={selected.id} />
+        </div>
+      ) : (
+        <>
+          <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+            AME Music Notation Assistance
+          </h1>
+          <ProjectUpload />
+          <ProjectList selectedId={null} onSelect={setSelected} />
+        </>
+      )}
       <JobMonitor />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
