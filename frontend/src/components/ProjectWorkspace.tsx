@@ -61,7 +61,14 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   const [activeStep, setActiveStep] = useState<StepId>(() => {
     try {
       const saved = localStorage.getItem(lastStepStorageKey(projectId));
-      return (saved as StepId) ?? "separate";
+      // Gate2レビュー指摘(LOW): 保存値をそのままStepIdへキャストしていたため、
+      // 旧バージョンの値や手動書き換え等で不正な文字列が残っていた場合に
+      // activeStepが不正値になりうた(初回誘導のuseEffectで自己修復は
+      // されるが、それまでの1レンダーぶん不正状態を許してしまう)。
+      // STEPS定義に実在する値かを検証してから採用する。
+      const isValidStepId = (value: string | null): value is StepId =>
+        value !== null && STEPS.some((s) => s.id === value);
+      return isValidStepId(saved) ? saved : "separate";
     } catch {
       return "separate";
     }
@@ -105,6 +112,16 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     void runnersRef.current[next]();
   }
 
+  // Gate2レビュー指摘(HIGH): 「残りを自動実行」中にステージが失敗/
+  // キャンセルされてもadvanceAutoRun(onSucceeded経由)は呼ばれないため、
+  // autoRunRef/isAutoRunningが解除されないまま残っていた(以降ずっと
+  // 「自動実行中...」表示のまま固着し、ボタンも再度自動実行できなくなる)。
+  // 失敗/キャンセル時は自動実行を明示的に打ち切る。
+  function stopAutoRun() {
+    autoRunRef.current = false;
+    setIsAutoRunning(false);
+  }
+
   const separateRunner = useStageRunner(
     () => runSeparateStage(projectId, preset, executionProvider),
     {
@@ -116,6 +133,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
       stage: "separate",
       label: "音源分離",
       onSucceeded: () => advanceAutoRun("separate"),
+      onFailedOrCancelled: stopAutoRun,
     },
   );
   const beatRunner = useStageRunner(() => runBeatStage(projectId), {
@@ -128,6 +146,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     stage: "beat",
     label: "テンポ・拍の検出",
     onSucceeded: () => advanceAutoRun("beat"),
+    onFailedOrCancelled: stopAutoRun,
   });
   const transcribeRunner = useStageRunner(() => runTranscribeStage(projectId), {
     invalidateKeys: [["project", projectId]],
@@ -135,6 +154,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     stage: "transcribe",
     label: "採譜",
     onSucceeded: () => advanceAutoRun("transcribe"),
+    onFailedOrCancelled: stopAutoRun,
   });
   const quantizeRunner = useStageRunner(() => runQuantizeStage(projectId), {
     invalidateKeys: [["project", projectId]],
@@ -142,6 +162,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     stage: "quantize",
     label: "リズム補正",
     onSucceeded: () => advanceAutoRun("quantize"),
+    onFailedOrCancelled: stopAutoRun,
   });
 
   const runnersRef = useRef<Record<DspStageId, () => Promise<string | null>>>({

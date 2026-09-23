@@ -12,6 +12,13 @@ interface UseStageRunnerOptions {
   label: string;
   /** ジョブ成功時に呼ばれる(「残りを自動実行」が次のステップへ連鎖するために使う)。 */
   onSucceeded?: () => void;
+  /**
+   * ジョブが失敗またはキャンセルされたときに呼ばれる(Gate2レビュー指摘:
+   * 「残りを自動実行」中にジョブが失敗すると、旧実装ではonSucceededが
+   * 呼ばれないため自動実行フラグが解除されず、二度と自動実行できなく
+   * なっていた。呼び出し側はここでautoRunRef等を止める)。
+   */
+  onFailedOrCancelled?: () => void;
 }
 
 /**
@@ -44,8 +51,19 @@ export function useStageRunner(
       setJobId(null);
       options.onSucceeded?.();
     } else if (job?.status === "failed") {
-      setError(job.message ?? options.failureFallbackMessage);
+      // Gate2レビュー指摘(MIDDLE): job.messageが空文字列(dsp_main.pyがstderrを
+      // 出さずに終了した場合等)だと`??`はnullish判定のため空文字列をそのまま
+      // 採用してしまい、意味のある既定文言が消えて空白のエラー表示になって
+      // いた。`||`にして空文字列もフォールバック対象にする。
+      setError(job.message || options.failureFallbackMessage);
       setJobId(null);
+      options.onFailedOrCancelled?.();
+    } else if (job?.status === "cancelled") {
+      // Gate2レビュー指摘(MIDDLE): cancelledを処理していなかったため、
+      // JobDetailModal/トーストからキャンセルすると`jobId`が残ったままになり、
+      // `isRunning`がtrueに固着してボタンが二度と押せなくなっていた。
+      setJobId(null);
+      options.onFailedOrCancelled?.();
     }
   }, [jobId, job?.status, queryClient]);
 

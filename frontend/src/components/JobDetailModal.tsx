@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 import { stageLabel, stepLabel } from "../lib/jobSteps";
 import type { TrackedJob } from "../stores/jobStore";
@@ -44,10 +44,22 @@ export function JobDetailModal({ job, onClose, onCancel }: JobDetailModalProps) 
   useDialogA11y(dialogRef, open, onClose);
   const [copied, setCopied] = useState(false);
 
+  const isTerminal =
+    job !== null &&
+    (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled");
+
+  // Gate2レビュー指摘(LOW): elapsedMsはDate.now()を描画時に一度評価するだけで、
+  // モーダルを開いたまま待っていても経過時間の表示が進まなかった。実行中は
+  // 1秒ごとに再レンダリングして更新する(終端状態ではタイマー不要)。
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!job || isTerminal) return;
+    const timer = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [job, isTerminal]);
+
   if (!job) return null;
 
-  const isTerminal =
-    job.status === "succeeded" || job.status === "failed" || job.status === "cancelled";
   const elapsedMs = (job.finishedAt ?? Date.now()) - job.startedAt;
   const currentStepLabel = stepLabel(job.stage, job.step);
 
