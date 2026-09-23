@@ -20,3 +20,16 @@ html.dark body {
   background-color: var(--color-gray-950);
   color: var(--color-gray-100);
 }
+
+/* UI刷新: `<html class="dark">`ではネイティブUI(`<select>`の展開部分、
+   スクロールバー、日付ピッカー等)も`color-scheme`で暗く描画させる。
+   Tailwindのユーティリティクラスだけでは`<option>`一覧の背景色を制御
+   できない(OS/ブラウザのネイティブ描画のため)、これが「リストボックスの
+   展開部分だけ白背景のまま」という不具合の根本原因だった。 */
+html.dark {
+  color-scheme: dark;
+}
+
+html:not(.dark) {
+  color-scheme: light;
+}

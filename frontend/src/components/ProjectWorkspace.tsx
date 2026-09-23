@@ -1,5 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ExecutionProvider, ExportFormat, SeparationPreset } from "../api/client";
 import {
   exportScore,
@@ -11,59 +10,45 @@ import {
 import { useBeatmap } from "../hooks/useBeatmap";
 import { usePeaks } from "../hooks/usePeaks";
 import { useProject } from "../hooks/useProjects";
-import { useJobStore } from "../stores/jobStore";
-import { AgentConsole } from "./AgentConsole";
-import { AgentTaskLauncher } from "./AgentTaskLauncher";
-import { AudioPlayer } from "./AudioPlayer";
-import { BeatGridEditor } from "./BeatGridEditor";
-import { BeatGridOverlay } from "./BeatGridOverlay";
-import { DiffPanel } from "./DiffPanel";
-import { PianoRollEditor } from "./PianoRollEditor";
-import { RefineSection } from "./RefineSection";
-import { TrackList } from "./TrackList";
-import { TransportBar } from "./TransportBar";
-import { Waveform } from "./Waveform";
-
-const PRESET_LABEL: Record<SeparationPreset, string> = {
-  fast: "高速(4ステム)",
-  standard: "標準(6ステム)",
-  high_quality: "高品質(4ステム・低速)",
-};
-
-const EXECUTION_PROVIDER_LABEL: Record<ExecutionProvider, string> = {
-  auto: "自動",
-  cpu: "CPU",
-  directml: "DirectML",
-};
+import { useStageRunner } from "../hooks/useStageRunner";
+import { deriveStepStates, firstActionableStep, STEPS, type StepId } from "../lib/workflow";
+import { StepSidebar } from "./workflow/StepSidebar";
+import { BeatStep } from "./workflow/steps/BeatStep";
+import { ExportStep } from "./workflow/steps/ExportStep";
+import { QuantizeStep } from "./workflow/steps/QuantizeStep";
+import { RefineStep } from "./workflow/steps/RefineStep";
+import { ReviewStep } from "./workflow/steps/ReviewStep";
+import { SeparateStep } from "./workflow/steps/SeparateStep";
+import { TranscribeStep } from "./workflow/steps/TranscribeStep";
 
 interface ProjectWorkspaceProps {
   projectId: string;
 }
 
-/** M1: 分離・ビート推定ステージの実行と、その結果(ステム/beatmap)の閲覧・補正をまとめる。 */
-export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
-  const queryClient = useQueryClient();
-  const track = useJobStore((s) => s.track);
-  const jobs = useJobStore((s) => s.jobs);
+type DspStageId = "separate" | "beat" | "transcribe" | "quantize";
+const DSP_STAGE_ORDER: DspStageId[] = ["separate", "beat", "transcribe", "quantize"];
 
+function lastStepStorageKey(projectId: string): string {
+  return `ame:lastStep:${projectId}`;
+}
+
+/**
+ * UI刷新: 画面全体を「左にステップ一覧、右に今のステップの作業」という
+ * 1本道の構成にする(以前はすべての機能を縦一列に並べているだけで、作業の
+ * 順番が画面から読み取れなかった)。DSPジョブ(separate/beat/transcribe/
+ * quantize)の起動・監視は`useStageRunner`にまとめ、このコンポーネントは
+ * それらを4回呼び出して各ステップ画面へ配るだけの薄いコンテナにする。
+ */
+export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   const [preset, setPreset] = useState<SeparationPreset>("standard");
   const [executionProvider, setExecutionProvider] = useState<ExecutionProvider>("auto");
-  const [separateJobId, setSeparateJobId] = useState<string | null>(null);
-  const [beatJobId, setBeatJobId] = useState<string | null>(null);
-  const [transcribeJobId, setTranscribeJobId] = useState<string | null>(null);
-  const [quantizeJobId, setQuantizeJobId] = useState<string | null>(null);
-  const [stageError, setStageError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
-  // #36: MusicXML/MIDIの2つのエクスポートボタンを持つため、どちらが実行中かを
-  // 区別する(このファイルの他のステージボタン(transcribe/quantize)と同じ
-  // 「アクションごとに個別のローディング状態を持つ」既存パターンに合わせる)。
   const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
-  const isExporting = exportingFormat !== null;
-  // #41: 直近のL1整音run_id。DiffPanelはこれが設定されている間だけ表示する。
   const [activeRefineRunId, setActiveRefineRunId] = useState<string | null>(null);
-  // #51: 直近のL2エージェントrun_id。AgentConsole/DiffPanel(source="agent")は
-  // これが設定されている間だけ表示する(L1のactiveRefineRunIdと同じパターン)。
+  const [refineSkipped, setRefineSkipped] = useState(false);
   const [activeAgentRunId, setActiveAgentRunId] = useState<string | null>(null);
+  const [isAutoRunning, setIsAutoRunning] = useState(false);
+  const autoRunRef = useRef(false);
 
   const {
     data: peaks,
@@ -72,128 +57,148 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   } = usePeaks(projectId, "original");
   const { data: beatmap, error: beatmapError } = useBeatmap(projectId);
   const { data: project } = useProject(projectId);
-  const transcribeStage = project?.stages.transcribe;
-  const quantizeStage = project?.stages.quantize;
 
-  // ジョブが完了したら、その成果物に依存するクエリを再取得する(#16/#18)。
-  // #13のJobMonitor/jobStoreはSSEで進捗を追うだけでキャッシュ無効化までは
-  // 行わないため、ここで監視して繋ぎ込む。失敗(failed)時もIDを残したままに
-  // すると再実行するまで永久に反応しなくなるため、成功と同様に検知して
-  // クリアし、エラーメッセージを表示する(#20-M1レビュー指摘)。
-  useEffect(() => {
-    if (!separateJobId) return;
-    const job = jobs[separateJobId];
-    if (job?.status === "succeeded") {
-      void queryClient.invalidateQueries({ queryKey: ["stems", projectId] });
-      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      setSeparateJobId(null);
-    } else if (job?.status === "failed") {
-      setStageError(job.message ?? "音源分離に失敗しました。");
-      setSeparateJobId(null);
-    }
-  }, [separateJobId, jobs, queryClient, projectId]);
-
-  useEffect(() => {
-    if (!beatJobId) return;
-    const job = jobs[beatJobId];
-    if (job?.status === "succeeded") {
-      void queryClient.invalidateQueries({ queryKey: ["beatmap", projectId] });
-      void queryClient.invalidateQueries({
-        queryKey: ["peaks", projectId, "original"],
-      });
-      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      setBeatJobId(null);
-    } else if (job?.status === "failed") {
-      setStageError(job.message ?? "ビート推定に失敗しました。");
-      setBeatJobId(null);
-    }
-  }, [beatJobId, jobs, queryClient, projectId]);
-
-  // #29: transcribe/quantizeもseparate/beatと同じ「実行→完了検知→関連クエリの
-  // 無効化」パターンに揃える。両ステージともScore IR自体を直接表示するUIは
-  // M2スコープ外(ユーザー決定済み)のため、`project`(stages.status/stale)のみ
-  // 無効化すれば十分。
-  useEffect(() => {
-    if (!transcribeJobId) return;
-    const job = jobs[transcribeJobId];
-    if (job?.status === "succeeded") {
-      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      setTranscribeJobId(null);
-    } else if (job?.status === "failed") {
-      setStageError(job.message ?? "採譜に失敗しました。");
-      setTranscribeJobId(null);
-    }
-  }, [transcribeJobId, jobs, queryClient, projectId]);
-
-  useEffect(() => {
-    if (!quantizeJobId) return;
-    const job = jobs[quantizeJobId];
-    if (job?.status === "succeeded") {
-      void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      setQuantizeJobId(null);
-    } else if (job?.status === "failed") {
-      setStageError(job.message ?? "量子化に失敗しました。");
-      setQuantizeJobId(null);
-    }
-  }, [quantizeJobId, jobs, queryClient, projectId]);
-
-  // 実行中は再押下できないようボタンを無効化する(#21-M1レビュー指摘): この
-  // コンポーネントは実行中ジョブのIDを1つしか保持しないため、完了前に再度
-  // 実行すると古いジョブのIDを上書きしてしまい、その完了(succeeded/failed)を
-  // 検知できなくなる(例: 最初の分離が成功してステムが生成されたのに、
-  // 監視対象IDが新しいジョブに差し替わっていて`stems`クエリが無効化されない)。
-  // 上のuseEffectがsucceeded/failedの両方でIDをnullへ戻すため、非nullは
-  // 「実行中」と同義になる。
-  const isSeparateRunning = separateJobId !== null;
-  const isBeatRunning = beatJobId !== null;
-  const isTranscribeRunning = transcribeJobId !== null;
-  const isQuantizeRunning = quantizeJobId !== null;
-
-  async function handleRunSeparate() {
-    setStageError(null);
+  const [activeStep, setActiveStep] = useState<StepId>(() => {
     try {
-      const { job_id } = await runSeparateStage(projectId, preset, executionProvider);
-      track(job_id);
-      setSeparateJobId(job_id);
-    } catch (err) {
-      // runSeparateStage自体の呼び出し(HTTPリクエスト)が失敗した場合
-      // (ジョブ登録前のエラー、例: 422/500)。ジョブ開始後の失敗は上のuseEffectで
-      // status==="failed"として検知する(#20-M1レビュー指摘)。
-      setStageError((err as Error).message);
+      const saved = localStorage.getItem(lastStepStorageKey(projectId));
+      // Gate2レビュー指摘(LOW): 保存値をそのままStepIdへキャストしていたため、
+      // 旧バージョンの値や手動書き換え等で不正な文字列が残っていた場合に
+      // activeStepが不正値になりうた(初回誘導のuseEffectで自己修復は
+      // されるが、それまでの1レンダーぶん不正状態を許してしまう)。
+      // STEPS定義に実在する値かを検証してから採用する。
+      const isValidStepId = (value: string | null): value is StepId =>
+        value !== null && STEPS.some((s) => s.id === value);
+      return isValidStepId(saved) ? saved : "separate";
+    } catch {
+      return "separate";
+    }
+  });
+  const hasAutoNavigatedRef = useRef(false);
+
+  function goTo(step: StepId) {
+    setActiveStep(step);
+    try {
+      localStorage.setItem(lastStepStorageKey(projectId), step);
+    } catch {
+      // localStorageが使えない環境(プライベートモード等)では単に永続化を諦める。
+      // 画面の切り替え自体はReact stateで完結するため機能上の問題はない。
     }
   }
 
-  async function handleRunBeat() {
-    setStageError(null);
-    try {
-      const { job_id } = await runBeatStage(projectId);
-      track(job_id);
-      setBeatJobId(job_id);
-    } catch (err) {
-      setStageError((err as Error).message);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: プロジェクトを開いた直後の1回だけ最初に着手すべきステップへ自動で移動したいため、依存は意図的にproject(の到着)だけに絞る。activeStep/refineSkipped/goToをここに含めると、ユーザーが手動でステップを切り替えるたびにこの初回誘導ロジックが再評価されてしまう(hasAutoNavigatedRefで1回きりに制限している意図と矛盾する)。
+  useEffect(() => {
+    if (!project || hasAutoNavigatedRef.current) return;
+    hasAutoNavigatedRef.current = true;
+    const states = deriveStepStates(project, {
+      refineDone: activeRefineRunId !== null,
+      refineSkipped,
+    });
+    const currentState = states.find((s) => s.id === activeStep);
+    if (!currentState || currentState.status === "locked") {
+      goTo(firstActionableStep(states));
     }
+  }, [project]);
+
+  function advanceAutoRun(justFinished: DspStageId) {
+    if (!autoRunRef.current) return;
+    const idx = DSP_STAGE_ORDER.indexOf(justFinished);
+    const next = DSP_STAGE_ORDER[idx + 1];
+    if (!next) {
+      autoRunRef.current = false;
+      setIsAutoRunning(false);
+      return;
+    }
+    goTo(next);
+    void runnersRef.current[next]();
   }
 
-  async function handleRunTranscribe() {
-    setStageError(null);
-    try {
-      const { job_id } = await runTranscribeStage(projectId);
-      track(job_id);
-      setTranscribeJobId(job_id);
-    } catch (err) {
-      setStageError((err as Error).message);
-    }
+  // Gate2レビュー指摘(HIGH): 「残りを自動実行」中にステージが失敗/
+  // キャンセルされてもadvanceAutoRun(onSucceeded経由)は呼ばれないため、
+  // autoRunRef/isAutoRunningが解除されないまま残っていた(以降ずっと
+  // 「自動実行中...」表示のまま固着し、ボタンも再度自動実行できなくなる)。
+  // 失敗/キャンセル時は自動実行を明示的に打ち切る。
+  function stopAutoRun() {
+    autoRunRef.current = false;
+    setIsAutoRunning(false);
   }
 
-  async function handleRunQuantize() {
-    setStageError(null);
-    try {
-      const { job_id } = await runQuantizeStage(projectId);
-      track(job_id);
-      setQuantizeJobId(job_id);
-    } catch (err) {
-      setStageError((err as Error).message);
-    }
+  const separateRunner = useStageRunner(
+    () => runSeparateStage(projectId, preset, executionProvider),
+    {
+      invalidateKeys: [
+        ["stems", projectId],
+        ["project", projectId],
+      ],
+      failureFallbackMessage: "音源分離に失敗しました。",
+      stage: "separate",
+      label: "音源分離",
+      onSucceeded: () => advanceAutoRun("separate"),
+      onFailedOrCancelled: stopAutoRun,
+    },
+  );
+  const beatRunner = useStageRunner(() => runBeatStage(projectId), {
+    invalidateKeys: [
+      ["beatmap", projectId],
+      ["peaks", projectId, "original"],
+      ["project", projectId],
+    ],
+    failureFallbackMessage: "テンポ・拍の検出に失敗しました。",
+    stage: "beat",
+    label: "テンポ・拍の検出",
+    onSucceeded: () => advanceAutoRun("beat"),
+    onFailedOrCancelled: stopAutoRun,
+  });
+  const transcribeRunner = useStageRunner(() => runTranscribeStage(projectId), {
+    invalidateKeys: [["project", projectId]],
+    failureFallbackMessage: "採譜に失敗しました。",
+    stage: "transcribe",
+    label: "採譜",
+    onSucceeded: () => advanceAutoRun("transcribe"),
+    onFailedOrCancelled: stopAutoRun,
+  });
+  const quantizeRunner = useStageRunner(() => runQuantizeStage(projectId), {
+    invalidateKeys: [["project", projectId]],
+    failureFallbackMessage: "リズム補正に失敗しました。",
+    stage: "quantize",
+    label: "リズム補正",
+    onSucceeded: () => advanceAutoRun("quantize"),
+    onFailedOrCancelled: stopAutoRun,
+  });
+
+  const runnersRef = useRef<Record<DspStageId, () => Promise<string | null>>>({
+    separate: separateRunner.run,
+    beat: beatRunner.run,
+    transcribe: transcribeRunner.run,
+    quantize: quantizeRunner.run,
+  });
+  runnersRef.current = {
+    separate: separateRunner.run,
+    beat: beatRunner.run,
+    transcribe: transcribeRunner.run,
+    quantize: quantizeRunner.run,
+  };
+
+  const states = deriveStepStates(project, {
+    refineDone: activeRefineRunId !== null,
+    refineSkipped,
+  });
+
+  const anyDspRunning =
+    separateRunner.isRunning ||
+    beatRunner.isRunning ||
+    transcribeRunner.isRunning ||
+    quantizeRunner.isRunning;
+  const nextDspStage = DSP_STAGE_ORDER.find((id) => {
+    const status = states.find((s) => s.id === id)?.status;
+    return status === "current" || status === "stale";
+  });
+
+  function handleRunRemaining() {
+    if (!nextDspStage || anyDspRunning) return;
+    autoRunRef.current = true;
+    setIsAutoRunning(true);
+    goTo(nextDspStage);
+    void runnersRef.current[nextDspStage]();
   }
 
   async function handleExport(format: ExportFormat) {
@@ -208,193 +213,105 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     }
   }
 
+  function handleSelectStep(id: StepId) {
+    const status = states.find((s) => s.id === id)?.status;
+    if (status === "locked") return;
+    goTo(id);
+  }
+
+  function stepIndexOf(id: StepId): number {
+    return STEPS.findIndex((s) => s.id === id);
+  }
+  function neighbor(offset: number): StepId | undefined {
+    return STEPS[stepIndexOf(activeStep) + offset]?.id;
+  }
+
   return (
-    <div className="space-y-6">
-      <AudioPlayer projectId={projectId} />
-
-      <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">分離・ビート推定</h3>
-        <div className="flex flex-wrap items-end gap-4">
-          <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
-            プリセット
-            <select
-              value={preset}
-              onChange={(event) => setPreset(event.target.value as SeparationPreset)}
-              className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
-            >
-              {(Object.keys(PRESET_LABEL) as SeparationPreset[]).map((value) => (
-                <option key={value} value={value}>
-                  {PRESET_LABEL[value]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
-            実行プロバイダ
-            <select
-              value={executionProvider}
-              onChange={(event) => setExecutionProvider(event.target.value as ExecutionProvider)}
-              className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
-            >
-              {(Object.keys(EXECUTION_PROVIDER_LABEL) as ExecutionProvider[]).map((value) => (
-                <option key={value} value={value}>
-                  {EXECUTION_PROVIDER_LABEL[value]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => void handleRunSeparate()}
-            disabled={isSeparateRunning}
-            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
-          >
-            {isSeparateRunning ? "音源分離を実行中..." : "音源分離を実行"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleRunBeat()}
-            disabled={isBeatRunning}
-            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
-          >
-            {isBeatRunning ? "ビート推定を実行中..." : "ビート推定を実行"}
-          </button>
-        </div>
-        {stageError && <p className="text-sm text-red-600 dark:text-red-400">{stageError}</p>}
-      </section>
-
-      <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-          採譜・量子化・エクスポート
-        </h3>
-        <div className="flex flex-wrap items-center gap-4">
-          <button
-            type="button"
-            onClick={() => void handleRunTranscribe()}
-            disabled={isTranscribeRunning}
-            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
-          >
-            {isTranscribeRunning ? "採譜を実行中..." : "採譜を実行"}
-          </button>
-          {/* #29-M2レビュー指摘: separateを再実行するとtranscribeとquantizeの
-              両方が無効化される。transcribeのstaleを表示せずquantizeボタンを
-              押せてしまうと、無効化済みの古いscore/current.jsonをそのまま
-              量子化してしまい、quantize自身のmetaが書かれてstale=Falseに
-              戻るため、transcribeが古いことがUIから見えなくなる(誤った
-              MusicXMLをエクスポートしうる)。transcribeがstaleの間は
-              量子化ボタン自体を無効化する。 */}
-          {transcribeStage?.stale && (
-            <span className="text-sm text-amber-600 dark:text-amber-400">
-              採譜結果が古い可能性があります(再実行してください)
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={() => void handleRunQuantize()}
-            disabled={isQuantizeRunning || transcribeStage?.stale}
-            className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50"
-          >
-            {isQuantizeRunning ? "量子化を実行中..." : "量子化を実行"}
-          </button>
-          {quantizeStage?.stale && (
-            <span className="text-sm text-amber-600 dark:text-amber-400">
-              量子化結果が古い可能性があります(再実行してください)
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={() => void handleExport("musicxml")}
-            // #29-M2レビュー指摘: 量子化ボタンをtranscribe staleで無効化した
-            // 意図(古いScore IRからの誤ったMusicXML出力を防ぐ)と揃え、
-            // エクスポート側でも同じガードを掛ける(quantize/transcribeの
-            // どちらかがstaleなら、古いonset_tick等のままの出力になりうる)。
-            disabled={isExporting || quantizeStage?.stale || transcribeStage?.stale}
-            className="rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50"
-          >
-            {exportingFormat === "musicxml" ? "エクスポート中..." : "MusicXMLをエクスポート"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleExport("midi")}
-            disabled={isExporting || quantizeStage?.stale || transcribeStage?.stale}
-            className="rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50"
-          >
-            {exportingFormat === "midi" ? "エクスポート中..." : "MIDIをエクスポート"}
-          </button>
-        </div>
-        {/* #36: 設計書§6 Stage 6「SMFでは音名表記・声部・大譜表が失われる」を明示する。 */}
-        <p className="text-xs text-gray-500 dark:text-gray-400">
-          ⚠ MIDI(SMF)形式では音名表記・声部・大譜表の情報は失われます(音高・
-          タイミングのみ保持されます)。記譜情報を保持したい場合はMusicXMLを 使用してください。
-        </p>
-        {exportError && <p className="text-sm text-red-600 dark:text-red-400">{exportError}</p>}
-      </section>
-
-      <RefineSection
-        projectId={projectId}
-        isQuantizeReady={Boolean(quantizeStage?.status === "completed" && !quantizeStage?.stale)}
-        onRefineComplete={setActiveRefineRunId}
+    <div className="flex gap-4">
+      <StepSidebar
+        states={states}
+        activeStep={activeStep}
+        onSelect={handleSelectStep}
+        onRunRemaining={handleRunRemaining}
+        canRunRemaining={Boolean(nextDspStage) && !anyDspRunning}
+        isRunningRemaining={isAutoRunning}
       />
 
-      {activeRefineRunId && (
-        <DiffPanel
+      {activeStep === "separate" && (
+        <SeparateStep
           projectId={projectId}
-          runId={activeRefineRunId}
-          onDismiss={() => setActiveRefineRunId(null)}
+          project={project}
+          preset={preset}
+          onPresetChange={setPreset}
+          executionProvider={executionProvider}
+          onExecutionProviderChange={setExecutionProvider}
+          runner={separateRunner}
+          onNext={() => goTo(neighbor(1) ?? "separate")}
         />
       )}
-
-      <AgentTaskLauncher projectId={projectId} onRunStarted={setActiveAgentRunId} />
-
-      {activeAgentRunId && (
-        <AgentConsole runId={activeAgentRunId} onDismiss={() => setActiveAgentRunId(null)} />
-      )}
-
-      {activeAgentRunId && (
-        <DiffPanel
+      {activeStep === "beat" && (
+        <BeatStep
           projectId={projectId}
-          runId={activeAgentRunId}
-          source="agent"
-          onDismiss={() => setActiveAgentRunId(null)}
+          project={project}
+          peaks={peaks}
+          peaksLoading={peaksLoading}
+          peaksError={peaksError as Error | null}
+          beatmap={beatmap}
+          beatmapError={beatmapError as Error | null}
+          runner={beatRunner}
+          onBack={() => goTo(neighbor(-1) ?? "beat")}
+          onNext={() => goTo(neighbor(1) ?? "beat")}
         />
       )}
-
-      <section className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-          波形とビートグリッド
-        </h3>
-        {peaksLoading && (
-          <p className="text-sm text-gray-500 dark:text-gray-400">波形を読み込み中...</p>
-        )}
-        {peaksError && (
-          <p className="text-sm text-red-600 dark:text-red-400">{(peaksError as Error).message}</p>
-        )}
-        {beatmapError && (
-          // beatmapが未実行(404)ならuseBeatmap/getBeatmapがnullを返すため、
-          // ここに表示されるのはそれ以外の想定外エラー(#21-M1レビュー指摘:
-          // peaksと異なりbeatmapの取得エラーだけ無表示になっていた)。
-          <p className="text-sm text-red-600 dark:text-red-400">
-            {(beatmapError as Error).message}
-          </p>
-        )}
-        {peaks && (
-          <div className="relative">
-            <Waveform peaks={peaks.peaks} />
-            {beatmap && <BeatGridOverlay beatmap={beatmap} durationSec={peaks.duration_sec} />}
-          </div>
-        )}
-      </section>
-
-      {beatmap && <BeatGridEditor projectId={projectId} beatmap={beatmap} />}
-
-      <PianoRollEditor key={`editor-${projectId}`} projectId={projectId} />
-
-      <section className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">トラック</h3>
-        <TrackList key={`tracks-${projectId}`} projectId={projectId} />
-      </section>
-
-      <TransportBar key={`transport-${projectId}`} projectId={projectId} />
+      {activeStep === "transcribe" && (
+        <TranscribeStep
+          project={project}
+          runner={transcribeRunner}
+          onBack={() => goTo(neighbor(-1) ?? "transcribe")}
+          onNext={() => goTo(neighbor(1) ?? "transcribe")}
+        />
+      )}
+      {activeStep === "quantize" && (
+        <QuantizeStep
+          project={project}
+          runner={quantizeRunner}
+          onBack={() => goTo(neighbor(-1) ?? "quantize")}
+          onNext={() => goTo(neighbor(1) ?? "quantize")}
+        />
+      )}
+      {activeStep === "refine" && (
+        <RefineStep
+          projectId={projectId}
+          project={project}
+          activeRefineRunId={activeRefineRunId}
+          onRefineComplete={setActiveRefineRunId}
+          onDismissDiff={() => setActiveRefineRunId(null)}
+          onBack={() => goTo(neighbor(-1) ?? "refine")}
+          onNext={() => {
+            if (!activeRefineRunId) setRefineSkipped(true);
+            goTo(neighbor(1) ?? "refine");
+          }}
+        />
+      )}
+      {activeStep === "review" && (
+        <ReviewStep
+          projectId={projectId}
+          activeAgentRunId={activeAgentRunId}
+          onAgentRunStarted={setActiveAgentRunId}
+          onDismissAgent={() => setActiveAgentRunId(null)}
+          onBack={() => goTo(neighbor(-1) ?? "review")}
+          onNext={() => goTo(neighbor(1) ?? "review")}
+        />
+      )}
+      {activeStep === "export" && (
+        <ExportStep
+          project={project}
+          exportingFormat={exportingFormat}
+          exportError={exportError}
+          onExport={(format) => void handleExport(format)}
+          onBack={() => goTo(neighbor(-1) ?? "export")}
+        />
+      )}
     </div>
   );
 }

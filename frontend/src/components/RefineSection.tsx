@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { RefineEstimateResponse, RefineResponse } from "../api/client";
 import { getRefineEstimate, runRefine } from "../api/client";
 import { useScore } from "../hooks/useScore";
+import { Term } from "./ui/Term";
 
 interface RefineSectionProps {
   projectId: string;
@@ -96,15 +97,13 @@ export function RefineSection({
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-            L1 整音 (AI構造化注釈)
+            AIで<Term k="refine">譜面を整える</Term>
           </h3>
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            claude CLI による小節単位の記譜注釈・声部・異名同音の最適化 (設計書§7.3)
+            小節ごとに、<Term k="voicing">声部</Term>の割り当てや
+            <Term k="enharmonic">異名同音</Term>の表記をAIが最適化します(任意の工程です)
           </p>
         </div>
-        <span className="rounded bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700 border border-indigo-200">
-          Stage 6手前 (L1)
-        </span>
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
@@ -138,15 +137,15 @@ export function RefineSection({
         </label>
 
         <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
-          推論 Effort
+          AIの丁寧さ
           <select
             value={effort}
             onChange={(e) => setEffort(e.target.value as "high" | "medium")}
             disabled={isRunning}
             className="rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
           >
-            <option value="high">High (高品質・既定)</option>
-            <option value="medium">Medium (低コスト)</option>
+            <option value="high">高品質(既定・時間がかかる)</option>
+            <option value="medium">標準(速め・低コスト)</option>
           </select>
         </label>
 
@@ -156,7 +155,7 @@ export function RefineSection({
           disabled={isRunning || !isQuantizeReady || parts.length === 0}
           className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-50"
         >
-          {isRunning ? (mode === "batch" ? "並列実行中..." : "逐次実行中...") : "L1 整音を実行"}
+          {isRunning ? (mode === "batch" ? "並列実行中..." : "逐次実行中...") : "AIで整える"}
         </button>
       </div>
 
@@ -199,20 +198,20 @@ export function RefineSection({
 
       {refineError && (
         <div className="rounded-md bg-red-50 dark:bg-red-950 p-3 text-sm text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900">
-          <p className="font-semibold">L1整音に失敗しました</p>
+          <p className="font-semibold">AIによる整音に失敗しました</p>
           <p>{refineError}</p>
         </div>
       )}
 
-      {/* 実行結果とコスト可視化カード (NFR-07) */}
+      {/* 実行結果とコスト可視化カード */}
       {refineResult && (
         <div className="space-y-2 rounded-md bg-emerald-50 dark:bg-emerald-950 p-4 text-sm text-emerald-900 dark:text-emerald-200 border border-emerald-200">
           <div className="flex items-center justify-between">
             <span className="font-semibold flex items-center gap-1.5 text-emerald-800 dark:text-emerald-200">
-              ✓ L1 整音完了 (Staging 保存済み)
+              ✓ 整音が完了しました(下のDiffPanelで確認できます)
             </span>
             <span className="rounded bg-emerald-100 px-2 py-0.5 text-xs font-mono text-emerald-800 dark:text-emerald-200 border border-emerald-300">
-              Run ID: {refineResult.run_id}
+              ID: {refineResult.run_id.slice(0, 8)}
             </span>
           </div>
 
@@ -239,7 +238,7 @@ export function RefineSection({
               </span>
             </div>
             <div className="rounded bg-white dark:bg-gray-900 p-2 border border-emerald-100 shadow-sm">
-              <span className="text-gray-500 dark:text-gray-400 block">実測コスト (NFR-07)</span>
+              <span className="text-gray-500 dark:text-gray-400 block">実際にかかった費用</span>
               <span className="text-base font-bold text-indigo-700">
                 ${refineResult.cost_usd.toFixed(4)}
               </span>
@@ -279,8 +278,8 @@ export function RefineSection({
           )}
 
           <p className="text-xs text-emerald-700 dark:text-emerald-300 pt-1">
-            ※ 整音結果は <code>score/staging/{refineResult.run_id}.json</code> に保存されています。
-            下記のDiffPanelで差分を確認し、小節単位で承認/却下してください。
+            ※
+            整音結果はまだ確定していません。下の一覧で差分を確認し、小節単位で承認/却下してください。
           </p>
         </div>
       )}

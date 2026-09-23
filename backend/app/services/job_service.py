@@ -190,14 +190,26 @@ class JobManager:
             stderr = b""
             if process.stderr is not None:
                 stderr = await process.stderr.read()
+            failure_message = stderr.decode("utf-8", errors="replace")[-500:]
             await self._update_job(
                 job_id,
                 status="failed",
-                message=stderr.decode("utf-8", errors="replace")[-500:],
+                message=failure_message,
                 exit_code=exit_code,
             )
             last_progress = self.get_job(job_id)["progress"]
+            # UI刷新: 以前はfailedイベントに`message`を含めず、フロントは
+            # 「採譜に失敗しました。」のような汎用文しか出せなかった
+            # (message自体はDBには保存されるが、SSE購読者はDBを見ない)。
+            # JobDetailModal/JobMonitorが実際のエラー内容を出せるよう、
+            # stderr末尾をそのままSSEにも流す。
             await self._publish(
-                job_id, {"job_id": job_id, "status": "failed", "progress": last_progress}
+                job_id,
+                {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "progress": last_progress,
+                    "message": failure_message,
+                },
             )
         await self._close_subscribers(job_id)

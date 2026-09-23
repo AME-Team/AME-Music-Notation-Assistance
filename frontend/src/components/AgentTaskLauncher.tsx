@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createAgentRun } from "../api/client";
 import { useAgentProviders, useAgentTasks } from "../hooks/useAgentTasks";
 import { useScore } from "../hooks/useScore";
+import { Term } from "./ui/Term";
 
 interface AgentTaskLauncherProps {
   projectId: string;
@@ -105,10 +106,10 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
     <section className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div>
         <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-          L2 エージェント実行 (AgentTaskLauncher)
+          <Term k="agent">AI</Term>に修正を頼む
         </h3>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          標準タスクを選ぶか、自然言語で調査・修正を依頼します(設計書§3 UC-4, §4.1 FR-21)
+          用意された作業内容から選ぶか、自然言語で調査・修正を依頼できます
         </p>
       </div>
 
@@ -159,7 +160,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
         </label>
 
         <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
-          トークン予算(任意)
+          <Term k="tokenBudget">処理量の上限</Term>(任意)
           <input
             type="number"
             min={1}
@@ -234,7 +235,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
         disabled={isLaunching || !taskType || !providerReady}
         className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-50"
       >
-        {isLaunching ? "起動中..." : "エージェントを実行"}
+        {isLaunching ? "起動中..." : "AIに依頼する"}
       </button>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}

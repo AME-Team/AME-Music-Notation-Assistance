@@ -693,7 +693,45 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
     new_guitar_notes_count = 0
     new_other_notes_count = 0
 
+    # UI刷新: 採譜は楽器ごとに数秒〜数十秒かかり、0%/100%の2値表示では
+    # 「今どのくらい進んでいるか」がユーザーに全く伝わらなかった。実際に
+    # 存在するステムの数だけ`step_total`を数え、楽器の切り替わりごとに
+    # `step`(機械可読キー、フロントの`lib/jobSteps.ts`が日本語ラベルに変換する)と
+    # `step_index`を添えて中間進捗を送る。
+    _transcribe_steps = [
+        name
+        for name, present in (
+            ("piano", has_piano),
+            ("bass", has_bass),
+            ("vocals", has_vocals),
+            ("guitar", has_guitar),
+            ("other", has_other),
+        )
+        if present
+    ] + ["save"]
+    _transcribe_step_total = len(_transcribe_steps)
+    # Gate2レビュー指摘(2巡目・LOW): `list.index(step)`は要素の一意性を
+    # 前提にしており、将来ステム名が重複しうる形に変わった場合に誤った
+    # step_indexを計算しうる。事前にstep名→indexの辞書を1回だけ構築して
+    # 参照する(現状のステップ名は固定リテラルで重複しないが、防御的にする)。
+    _transcribe_step_index_by_name = {name: i + 1 for i, name in enumerate(_transcribe_steps)}
+
+    def _emit_transcribe_step(step: str) -> None:
+        step_index = _transcribe_step_index_by_name[step]
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "transcribe",
+                "step": step,
+                "step_index": step_index,
+                "step_total": _transcribe_step_total,
+                "progress": (step_index - 1) / _transcribe_step_total,
+                "message": f"transcribing {step} ({step_index}/{_transcribe_step_total})",
+            }
+        )
+
     if has_piano:
+        _emit_transcribe_step("piano")
         result = run_piano_transcription(piano_stem_path)
         part = score.find_part(PIANO_STEM_NAME)
         if part is None:
@@ -726,6 +764,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         piano_pedals_count = len(part.pedals)
 
     if has_bass:
+        _emit_transcribe_step("bass")
         result_bass = run_bass_transcription(bass_stem_path)
         bass_part = score.find_part(BASS_STEM_NAME)
         if bass_part is None:
@@ -759,6 +798,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         new_bass_notes_count = len(new_bass_notes)
 
     if has_vocals:
+        _emit_transcribe_step("vocals")
         result_vocals = run_vocals_transcription(vocals_stem_path)
         vocals_part = score.find_part(VOCALS_STEM_NAME)
         if vocals_part is None:
@@ -792,6 +832,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         new_vocals_notes_count = len(new_vocals_notes)
 
     if has_guitar:
+        _emit_transcribe_step("guitar")
         result_guitar = run_guitar_transcription(guitar_stem_path)
         guitar_part = score.find_part(GUITAR_STEM_NAME)
         if guitar_part is None:
@@ -825,6 +866,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         new_guitar_notes_count = len(new_guitar_notes)
 
     if has_other:
+        _emit_transcribe_step("other")
         result_other = run_guitar_transcription(other_stem_path)
         other_part = score.find_part(OTHER_STEM_NAME)
         if other_part is None:
@@ -859,6 +901,7 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         other_part.pedals = []
         new_other_notes_count = len(new_other_notes)
 
+    _emit_transcribe_step("save")
     raw_now = storage.read_json(score_path) if score_path.exists() else None
     if raw_now != raw_before:
         emit(
@@ -1174,7 +1217,30 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         [n.midi % 12 for n in all_active_notes if n.provenance != "user"]
     )
 
+    # UI刷新: transcribeステージと同じ理由で、パートごと+仕上げ工程ごとに
+    # 中間進捗を送る(パート単位のrefine_baselineが処理の大半を占めるため)。
+    _quantize_steps = [stem_name for stem_name, _part in parts_to_process] + ["chords", "save"]
+    _quantize_step_total = len(_quantize_steps)
+    # Gate2レビュー指摘(2巡目・LOW): transcribe側と同じ理由で、
+    # `list.index(step)`ではなく事前構築した辞書を参照する。
+    _quantize_step_index_by_name = {name: i + 1 for i, name in enumerate(_quantize_steps)}
+
+    def _emit_quantize_step(step: str) -> None:
+        step_index = _quantize_step_index_by_name[step]
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "quantize",
+                "step": step,
+                "step_index": step_index,
+                "step_total": _quantize_step_total,
+                "progress": (step_index - 1) / _quantize_step_total,
+                "message": f"quantizing {step} ({step_index}/{_quantize_step_total})",
+            }
+        )
+
     for stem_name, part in parts_to_process:
+        _emit_quantize_step(stem_name)
         active_notes = active_notes_by_part_id[part.id]
         refine_inputs = [
             RefineNoteInput(
@@ -1236,8 +1302,10 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     # score_service.write_score(project_id, score) によって
     # score/current.json へ永続化される。ScoreService.ensure_chords() を
     # 用いて score.chords を最新ノート情報から確定させておく。
+    _emit_quantize_step("chords")
     ScoreService.ensure_chords(score, force_recompute=True)
 
+    _emit_quantize_step("save")
     raw_now = storage.read_json(score_path) if score_path.exists() else None
     if raw_now != raw_before:
         emit(

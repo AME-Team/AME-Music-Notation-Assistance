@@ -57,7 +57,20 @@ test("Electron app boots, runs a dummy job over SSE, and cleans up the backend o
     await expect(page.getByText("smoke-test.wav")).toBeVisible({ timeout: 10_000 });
 
     await page.getByText("smoke-test.wav").click();
-    await page.getByRole("button", { name: /ダミージョブを実行/ }).click();
+
+    // UI刷新でM0動作確認用の可視ボタンを撤去したため、`window.__ameTestHooks`
+    // (App.tsxが公開する非表示のテスト用フック)経由でダミージョブを起動する。
+    const backendInfoForDummyJob = await page.evaluate(() => window.api?.getBackendInfo());
+    expect(backendInfoForDummyJob).toBeTruthy();
+    const { baseUrl, token } = backendInfoForDummyJob as BackendInfo;
+    const projectsResp = await fetch(`${baseUrl}/api/projects`, {
+      headers: token ? { "X-AME-Token": token } : undefined,
+    });
+    const { projects } = (await projectsResp.json()) as { projects: { id: string }[] };
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+
+    await page.evaluate((id) => window.__ameTestHooks?.runDummyJob(id), projectId);
 
     await expect(page.getByText("完了")).toBeVisible({ timeout: 15_000 });
 
