@@ -43,8 +43,17 @@ export interface AmeElectronApi {
   isWindowMaximized(): Promise<boolean>;
 }
 
+/**
+ * UI刷新(M0動作確認用の可視ボタンを撤去): e2e(`e2e/app.spec.ts`)がSSE経由の
+ * ジョブ進捗を検証するための非表示フック。通常のUI操作導線には出さない。
+ */
+export interface AmeTestHooks {
+  runDummyJob(projectId: string): Promise<string>;
+}
+
 declare global {
   interface Window {
     api?: AmeElectronApi;
+    __ameTestHooks?: AmeTestHooks;
   }
 }

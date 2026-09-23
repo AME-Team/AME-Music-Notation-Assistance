@@ -105,16 +105,14 @@ export function DiffPanel({ projectId, runId, onDismiss, source = "refine" }: Di
     <section className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-            DiffPanel — L0 / AI提案の差分
-          </h3>
+          <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">変更内容の確認</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            小節単位でAIの変更提案を確認し、承認または却下してください (設計書§4.1 FR-10)
+            小節単位でAIの変更提案を確認し、承認または却下してください
           </p>
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded bg-indigo-50 px-2 py-0.5 text-xs font-mono text-indigo-700 border border-indigo-200">
-            Run ID: {runId}
+            ID: {runId.slice(0, 8)}
           </span>
           <button
             type="button"

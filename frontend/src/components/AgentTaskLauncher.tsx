@@ -104,11 +104,9 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
   return (
     <section className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div>
-        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-          L2 エージェント実行 (AgentTaskLauncher)
-        </h3>
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">AIに修正を頼む</h3>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          標準タスクを選ぶか、自然言語で調査・修正を依頼します(設計書§3 UC-4, §4.1 FR-21)
+          用意された作業内容から選ぶか、自然言語で調査・修正を依頼できます
         </p>
       </div>
 
@@ -234,7 +232,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
         disabled={isLaunching || !taskType || !providerReady}
         className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-50"
       >
-        {isLaunching ? "起動中..." : "エージェントを実行"}
+        {isLaunching ? "起動中..." : "AIに依頼する"}
       </button>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}

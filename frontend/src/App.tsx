@@ -34,6 +34,22 @@ export function App() {
 
   useEffect(() => watchOpenSettings(window.api, () => setSettingsOpen(true)), []);
 
+  // UI刷新: 「ダミージョブを実行(M0動作確認用)」ボタンは開発時の動作確認用で、
+  // 一般利用者には意味が伝わらず画面を占有するだけだったため撤去した。
+  // e2e(`e2e/app.spec.ts`)は本フックからSSE疎通を確認する。
+  useEffect(() => {
+    window.__ameTestHooks = {
+      runDummyJob: async (projectId: string) => {
+        const { job_id } = await runDummyStage(projectId, {});
+        track(job_id);
+        return job_id;
+      },
+    };
+    return () => {
+      window.__ameTestHooks = undefined;
+    };
+  }, [track]);
+
   if (backendStatus === "starting") {
     return (
       <div className="flex h-full items-center justify-center">
@@ -58,21 +74,7 @@ export function App() {
       </h1>
       <ProjectUpload />
       <ProjectList selectedId={selected?.id ?? null} onSelect={setSelected} />
-      {selected && (
-        <div className="space-y-3">
-          <ProjectWorkspace key={selected.id} projectId={selected.id} />
-          <button
-            type="button"
-            onClick={async () => {
-              const { job_id } = await runDummyStage(selected.id, {});
-              track(job_id);
-            }}
-            className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
-          >
-            ダミージョブを実行(M0動作確認用)
-          </button>
-        </div>
-      )}
+      {selected && <ProjectWorkspace key={selected.id} projectId={selected.id} />}
       <JobMonitor />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
