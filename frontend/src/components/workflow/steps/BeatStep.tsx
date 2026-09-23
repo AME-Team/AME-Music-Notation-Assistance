@@ -12,6 +12,7 @@ import {
   summarizeBeatmap,
 } from "../../../lib/beatSummary";
 import {
+  clampView,
   DEFAULT_PEAKS_BUCKETS,
   fullView,
   requestedBuckets,
@@ -73,7 +74,17 @@ export function BeatStep({
   // 全曲表示の要求解像度は既定値なので、曲長が判明しても再取得は起きない。
   const [view, setView] = useState<TimeView | null>(null);
   const [durationSec, setDurationSec] = useState(0);
-  const buckets = view ? requestedBuckets(view, durationSec) : DEFAULT_PEAKS_BUCKETS;
+  // 曲長はピークデータから学習する。プロジェクト(=曲)が切り替わると以前の絶対秒の
+  // 表示区間が新しい曲長の外へ出るため、**必ずクランプしてから**使う
+  // (そのまま使うと波形もビート線も表示されない/ズレる)。
+  const effectiveView = view
+    ? clampView(view, durationSec)
+    : durationSec > 0
+      ? fullView(durationSec)
+      : null;
+  const buckets = effectiveView
+    ? requestedBuckets(effectiveView, durationSec)
+    : DEFAULT_PEAKS_BUCKETS;
   const {
     data: peaks,
     isLoading: peaksLoading,
@@ -83,8 +94,6 @@ export function BeatStep({
   if (peaks && peaks.duration_sec > 0 && peaks.duration_sec !== durationSec) {
     setDurationSec(peaks.duration_sec);
   }
-
-  const effectiveView = view ?? (durationSec > 0 ? fullView(durationSec) : null);
 
   const summary = beatmap ? summarizeBeatmap(beatmap) : null;
   const timeSignatureNote = summary ? formatTimeSignatureChanges(summary) : null;

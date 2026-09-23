@@ -38,6 +38,12 @@ export const MAX_POINTS_PER_SEC = 100;
 /** 拡大時に要求する点数の上限(JSONの肥大化を抑える)。 */
 export const MAX_REQUESTED_BUCKETS = 20000;
 
+/**
+ * 拡大時に要求する点数の最小段階。既定解像度(1000)のすぐ上(1024など)を要求しても
+ * 見た目が変わらないうえキャッシュファイルだけが増えるため、2の冪のうち2048から使う。
+ */
+export const MIN_REQUESTED_BUCKETS = 2048;
+
 /** 既定の解像度(backend/app/pipeline/peaks.py の `DEFAULT_BUCKETS` と一致させる)。 */
 export const DEFAULT_PEAKS_BUCKETS = 1000;
 
@@ -123,7 +129,13 @@ export function requestedBuckets(view: TimeView, durationSec: number): number {
     ASSUMED_VIEWPORT_WIDTH_PX / span / TARGET_PIXELS_PER_POINT,
   );
   const wanted = Math.ceil(durationSec * pointsPerSec);
-  return Math.min(MAX_REQUESTED_BUCKETS, Math.max(DEFAULT_PEAKS_BUCKETS, wanted));
+  if (wanted <= DEFAULT_PEAKS_BUCKETS) return DEFAULT_PEAKS_BUCKETS;
+
+  // 連続値をそのまま使うと、ズームのたびに新しい解像度＝新しいキャッシュファイルが
+  // 増え続ける(`{name}.{buckets}.json` は無効化まで残る)。2の冪へ切り上げて離散化し、
+  // 解像度の選択肢を数個に収める。
+  const discretized = 2 ** Math.max(11, Math.ceil(Math.log2(wanted)));
+  return Math.min(MAX_REQUESTED_BUCKETS, discretized);
 }
 
 /** 波形1点が担当する時間(秒)。粒度表示に使う。 */

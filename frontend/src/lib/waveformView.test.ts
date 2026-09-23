@@ -108,6 +108,24 @@ describe("waveformView", () => {
     expect(requestedBuckets({ startSec: 0, endSec: 0.5 }, 3600)).toBe(MAX_REQUESTED_BUCKETS);
   });
 
+  it("解像度は離散化され、ズームのたびに新しいキャッシュが増えない", () => {
+    // 連続値をそのまま要求すると、ズーム操作ごとに `{name}.{buckets}.json`(削除は
+    // 再分離時のみ)が増え続けるため、2の冪へ切り上げる。取り得る値は数個に収まる。
+    const values = new Set<number>();
+    for (let span = 180; span >= 0.5; span -= 0.25) {
+      const buckets = requestedBuckets({ startSec: 0, endSec: span }, 180);
+      values.add(buckets);
+      const isPowerOfTwo = Math.log2(buckets) % 1 === 0;
+      expect(
+        isPowerOfTwo || buckets === DEFAULT_PEAKS_BUCKETS || buckets === MAX_REQUESTED_BUCKETS,
+      ).toBe(true);
+    }
+
+    // 取り得る値: 1000(既定)、2048、4096、8192、16384、20000(上限)の6段階。
+    expect(values.size).toBeLessThanOrEqual(6);
+    expect(Math.min(...values)).toBe(DEFAULT_PEAKS_BUCKETS);
+  });
+
   it("表示区間に含まれる点だけを切り出す", () => {
     // 100秒を1000点で持つなら1点=0.1秒。10〜12秒は100〜120点目。
     expect(visiblePointRange(1000, { startSec: 10, endSec: 12 }, 100)).toEqual({
