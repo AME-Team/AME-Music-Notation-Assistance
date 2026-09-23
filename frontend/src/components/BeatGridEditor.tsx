@@ -9,6 +9,13 @@ interface BeatGridEditorProps {
 
 const DENOMINATOR_CHOICES = [1, 2, 4, 8, 16, 32] as const;
 
+/**
+ * 全体オフセットの微調整量(ms)。拡大した波形を見ながら少しずつ寄せる用途を想定し、
+ * 数値入力(例: 0.25)を計算しなくても済むようにする。押すたびに`offset_sec`の
+ * 差分として現在のビート時刻へ加算される(§6/#20)。
+ */
+const OFFSET_NUDGE_STEPS_MS = [-50, -10, 10, 50] as const;
+
 const SOURCE_LABEL: Record<string, string> = {
   auto: "自動推定",
   manual: "手動補正済み",
@@ -81,6 +88,20 @@ export function BeatGridEditor({ projectId, beatmap }: BeatGridEditorProps) {
         >
           適用
         </button>
+        <span className="flex flex-wrap items-center gap-1 pb-1">
+          <span className="text-xs text-gray-500 dark:text-gray-400">微調整(押すたびに加算)</span>
+          {OFFSET_NUDGE_STEPS_MS.map((ms) => (
+            <button
+              key={ms}
+              type="button"
+              disabled={patch.isPending}
+              onClick={() => patch.mutate({ offset_sec: ms / 1000 })}
+              className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+            >
+              {ms > 0 ? `+${ms}` : ms} ms
+            </button>
+          ))}
+        </span>
       </form>
 
       <form

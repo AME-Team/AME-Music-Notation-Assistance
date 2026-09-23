@@ -2035,7 +2035,10 @@ export interface operations {
     };
     get_peaks_api_projects__project_id__analysis_peaks__name__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 波形の解像度(点の数)。拡大表示用に高解像度を要求できる(#169)。既定値は従来のキャッシュを再利用するため、値を変えたときだけ別ファイルにキャッシュする。 */
+                buckets?: number;
+            };
             header?: never;
             path: {
                 project_id: string;

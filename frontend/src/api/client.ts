@@ -347,8 +347,14 @@ export async function getStemAudioUrl(projectId: string, name: string): Promise<
 }
 
 /** #21: 波形ピークデータ。`name` は "original" またはステム名。 */
-export async function getPeaks(projectId: string, name: string): Promise<PeaksResponse> {
-  const resp = await apiFetch(`/api/projects/${projectId}/analysis/peaks/${name}`);
+export async function getPeaks(
+  projectId: string,
+  name: string,
+  buckets?: number,
+): Promise<PeaksResponse> {
+  // `buckets` は波形の解像度(点の数。#169)。拡大表示用に高解像度を要求できる。
+  const query = buckets === undefined ? "" : `?buckets=${buckets}`;
+  const resp = await apiFetch(`/api/projects/${projectId}/analysis/peaks/${name}${query}`);
   return (await resp.json()) as PeaksResponse;
 }
 

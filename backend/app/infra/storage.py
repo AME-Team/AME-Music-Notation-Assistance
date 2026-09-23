@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -68,8 +69,23 @@ def beatmap_path(workspace_dir: Path, project_id: str) -> Path:
     return project_dir(workspace_dir, project_id) / "analysis" / "beatmap.json"
 
 
-def peaks_path(workspace_dir: Path, project_id: str, name: str) -> Path:
-    return project_dir(workspace_dir, project_id) / "analysis" / "peaks" / f"{name}.json"
+def peaks_path(
+    workspace_dir: Path, project_id: str, name: str, *, buckets: int | None = None
+) -> Path:
+    """波形ピークのキャッシュ先(#21)。
+
+    `buckets` を指定すると解像度ごとに別ファイルへキャッシュする(#169: 拡大表示用の
+    高解像度ピーク)。既定解像度(`None`)は従来どおり `{name}.json` のままとし、
+    既存のキャッシュを無効化・再計算させない。
+    """
+    base = project_dir(workspace_dir, project_id) / "analysis" / "peaks"
+    if buckets is None:
+        return base / f"{name}.json"
+    # 解像度別の派生キャッシュは**サブディレクトリ**へ置く(#169レビュー指摘)。
+    # `{name}.{buckets}.json` のように既定キャッシュと同じ名前空間へ並べると、
+    # ドットを含むステム名(例: `original.8000`)の既定キャッシュと、ステム`original`の
+    # buckets=8000 の派生キャッシュが同一パスになり、読み書きで取り違えうる。
+    return base / name / f"{buckets}.json"
 
 
 def score_current_path(workspace_dir: Path, project_id: str) -> Path:
@@ -140,8 +156,15 @@ def invalidate_peaks_cache(workspace_dir: Path, project_id: str, names: list[str
     `get_peaks`(api/media.py)はキャッシュが存在する限り再計算しないため、これを
     怠るとプリセット/EPを変えて再分離しても古いステムの波形が表示され続ける。
     """
+    peaks_dir = project_dir(workspace_dir, project_id) / "analysis" / "peaks"
     for name in names:
         peaks_path(workspace_dir, project_id, name).unlink(missing_ok=True)
+        # #169: 拡大表示用の解像度別キャッシュは `peaks/{name}/{buckets}.json` に
+        # 集約されているため、そのディレクトリごと消す(`{name}.json` という別ステム名の
+        # 既定キャッシュには触れない)。
+        derived_dir = peaks_dir / name
+        if derived_dir.is_dir():
+            shutil.rmtree(derived_dir, ignore_errors=True)
 
 
 def write_json(path: Path, data: Any) -> None:

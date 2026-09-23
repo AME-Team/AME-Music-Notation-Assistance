@@ -106,7 +106,8 @@ def test_peaks_endpoint_returns_404_if_file_deleted_during_decode(
     project_id = _create_project(client, tiny_wav_bytes)
     audio_path = storage.find_original_audio(settings.workspace_dir, project_id)
 
-    def _compute_peaks_and_delete(path: str) -> dict:
+    def _compute_peaks_and_delete(path: str, **_kwargs: object) -> dict:
+        # `buckets` を受け取れるようにしておく(#169 で compute_peaks に解像度引数が増えた)。
         # exists()チェック通過後、実際のデコード試行前にファイルが消えたことを模擬する。
         audio_path.unlink()
         import soundfile as sf
@@ -518,3 +519,49 @@ async def test_beat_stage_end_to_end_via_job(
     resp = await async_client.get(f"/api/projects/{project_id}/analysis/beatmap")
     assert resp.status_code == 200
     assert resp.json()["source"] == "auto"
+
+
+def test_peaks_endpoint_supports_resolution_query(
+    client: TestClient, settings: Settings, tiny_wav_bytes: bytes
+) -> None:
+    """#169: 拡大表示用に解像度を指定できる。
+
+    解像度ごとに別ファイルへキャッシュし、既定解像度のリクエストは従来どおりの
+    キャッシュ(および従来どおりの点数)を返すことを確認する。
+    """
+    project_id = _create_project(client, tiny_wav_bytes)
+
+    default_resp = client.get(f"/api/projects/{project_id}/analysis/peaks/original")
+    assert default_resp.status_code == 200, default_resp.text
+    default_peaks = default_resp.json()["peaks"]
+
+    # conftestのtiny_wav_bytesは800サンプルなので、既定(1000)はサンプル数で頭打ちになる。
+    assert len(default_peaks) == 800
+    assert storage.peaks_path(settings.workspace_dir, project_id, "original").exists()
+    assert not storage.peaks_path(
+        settings.workspace_dir, project_id, "original", buckets=400
+    ).exists()
+
+    coarse = client.get(
+        f"/api/projects/{project_id}/analysis/peaks/original", params={"buckets": 400}
+    )
+    assert coarse.status_code == 200, coarse.text
+    assert len(coarse.json()["peaks"]) == 400
+    assert storage.peaks_path(
+        settings.workspace_dir, project_id, "original", buckets=400
+    ).exists()
+
+    # 既定解像度のキャッシュ・点数は解像度クエリの影響を受けない。
+    again = client.get(f"/api/projects/{project_id}/analysis/peaks/original")
+    assert len(again.json()["peaks"]) == len(default_peaks)
+
+
+def test_peaks_endpoint_rejects_out_of_range_resolution(
+    client: TestClient, tiny_wav_bytes: bytes
+) -> None:
+    """#169: 解像度の上下限外は422(FastAPIのリクエスト検証エラー)。"""
+    project_id = _create_project(client, tiny_wav_bytes)
+    url = f"/api/projects/{project_id}/analysis/peaks/original"
+
+    assert client.get(url, params={"buckets": 1}).status_code == 422
+    assert client.get(url, params={"buckets": 40001}).status_code == 422

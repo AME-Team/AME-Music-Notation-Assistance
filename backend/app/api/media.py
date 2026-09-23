@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 import soundfile as sf
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.api.deps import ensure_project_exists, get_project_service, get_settings
@@ -13,7 +13,7 @@ from app.api.schemas import Beatmap, BeatmapEditRequest, PeaksResponse, StemList
 from app.config import Settings
 from app.infra import storage
 from app.pipeline import beatmap_edit
-from app.pipeline.peaks import compute_peaks
+from app.pipeline.peaks import DEFAULT_BUCKETS, MAX_BUCKETS, MIN_BUCKETS, compute_peaks
 from app.services import stage_invalidation
 from app.services.project_service import ProjectService
 
@@ -130,6 +130,16 @@ async def list_stems(
 def get_peaks(
     project_id: str,
     name: str,
+    buckets: int = Query(
+        DEFAULT_BUCKETS,
+        ge=MIN_BUCKETS,
+        le=MAX_BUCKETS,
+        description=(
+            "波形の解像度(点の数)。拡大表示用に高解像度を要求できる(#169)。"
+            "既定値は従来のキャッシュを再利用するため、値を変えたときだけ別ファイルに"
+            "キャッシュする。"
+        ),
+    ),
     service: ProjectService = Depends(get_project_service),
     settings: Settings = Depends(get_settings),
 ) -> dict:
@@ -157,7 +167,13 @@ def get_peaks(
     else:
         audio_path = storage.stems_dir(settings.workspace_dir, project_id) / f"{name}.wav"
 
-    cache_path = storage.peaks_path(settings.workspace_dir, project_id, name)
+    # 既定解像度は従来のキャッシュファイル(`{name}.json`)を使い続ける(#169)。
+    cache_path = storage.peaks_path(
+        settings.workspace_dir,
+        project_id,
+        name,
+        buckets=None if buckets == DEFAULT_BUCKETS else buckets,
+    )
     if cache_path.exists():
         # キャッシュを返す前に元音源がまだ存在するか確認する(#21-M1レビュー
         # 指摘の追加ラウンド): should_skip_stage同様、ステムがパイプライン外で
@@ -173,7 +189,7 @@ def get_peaks(
         raise HTTPException(status_code=404, detail="audio file not found")
 
     try:
-        result = compute_peaks(str(audio_path))
+        result = compute_peaks(str(audio_path), buckets=buckets)
     except sf.SoundFileError as exc:
         # soundfile(libsndfile)は、開けないフォーマット(m4a/AAC等)では
         # LibsndfileErrorを、ヘッダは有効だが読み取り中に壊れたファイル等では

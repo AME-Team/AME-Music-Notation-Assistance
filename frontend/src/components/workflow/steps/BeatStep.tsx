@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from "react";
 import type { Beatmap, Project } from "../../../api/client";
+import { usePeaks } from "../../../hooks/usePeaks";
 import type { useStageRunner } from "../../../hooks/useStageRunner";
 import {
   formatBeatPosition,
@@ -10,18 +11,21 @@ import {
   MAX_VISIBLE_ROWS,
   summarizeBeatmap,
 } from "../../../lib/beatSummary";
+import {
+  clampView,
+  DEFAULT_PEAKS_BUCKETS,
+  fullView,
+  requestedBuckets,
+  type TimeView,
+} from "../../../lib/waveformView";
 import { BeatGridEditor } from "../../BeatGridEditor";
-import { BeatGridOverlay } from "../../BeatGridOverlay";
+import { BeatWaveformViewer } from "../../BeatWaveformViewer";
 import { Term } from "../../ui/Term";
-import { Waveform } from "../../Waveform";
 import { StepShell } from "../StepShell";
 
 interface BeatStepProps {
   projectId: string;
   project: Project | undefined;
-  peaks: { peaks: number[][]; duration_sec: number } | undefined;
-  peaksLoading: boolean;
-  peaksError: Error | null;
   beatmap: Beatmap | null | undefined;
   beatmapError: Error | null;
   runner: ReturnType<typeof useStageRunner>;
@@ -52,9 +56,6 @@ function ResultItem({ label, value, note }: { label: ReactNode; value: string; n
 export function BeatStep({
   projectId,
   project,
-  peaks,
-  peaksLoading,
-  peaksError,
   beatmap,
   beatmapError,
   runner,
@@ -65,6 +66,34 @@ export function BeatStep({
   const isDone = stage?.status === "succeeded" && !stage.stale;
   // 拍一覧は初期は先頭のみ表示し、長い曲では全件表示に切り替えられるようにする。
   const [showAllRows, setShowAllRows] = useState(false);
+
+  // #169: 表示区間(ズーム/横スクロール)は秒で持ち、波形・ビート線・目盛りが
+  // 同じ区間を共有する。曲長はピークデータから得るが、その曲長で要求解像度が
+  // 決まり、解像度がクエリキーになるため依存が循環する。そこで曲長だけをstateに
+  // 持ち、レンダー中に揃える(Reactの「props/データ変化に合わせたstate調整」)。
+  // 全曲表示の要求解像度は既定値なので、曲長が判明しても再取得は起きない。
+  const [view, setView] = useState<TimeView | null>(null);
+  const [durationSec, setDurationSec] = useState(0);
+  // 曲長はピークデータから学習する。プロジェクト(=曲)が切り替わると以前の絶対秒の
+  // 表示区間が新しい曲長の外へ出るため、**必ずクランプしてから**使う
+  // (そのまま使うと波形もビート線も表示されない/ズレる)。
+  const effectiveView = view
+    ? clampView(view, durationSec)
+    : durationSec > 0
+      ? fullView(durationSec)
+      : null;
+  const buckets = effectiveView
+    ? requestedBuckets(effectiveView, durationSec)
+    : DEFAULT_PEAKS_BUCKETS;
+  const {
+    data: peaks,
+    isLoading: peaksLoading,
+    error: peaksError,
+  } = usePeaks(projectId, "original", buckets);
+
+  if (peaks && peaks.duration_sec > 0 && peaks.duration_sec !== durationSec) {
+    setDurationSec(peaks.duration_sec);
+  }
 
   const summary = beatmap ? summarizeBeatmap(beatmap) : null;
   const timeSignatureNote = summary ? formatTimeSignatureChanges(summary) : null;
@@ -216,11 +245,19 @@ export function BeatStep({
       {beatmapError && (
         <p className="text-sm text-red-600 dark:text-red-400">{beatmapError.message}</p>
       )}
-      {peaks && (
-        <div className="relative">
-          <Waveform peaks={peaks.peaks} />
-          {beatmap && <BeatGridOverlay beatmap={beatmap} durationSec={peaks.duration_sec} />}
-        </div>
+      {peaks && effectiveView && (
+        <section className="space-y-2 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+          <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+            波形とビートグリッド
+          </h3>
+          <BeatWaveformViewer
+            peaks={peaks.peaks}
+            durationSec={peaks.duration_sec}
+            beatmap={beatmap ?? null}
+            view={effectiveView}
+            onViewChange={setView}
+          />
+        </section>
       )}
       {beatmap && <BeatGridEditor projectId={projectId} beatmap={beatmap} />}
     </StepShell>
