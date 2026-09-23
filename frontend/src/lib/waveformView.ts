@@ -35,8 +35,11 @@ export const TARGET_PIXELS_PER_POINT = 2;
 /** 解像度の上限(点/秒)。10ms/点より細かくしても補正作業の役には立たない。 */
 export const MAX_POINTS_PER_SEC = 100;
 
-/** 拡大時に要求する点数の上限(JSONの肥大化を抑える)。 */
-export const MAX_REQUESTED_BUCKETS = 20000;
+/**
+ * 要求できる点数の上限。バックエンドの上限(`pipeline/peaks.py` の `MAX_BUCKETS`)と
+ * **一致させる**(片方だけ変えると、422になるか要求できない段階が生まれる。#169レビュー指摘)。
+ */
+export const MAX_REQUESTED_BUCKETS = 40000;
 
 /**
  * 拡大時に要求する点数の最小段階。既定解像度(1000)のすぐ上(1024など)を要求しても
@@ -56,11 +59,17 @@ export function viewSpanSec(view: TimeView): number {
   return view.endSec - view.startSec;
 }
 
-/** 全体表示を1.0倍とした倍率。 */
+/**
+ * 全体表示を1.0倍とした倍率。
+ *
+ * `MIN_VIEW_SPAN_SEC`より短い素材(例: 0.1秒)では、全体表示でも表示幅が最小値に
+ * なるため`durationSec / span`は1未満になる。画面の前提は「全体表示=1.0倍」なので、
+ * 1.0を下回らせない(#169レビュー指摘)。
+ */
 export function zoomFactor(view: TimeView, durationSec: number): number {
   const span = viewSpanSec(view);
   if (span <= 0 || durationSec <= 0) return 1;
-  return durationSec / span;
+  return Math.max(1, durationSec / span);
 }
 
 /** 区間を「最小幅以上・曲の範囲内」に収める。 */

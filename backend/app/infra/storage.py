@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
+import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -79,7 +79,13 @@ def peaks_path(
     既存のキャッシュを無効化・再計算させない。
     """
     base = project_dir(workspace_dir, project_id) / "analysis" / "peaks"
-    return base / (f"{name}.json" if buckets is None else f"{name}.{buckets}.json")
+    if buckets is None:
+        return base / f"{name}.json"
+    # 解像度別の派生キャッシュは**サブディレクトリ**へ置く(#169レビュー指摘)。
+    # `{name}.{buckets}.json` のように既定キャッシュと同じ名前空間へ並べると、
+    # ドットを含むステム名(例: `original.8000`)の既定キャッシュと、ステム`original`の
+    # buckets=8000 の派生キャッシュが同一パスになり、読み書きで取り違えうる。
+    return base / name / f"{buckets}.json"
 
 
 def score_current_path(workspace_dir: Path, project_id: str) -> Path:
@@ -153,16 +159,12 @@ def invalidate_peaks_cache(workspace_dir: Path, project_id: str, names: list[str
     peaks_dir = project_dir(workspace_dir, project_id) / "analysis" / "peaks"
     for name in names:
         peaks_path(workspace_dir, project_id, name).unlink(missing_ok=True)
-        # #169: 拡大表示用の解像度別キャッシュ(`{name}.{buckets}.json`)も消す。
-        # 数字だけの接尾辞に限定し、`{name}.xxx.json` という別ステム名を巻き込まない。
-        # 数字は3桁以上(= `peaks.MIN_BUCKETS` の100以上)に限定する。1〜2桁を許すと、
-        # `vocals.2.json` のような「名前自体にドットを含む別ステム」を巻き込む。
-        # f-string で書くと `{3,}` が置換フィールドとして解釈され、`\d{(3,)}` という
-        # 一致しないパターンになるため、連結で組み立てる。
-        pattern = re.compile(r"^" + re.escape(name) + r"\.\d{3,}\.json$")
-        for derived in peaks_dir.glob(f"{name}.*.json"):
-            if pattern.match(derived.name):
-                derived.unlink(missing_ok=True)
+        # #169: 拡大表示用の解像度別キャッシュは `peaks/{name}/{buckets}.json` に
+        # 集約されているため、そのディレクトリごと消す(`{name}.json` という別ステム名の
+        # 既定キャッシュには触れない)。
+        derived_dir = peaks_dir / name
+        if derived_dir.is_dir():
+            shutil.rmtree(derived_dir, ignore_errors=True)
 
 
 def write_json(path: Path, data: Any) -> None:

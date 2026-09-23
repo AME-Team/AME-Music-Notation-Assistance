@@ -121,9 +121,16 @@ describe("waveformView", () => {
       ).toBe(true);
     }
 
-    // 取り得る値: 1000(既定)、2048、4096、8192、16384、20000(上限)の6段階。
+    // 取り得る値: 1000(既定)、2048、4096、8192、16384、32768の6段階(上限40000)。
     expect(values.size).toBeLessThanOrEqual(6);
     expect(Math.min(...values)).toBe(DEFAULT_PEAKS_BUCKETS);
+  });
+
+  it("表示幅が最小値に張り付く短い素材でも、倍率は1.0を下回らない", () => {
+    // 0.1秒の素材では全体表示でも表示幅が最小値(0.5秒)になる。ここで「倍率 0.2×」と
+    // 表示すると、「全体表示=1.0×」という画面の前提と食い違う。
+    expect(zoomFactor(fullView(0.1), 0.1)).toBe(1);
+    expect(zoomFactor(fullView(1), 1)).toBe(1);
   });
 
   it("表示区間に含まれる点だけを切り出す", () => {

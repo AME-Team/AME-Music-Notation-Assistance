@@ -69,13 +69,31 @@ def test_invalidate_peaks_cache_missing_file_is_a_noop(tmp_path: Path) -> None:
 
 
 def test_peaks_path_separates_resolutions(tmp_path: Path) -> None:
-    """#169: 解像度ごとに別ファイルへキャッシュする(既定解像度のパスは従来のまま)。"""
+    """#169: 解像度ごとに別ファイルへキャッシュする(既定解像度のパスは従来のまま)。
+
+    派生キャッシュは`analysis/peaks/{name}/{buckets}.json`へ置く(サブディレクトリ)。
+    """
     default = storage.peaks_path(tmp_path, "proj_test", "original")
     hires = storage.peaks_path(tmp_path, "proj_test", "original", buckets=8000)
 
     assert default.name == "original.json"
-    assert hires.name == "original.8000.json"
+    assert hires.parent.name == "original"
+    assert hires.name == "8000.json"
     assert default != hires
+
+
+def test_peaks_path_does_not_collide_with_dotted_stem_names(tmp_path: Path) -> None:
+    """ドットを含むステム名の既定キャッシュと、派生キャッシュが同一パスにならないこと。
+
+    同一名前空間に`{name}.{buckets}.json`を並べると、ステム`original.8000`の既定
+    キャッシュと、ステム`original`のbuckets=8000の派生キャッシュが衝突し、読み書きで
+    取り違えて誤った波形を表示しうる。
+    """
+    dotted_default = storage.peaks_path(tmp_path, "proj_test", "original.8000")
+    derived = storage.peaks_path(tmp_path, "proj_test", "original", buckets=8000)
+
+    assert dotted_default != derived
+    assert dotted_default.parent == derived.parent.parent
 
 
 def test_invalidate_peaks_cache_removes_derived_resolutions(tmp_path: Path) -> None:
