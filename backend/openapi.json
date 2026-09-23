@@ -623,6 +623,20 @@
               "type": "string",
               "title": "Name"
             }
+          },
+          {
+            "name": "buckets",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 40000,
+              "minimum": 100,
+              "description": "波形の解像度(点の数)。拡大表示用に高解像度を要求できる(#168)。既定値は従来のキャッシュを再利用するため、値を変えたときだけ別ファイルにキャッシュする。",
+              "default": 1000,
+              "title": "Buckets"
+            },
+            "description": "波形の解像度(点の数)。拡大表示用に高解像度を要求できる(#168)。既定値は従来のキャッシュを再利用するため、値を変えたときだけ別ファイルにキャッシュする。"
           }
         ],
         "responses": {

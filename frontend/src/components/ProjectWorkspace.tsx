@@ -8,7 +8,6 @@ import {
   runTranscribeStage,
 } from "../api/client";
 import { useBeatmap } from "../hooks/useBeatmap";
-import { usePeaks } from "../hooks/usePeaks";
 import { useProject } from "../hooks/useProjects";
 import { useStageRunner } from "../hooks/useStageRunner";
 import { deriveStepStates, firstActionableStep, STEPS, type StepId } from "../lib/workflow";
@@ -50,11 +49,6 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
   const [isAutoRunning, setIsAutoRunning] = useState(false);
   const autoRunRef = useRef(false);
 
-  const {
-    data: peaks,
-    isLoading: peaksLoading,
-    error: peaksError,
-  } = usePeaks(projectId, "original");
   const { data: beatmap, error: beatmapError } = useBeatmap(projectId);
   const { data: project } = useProject(projectId);
 
@@ -253,9 +247,6 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
         <BeatStep
           projectId={projectId}
           project={project}
-          peaks={peaks}
-          peaksLoading={peaksLoading}
-          peaksError={peaksError as Error | null}
           beatmap={beatmap}
           beatmapError={beatmapError as Error | null}
           runner={beatRunner}

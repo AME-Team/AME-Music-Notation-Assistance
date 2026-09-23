@@ -10,6 +10,10 @@ import numpy as np
 import soundfile as sf
 
 DEFAULT_BUCKETS = 1000
+# 拡大表示用の解像度リクエスト(#169)の許容範囲。下限は「全曲を1点で描く」
+# ような無意味な要求を弾くため、上限はJSONが肥大化しすぎないよう抑制する。
+MIN_BUCKETS = 100
+MAX_BUCKETS = 40000
 
 
 def compute_peaks(audio_path: str, *, buckets: int = DEFAULT_BUCKETS) -> dict:

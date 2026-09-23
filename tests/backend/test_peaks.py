@@ -66,3 +66,50 @@ def test_invalidate_peaks_cache_removes_only_named_stems(tmp_path: Path) -> None
 
 def test_invalidate_peaks_cache_missing_file_is_a_noop(tmp_path: Path) -> None:
     storage.invalidate_peaks_cache(tmp_path, "proj_test", ["nonexistent"])
+
+
+def test_peaks_path_separates_resolutions(tmp_path: Path) -> None:
+    """#169: 解像度ごとに別ファイルへキャッシュする(既定解像度のパスは従来のまま)。"""
+    default = storage.peaks_path(tmp_path, "proj_test", "original")
+    hires = storage.peaks_path(tmp_path, "proj_test", "original", buckets=8000)
+
+    assert default.name == "original.json"
+    assert hires.name == "original.8000.json"
+    assert default != hires
+
+
+def test_invalidate_peaks_cache_removes_derived_resolutions(tmp_path: Path) -> None:
+    """#169: 再分離時は解像度別の派生キャッシュ(`{name}.{buckets}.json`)も消す。
+
+    既定解像度だけを消すと、拡大表示用の高解像度キャッシュが古いステムのまま
+    残り、拡大したときだけ古い波形が表示され続けてしまう。
+    """
+    project_id = "proj_test"
+    storage.write_json(
+        storage.peaks_path(tmp_path, project_id, "vocals"), {"peaks": []}
+    )
+    derived = storage.peaks_path(tmp_path, project_id, "vocals", buckets=8000)
+    storage.write_json(derived, {"peaks": []})
+    other = storage.peaks_path(tmp_path, project_id, "drums", buckets=8000)
+    storage.write_json(other, {"peaks": []})
+
+    storage.invalidate_peaks_cache(tmp_path, project_id, ["vocals"])
+
+    assert not derived.exists()
+    assert other.exists()
+
+
+def test_invalidate_peaks_cache_keeps_other_stems_with_dotted_names(
+    tmp_path: Path,
+) -> None:
+    """別ステム名が数字接尾辞に見えても巻き込まない(`vocals` と `vocals.2` の区別)。"""
+    project_id = "proj_test"
+    dotted = storage.peaks_path(tmp_path, project_id, "vocals.2")
+    storage.write_json(dotted, {"peaks": []})
+    storage.write_json(
+        storage.peaks_path(tmp_path, project_id, "vocals", buckets=8000), {"peaks": []}
+    )
+
+    storage.invalidate_peaks_cache(tmp_path, project_id, ["vocals"])
+
+    assert dotted.exists()
