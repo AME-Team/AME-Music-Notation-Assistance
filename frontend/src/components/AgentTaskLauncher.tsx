@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createAgentRun } from "../api/client";
 import { useAgentProviders, useAgentTasks } from "../hooks/useAgentTasks";
 import { useScore } from "../hooks/useScore";
+import { Term } from "./ui/Term";
 
 interface AgentTaskLauncherProps {
   projectId: string;
@@ -104,7 +105,9 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
   return (
     <section className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div>
-        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">AIに修正を頼む</h3>
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
+          <Term k="agent">AI</Term>に修正を頼む
+        </h3>
         <p className="text-xs text-gray-500 dark:text-gray-400">
           用意された作業内容から選ぶか、自然言語で調査・修正を依頼できます
         </p>
@@ -157,7 +160,7 @@ export function AgentTaskLauncher({ projectId, onRunStarted }: AgentTaskLauncher
         </label>
 
         <label className="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
-          トークン予算(任意)
+          <Term k="tokenBudget">処理量の上限</Term>(任意)
           <input
             type="number"
             min={1}

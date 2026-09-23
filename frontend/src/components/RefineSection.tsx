@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { RefineEstimateResponse, RefineResponse } from "../api/client";
 import { getRefineEstimate, runRefine } from "../api/client";
 import { useScore } from "../hooks/useScore";
+import { Term } from "./ui/Term";
 
 interface RefineSectionProps {
   projectId: string;
@@ -96,10 +97,11 @@ export function RefineSection({
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-            AIで譜面を整える
+            AIで<Term k="refine">譜面を整える</Term>
           </h3>
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            小節ごとに、声部の割り当てや異名同音の表記をAIが最適化します(任意の工程です)
+            小節ごとに、<Term k="voicing">声部</Term>の割り当てや
+            <Term k="enharmonic">異名同音</Term>の表記をAIが最適化します(任意の工程です)
           </p>
         </div>
       </div>
