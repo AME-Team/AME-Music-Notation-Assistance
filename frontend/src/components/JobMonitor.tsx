@@ -82,7 +82,14 @@ export function JobMonitor() {
                 </p>
                 <button
                   type="button"
-                  onClick={() => setDetailJobId(job.jobId)}
+                  onClick={() => {
+                    // Gate2レビュー指摘(2巡目・MIDDLE): モーダルへマウスを
+                    // 移すとトースト側のonMouseLeaveでunpinされ、詳細を
+                    // 読んでいる途中で自動消去タイマーが動いてモーダルが
+                    // 勝手に閉じていた。詳細表示中は明示的にpinし続ける。
+                    pin(job.jobId);
+                    setDetailJobId(job.jobId);
+                  }}
                   className="shrink-0 text-xs text-blue-600 dark:text-blue-400 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
                 >
                   詳細
@@ -94,7 +101,10 @@ export function JobMonitor() {
       </div>
       <JobDetailModal
         job={detailJob}
-        onClose={() => setDetailJobId(null)}
+        onClose={() => {
+          if (detailJobId) unpin(detailJobId);
+          setDetailJobId(null);
+        }}
         onCancel={(jobId) => void cancel(jobId)}
       />
     </>

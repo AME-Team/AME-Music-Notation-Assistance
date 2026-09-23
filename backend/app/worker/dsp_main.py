@@ -710,9 +710,14 @@ def run_transcribe_stage(job_id: str, project_id: str, workspace_dir: Path, para
         if present
     ] + ["save"]
     _transcribe_step_total = len(_transcribe_steps)
+    # Gate2レビュー指摘(2巡目・LOW): `list.index(step)`は要素の一意性を
+    # 前提にしており、将来ステム名が重複しうる形に変わった場合に誤った
+    # step_indexを計算しうる。事前にstep名→indexの辞書を1回だけ構築して
+    # 参照する(現状のステップ名は固定リテラルで重複しないが、防御的にする)。
+    _transcribe_step_index_by_name = {name: i + 1 for i, name in enumerate(_transcribe_steps)}
 
     def _emit_transcribe_step(step: str) -> None:
-        step_index = _transcribe_steps.index(step) + 1
+        step_index = _transcribe_step_index_by_name[step]
         emit(
             {
                 "job_id": job_id,
@@ -1216,9 +1221,12 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     # 中間進捗を送る(パート単位のrefine_baselineが処理の大半を占めるため)。
     _quantize_steps = [stem_name for stem_name, _part in parts_to_process] + ["chords", "save"]
     _quantize_step_total = len(_quantize_steps)
+    # Gate2レビュー指摘(2巡目・LOW): transcribe側と同じ理由で、
+    # `list.index(step)`ではなく事前構築した辞書を参照する。
+    _quantize_step_index_by_name = {name: i + 1 for i, name in enumerate(_quantize_steps)}
 
     def _emit_quantize_step(step: str) -> None:
-        step_index = _quantize_steps.index(step) + 1
+        step_index = _quantize_step_index_by_name[step]
         emit(
             {
                 "job_id": job_id,

@@ -178,14 +178,24 @@ export function JobDetailModal({ job, onClose, onCancel }: JobDetailModalProps) 
               ログを見る({job.events.length}件)
             </summary>
             <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto font-mono text-xs text-gray-500 dark:text-gray-400">
-              {job.events.map((entry, i) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: 同一ジョブ内でも同時刻・同stepのログが重複しうる
-                <li key={i}>
-                  [{formatClock(entry.at)}] {Math.round(entry.progress * 100)}%
-                  {entry.step && ` ${stepLabel(job.stage, entry.step)}`}
-                  {entry.message && ` — ${entry.message}`}
-                </li>
-              ))}
+              {job.events.map((entry, i) => {
+                // Gate2レビュー指摘(2巡目・LOW): entry.messageは
+                // `dsp_main.py`が送る内部向けの英語混じりの文言("transcribing
+                // piano (1/6)"等)で、「内部の英語名を画面に出さない」という
+                // UI刷新の方針に反していた。stepが分かる行はstepLabel(日本語)
+                // だけで十分なので、messageはstep情報が無い行(separate/beat/
+                // dummy等、まだ細かいstepに対応していないステージ)の
+                // 補助情報としてのみ表示する。
+                const translatedStep = stepLabel(job.stage, entry.step);
+                return (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 同一ジョブ内でも同時刻・同stepのログが重複しうる
+                  <li key={i}>
+                    [{formatClock(entry.at)}] {Math.round(entry.progress * 100)}%
+                    {translatedStep && ` ${translatedStep}`}
+                    {!translatedStep && entry.message && ` — ${entry.message}`}
+                  </li>
+                );
+              })}
             </ul>
           </details>
         )}

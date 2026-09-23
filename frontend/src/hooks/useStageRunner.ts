@@ -75,7 +75,13 @@ export function useStageRunner(
       setJobId(job_id);
       return job_id;
     } catch (err) {
+      // Gate2レビュー指摘(2巡目・MIDDLE): ジョブ登録前のHTTPリクエスト自体が
+      // 失敗した場合(ジョブが一度も"running"にならないケース)はonSucceededは
+      // もちろんonFailedOrCancelledも呼ばれず、「残りを自動実行」中にこの
+      // 経路で失敗するとautoRunRef/isAutoRunningが解除されないまま固着して
+      // いた(1巡目で直したジョブ失敗時と同種の抜け漏れ)。
       setError((err as Error).message);
+      options.onFailedOrCancelled?.();
       return null;
     }
   }
