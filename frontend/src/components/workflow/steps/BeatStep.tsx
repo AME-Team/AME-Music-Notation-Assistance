@@ -119,7 +119,7 @@ export function BeatStep({
                   note={timeSignatureNote ?? undefined}
                 />
                 <ResultItem
-                  label={<Term k="beat">拍の数</Term>}
+                  label={<Term k="beatUnit">拍の数</Term>}
                   value={`${summary.beatCount} 拍`}
                   note={`小節 ${summary.barCount}・ダウンビート ${summary.downbeatCount} 箇所`}
                 />
@@ -130,9 +130,9 @@ export function BeatStep({
                 />
                 {summary.pickupBeatCount > 0 && (
                   <ResultItem
-                    label={<Term k="downbeat">ダウンビート</Term>}
-                    value={`先頭の前に ${summary.pickupBeatCount} 拍`}
-                    note="最初のダウンビートより前の拍(小節外)"
+                    label={<Term k="pickupBeat">ピックアップ拍</Term>}
+                    value={`${summary.pickupBeatCount} 拍`}
+                    note="最初のダウンビートより前(小節の外)"
                   />
                 )}
               </dl>

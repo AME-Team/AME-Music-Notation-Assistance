@@ -25,9 +25,12 @@ export interface BeatTableRow {
   bpm: number | null;
 }
 
-/** 支配的な拍子と異なる拍子が現れる小節。 */
+/** 支配的な拍子と異なる拍子が現れる区間。 */
 export interface TimeSignatureChange {
+  /** 区間の開始小節。 */
   bar: number;
+  /** 区間の終了小節(この拍子が続く最後の小節)。 */
+  endBar: number;
   numerator: number;
   denominator: number;
 }
@@ -152,13 +155,22 @@ export function summarizeBeatmap(beatmap: Beatmap): BeatSummary {
     .sort((a, b) => a.bar - b.bar)
     .map((entry) => ({ ...entry, label: signatureLabel(entry) }));
   const timeSignature = dominantSignature(sortedSignatures, lastBar);
+  // 各エントリの拍子は「次のエントリの小節の1つ前」まで続き、最後のエントリは末尾まで
+  // 続く。開始小節だけを表示すると、複数小節にまたがる変拍子を「その小節だけ」と
+  // 誤読させるため、区間(endBar)として持つ(レビュー指摘)。
   const timeSignatureChanges: TimeSignatureChange[] = sortedSignatures
+    .map((entry, index) => {
+      const next = sortedSignatures[index + 1];
+      return {
+        bar: entry.bar,
+        endBar: Math.max(entry.bar, next ? next.bar - 1 : lastBar),
+        numerator: entry.numerator,
+        denominator: entry.denominator,
+        label: entry.label,
+      };
+    })
     .filter((entry) => entry.label !== timeSignature)
-    .map((entry) => ({
-      bar: entry.bar,
-      numerator: entry.numerator,
-      denominator: entry.denominator,
-    }));
+    .map(({ bar, endBar, numerator, denominator }) => ({ bar, endBar, numerator, denominator }));
 
   const firstBeatSec = beats.length > 0 ? beats[0].time_sec : null;
   const lastBeatSec = beats.length > 0 ? beats[beats.length - 1].time_sec : null;
@@ -212,19 +224,25 @@ export function formatTempoNote(summary: BeatSummary): string {
   return `曲中で変動(${formatBpm(summary.tempoMinBpm)}〜${formatBpm(summary.tempoMaxBpm)} BPM)`;
 }
 
-/** 支配的な拍子と異なる拍子の小節を表す補足文(無ければnull)。 */
+/**
+ * 支配的な拍子と異なる拍子の**区間**を表す補足文(無ければnull)。
+ * 1小節だけの区間は「小節 10」、複数小節にまたがる場合は「小節 10〜14」と表記する。
+ */
 export function formatTimeSignatureChanges(summary: BeatSummary): string | null {
   if (summary.timeSignatureChanges.length === 0) return null;
 
-  const bySignature = new Map<string, number[]>();
+  const bySignature = new Map<string, string[]>();
   for (const change of summary.timeSignatureChanges) {
     const label = `${change.numerator}/${change.denominator}`;
-    const bars = bySignature.get(label) ?? [];
-    bars.push(change.bar);
-    bySignature.set(label, bars);
+    const range = change.endBar > change.bar ? `${change.bar}〜${change.endBar}` : `${change.bar}`;
+    const ranges = bySignature.get(label) ?? [];
+    ranges.push(range);
+    bySignature.set(label, ranges);
   }
 
-  return [...bySignature].map(([label, bars]) => `小節 ${bars.join("・")} は ${label}`).join("、");
+  return [...bySignature]
+    .map(([label, ranges]) => `小節 ${ranges.join("・")} は ${label}`)
+    .join("、");
 }
 
 /** 拍の位置を「小節.拍」で表す(ピックアップ拍は「—」)。 */

@@ -126,10 +126,32 @@ describe("summarizeBeatmap", () => {
 
     expect(summary.timeSignature).toBe("4/4");
     expect(summary.timeSignatureChanges).toEqual([
-      { bar: 10, numerator: 2, denominator: 4 },
-      { bar: 17, numerator: 2, denominator: 4 },
+      { bar: 10, endBar: 10, numerator: 2, denominator: 4 },
+      { bar: 17, endBar: 17, numerator: 2, denominator: 4 },
     ]);
     expect(formatTimeSignatureChanges(summary)).toBe("小節 10・17 は 2/4");
+  });
+
+  it("複数小節にまたがる変拍子は区間(開始〜終了)で示す", () => {
+    // 4/4(小節1-9, 16-20)と2/4(小節10-15)。開始小節だけを表示すると
+    // 「小節10だけが2/4」と誤読されるため、区間として整形する(レビュー指摘)。
+    const beats = makeBeats(20, 4);
+    const summary = summarizeBeatmap(
+      makeBeatmap({
+        beats,
+        time_signatures: [
+          { bar: 1, numerator: 4, denominator: 4 },
+          { bar: 10, numerator: 2, denominator: 4 },
+          { bar: 16, numerator: 4, denominator: 4 },
+        ],
+      }),
+    );
+
+    expect(summary.timeSignature).toBe("4/4");
+    expect(summary.timeSignatureChanges).toEqual([
+      { bar: 10, endBar: 15, numerator: 2, denominator: 4 },
+    ]);
+    expect(formatTimeSignatureChanges(summary)).toBe("小節 10〜15 は 2/4");
   });
 
   it("ピックアップ拍(bar=0)は数えて区別し、位置表示は「—」にする", () => {
