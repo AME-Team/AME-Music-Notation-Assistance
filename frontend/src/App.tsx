@@ -41,7 +41,7 @@ export function App() {
     window.__ameTestHooks = {
       runDummyJob: async (projectId: string) => {
         const { job_id } = await runDummyStage(projectId, {});
-        track(job_id);
+        track(job_id, { stage: "dummy", label: "動作確認" });
         return job_id;
       },
     };

@@ -96,6 +96,9 @@ async def test_worker_crash_marks_job_failed_and_server_survives(
 
     events = await _collect_sse_events(async_client, job_id)
     assert events[-1]["status"] == "failed"
+    # UI刷新: SSEのfailedイベント自体にもmessageが乗ること(以前はDBには
+    # 保存されるがSSE購読者には届かず、フロントは汎用エラー文しか出せなかった)。
+    assert "simulated worker crash" in events[-1].get("message", "")
 
     resp = await async_client.get(f"/api/jobs/{job_id}")
     assert resp.json()["status"] == "failed"

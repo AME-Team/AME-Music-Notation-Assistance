@@ -6,6 +6,15 @@ export interface JobProgressEvent {
   stage?: string;
   progress?: number;
   message?: string;
+  /**
+   * UI刷新: `backend/app/worker/dsp_main.py`が中間進捗で送る、機械可読な
+   * 工程キー(例: "piano"/"bass"/"save")。`lib/jobSteps.ts`が日本語ラベルに
+   * 変換する。無い場合(separate/beat/dummy等の未対応ステージ、または
+   * 開始/終了イベント)は`step_index`/`step_total`も含めて省略される。
+   */
+  step?: string;
+  step_index?: number;
+  step_total?: number;
 }
 
 /** #49: `AgentEvent`のSSEペイロード形状(§11.4)。`kind`により`payload`の中身が変わる。 */

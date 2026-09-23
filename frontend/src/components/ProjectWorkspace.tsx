@@ -153,7 +153,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     setStageError(null);
     try {
       const { job_id } = await runSeparateStage(projectId, preset, executionProvider);
-      track(job_id);
+      track(job_id, { stage: "separate", label: "音源分離" });
       setSeparateJobId(job_id);
     } catch (err) {
       // runSeparateStage自体の呼び出し(HTTPリクエスト)が失敗した場合
@@ -167,7 +167,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     setStageError(null);
     try {
       const { job_id } = await runBeatStage(projectId);
-      track(job_id);
+      track(job_id, { stage: "beat", label: "テンポ・拍の検出" });
       setBeatJobId(job_id);
     } catch (err) {
       setStageError((err as Error).message);
@@ -178,7 +178,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     setStageError(null);
     try {
       const { job_id } = await runTranscribeStage(projectId);
-      track(job_id);
+      track(job_id, { stage: "transcribe", label: "採譜" });
       setTranscribeJobId(job_id);
     } catch (err) {
       setStageError((err as Error).message);
@@ -189,7 +189,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     setStageError(null);
     try {
       const { job_id } = await runQuantizeStage(projectId);
-      track(job_id);
+      track(job_id, { stage: "quantize", label: "リズム補正" });
       setQuantizeJobId(job_id);
     } catch (err) {
       setStageError((err as Error).message);
