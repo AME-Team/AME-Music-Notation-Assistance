@@ -10,7 +10,9 @@ import {
 import { useBeatmap } from "../hooks/useBeatmap";
 import { useProject } from "../hooks/useProjects";
 import { useStageRunner } from "../hooks/useStageRunner";
+import { toStageParams } from "../lib/quantizeSettings";
 import { deriveStepStates, firstActionableStep, STEPS, type StepId } from "../lib/workflow";
+import { useQuantizeStore } from "../stores/quantizeStore";
 import { ScoreViewPanel } from "./ScoreViewPanel";
 import { StepSidebar } from "./workflow/StepSidebar";
 import { BeatStep } from "./workflow/steps/BeatStep";
@@ -151,14 +153,18 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
     onSucceeded: () => advanceAutoRun("transcribe"),
     onFailedOrCancelled: stopAutoRun,
   });
-  const quantizeRunner = useStageRunner(() => runQuantizeStage(projectId), {
-    invalidateKeys: [["project", projectId]],
-    failureFallbackMessage: "リズム補正に失敗しました。",
-    stage: "quantize",
-    label: "リズム補正",
-    onSucceeded: () => advanceAutoRun("quantize"),
-    onFailedOrCancelled: stopAutoRun,
-  });
+  // #174: ④の実行にも量子化の適用設定(最小音符単位・強さ・入切)を渡す。
+  const quantizeRunner = useStageRunner(
+    () => runQuantizeStage(projectId, toStageParams(useQuantizeStore.getState().settings)),
+    {
+      invalidateKeys: [["project", projectId]],
+      failureFallbackMessage: "リズム補正に失敗しました。",
+      stage: "quantize",
+      label: "リズム補正",
+      onSucceeded: () => advanceAutoRun("quantize"),
+      onFailedOrCancelled: stopAutoRun,
+    },
+  );
 
   const runnersRef = useRef<Record<DspStageId, () => Promise<string | null>>>({
     separate: separateRunner.run,

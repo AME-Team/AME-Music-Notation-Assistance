@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./index.css";
+import { initQuantizeSettings } from "./stores/quantizeStore";
 import { initScoreView } from "./stores/scoreViewStore";
 import { initTheme } from "./stores/themeStore";
 
@@ -10,6 +11,8 @@ import { initTheme } from "./stores/themeStore";
 initTheme();
 // #172: 先頭N小節プレビューの表示小節数も描画前に読み込む。
 initScoreView();
+// #174: 量子化の適用設定(最小音符単位・強さ・入切)も同じく読み込む。
+initQuantizeSettings();
 
 const queryClient = new QueryClient();
 
