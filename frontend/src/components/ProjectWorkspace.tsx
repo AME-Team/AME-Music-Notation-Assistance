@@ -11,6 +11,7 @@ import { useBeatmap } from "../hooks/useBeatmap";
 import { useProject } from "../hooks/useProjects";
 import { useStageRunner } from "../hooks/useStageRunner";
 import { deriveStepStates, firstActionableStep, STEPS, type StepId } from "../lib/workflow";
+import { ScoreViewPanel } from "./ScoreViewPanel";
 import { StepSidebar } from "./workflow/StepSidebar";
 import { BeatStep } from "./workflow/steps/BeatStep";
 import { ExportStep } from "./workflow/steps/ExportStep";
@@ -231,78 +232,83 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
         isRunningRemaining={isAutoRunning}
       />
 
-      {activeStep === "separate" && (
-        <SeparateStep
-          projectId={projectId}
-          project={project}
-          preset={preset}
-          onPresetChange={setPreset}
-          executionProvider={executionProvider}
-          onExecutionProviderChange={setExecutionProvider}
-          runner={separateRunner}
-          onNext={() => goTo(neighbor(1) ?? "separate")}
-        />
-      )}
-      {activeStep === "beat" && (
-        <BeatStep
-          projectId={projectId}
-          project={project}
-          beatmap={beatmap}
-          beatmapError={beatmapError as Error | null}
-          runner={beatRunner}
-          onBack={() => goTo(neighbor(-1) ?? "beat")}
-          onNext={() => goTo(neighbor(1) ?? "beat")}
-        />
-      )}
-      {activeStep === "transcribe" && (
-        <TranscribeStep
-          project={project}
-          runner={transcribeRunner}
-          onBack={() => goTo(neighbor(-1) ?? "transcribe")}
-          onNext={() => goTo(neighbor(1) ?? "transcribe")}
-        />
-      )}
-      {activeStep === "quantize" && (
-        <QuantizeStep
-          project={project}
-          runner={quantizeRunner}
-          onBack={() => goTo(neighbor(-1) ?? "quantize")}
-          onNext={() => goTo(neighbor(1) ?? "quantize")}
-        />
-      )}
-      {activeStep === "refine" && (
-        <RefineStep
-          projectId={projectId}
-          project={project}
-          activeRefineRunId={activeRefineRunId}
-          onRefineComplete={setActiveRefineRunId}
-          onDismissDiff={() => setActiveRefineRunId(null)}
-          onBack={() => goTo(neighbor(-1) ?? "refine")}
-          onNext={() => {
-            if (!activeRefineRunId) setRefineSkipped(true);
-            goTo(neighbor(1) ?? "refine");
-          }}
-        />
-      )}
-      {activeStep === "review" && (
-        <ReviewStep
-          projectId={projectId}
-          activeAgentRunId={activeAgentRunId}
-          onAgentRunStarted={setActiveAgentRunId}
-          onDismissAgent={() => setActiveAgentRunId(null)}
-          onBack={() => goTo(neighbor(-1) ?? "review")}
-          onNext={() => goTo(neighbor(1) ?? "review")}
-        />
-      )}
-      {activeStep === "export" && (
-        <ExportStep
-          project={project}
-          exportingFormat={exportingFormat}
-          exportError={exportError}
-          onExport={(format) => void handleExport(format)}
-          onBack={() => goTo(neighbor(-1) ?? "export")}
-        />
-      )}
+      {/* #172: 先頭N小節のMIDIと楽譜を、どの作業ページでも常に見えるようにする。 */}
+      <div className="flex-1 space-y-4">
+        {activeStep === "separate" && (
+          <SeparateStep
+            projectId={projectId}
+            project={project}
+            preset={preset}
+            onPresetChange={setPreset}
+            executionProvider={executionProvider}
+            onExecutionProviderChange={setExecutionProvider}
+            runner={separateRunner}
+            onNext={() => goTo(neighbor(1) ?? "separate")}
+          />
+        )}
+        {activeStep === "beat" && (
+          <BeatStep
+            projectId={projectId}
+            project={project}
+            beatmap={beatmap}
+            beatmapError={beatmapError as Error | null}
+            runner={beatRunner}
+            onBack={() => goTo(neighbor(-1) ?? "beat")}
+            onNext={() => goTo(neighbor(1) ?? "beat")}
+          />
+        )}
+        {activeStep === "transcribe" && (
+          <TranscribeStep
+            project={project}
+            runner={transcribeRunner}
+            onBack={() => goTo(neighbor(-1) ?? "transcribe")}
+            onNext={() => goTo(neighbor(1) ?? "transcribe")}
+          />
+        )}
+        {activeStep === "quantize" && (
+          <QuantizeStep
+            project={project}
+            runner={quantizeRunner}
+            onBack={() => goTo(neighbor(-1) ?? "quantize")}
+            onNext={() => goTo(neighbor(1) ?? "quantize")}
+          />
+        )}
+        {activeStep === "refine" && (
+          <RefineStep
+            projectId={projectId}
+            project={project}
+            activeRefineRunId={activeRefineRunId}
+            onRefineComplete={setActiveRefineRunId}
+            onDismissDiff={() => setActiveRefineRunId(null)}
+            onBack={() => goTo(neighbor(-1) ?? "refine")}
+            onNext={() => {
+              if (!activeRefineRunId) setRefineSkipped(true);
+              goTo(neighbor(1) ?? "refine");
+            }}
+          />
+        )}
+        {activeStep === "review" && (
+          <ReviewStep
+            projectId={projectId}
+            activeAgentRunId={activeAgentRunId}
+            onAgentRunStarted={setActiveAgentRunId}
+            onDismissAgent={() => setActiveAgentRunId(null)}
+            onBack={() => goTo(neighbor(-1) ?? "review")}
+            onNext={() => goTo(neighbor(1) ?? "review")}
+          />
+        )}
+        {activeStep === "export" && (
+          <ExportStep
+            project={project}
+            exportingFormat={exportingFormat}
+            exportError={exportError}
+            onExport={(format) => void handleExport(format)}
+            onBack={() => goTo(neighbor(-1) ?? "export")}
+          />
+        )}
+
+        <ScoreViewPanel projectId={projectId} activeStep={activeStep} />
+      </div>
     </div>
   );
 }

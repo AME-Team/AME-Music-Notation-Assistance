@@ -10,6 +10,17 @@ interface ScorePreviewProps {
   projectId: string;
   score: ScoreIR;
   selectedNoteIds: ReadonlySet<number>;
+  /**
+   * #172: 表示範囲を親から固定する(先頭N小節プレビュー)。指定時は手動入力や
+   * 選択ノートへの自動追従より優先し、範囲の入力欄は出さない。
+   */
+  fromBar?: number | null;
+  toBar?: number | null;
+  /**
+   * #172: 見出し(「楽譜プレビュー」)を出すか。先頭N小節パネルのように他の見出しの
+   * 下へ埋め込む場合は、同じ見出しが二重にならないよう`false`にする。
+   */
+  showHeading?: boolean;
 }
 
 const DEBOUNCE_MS = 500; // NFR-03: 編集後500ms以内にプレビューが更新される
@@ -45,7 +56,14 @@ const INPUT_CLASS =
  * セッションでプロジェクトを何度も切り替えると緩やかにリークしうるが、
  * 実害が出るほどではないと判断)。
  */
-export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreviewProps) {
+export function ScorePreview({
+  projectId,
+  score,
+  selectedNoteIds,
+  fromBar = null,
+  toBar = null,
+  showHeading = true,
+}: ScorePreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const osmdRef = useRef<OpenSheetMusicDisplay | null>(null);
   // #33-M3レビュー指摘: `loaded`はrefではなくstateにする。refだと`true`に
@@ -137,12 +155,18 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
   // #33-M3レビュー指摘: 開始/終了の片方だけ手動指定した場合、もう片方が
   // auto値(未計算ならnull)のままだと範囲指定全体が無視されてしまうため、
   // 空欄側は既定値(開始側は1小節目、終了側は最終小節)で補う。
+  // #172: 親が範囲を固定している場合(先頭N小節プレビュー)はそれを最優先にする。
   const effectiveFromBar =
-    manualFromBar !== "" ? Number(manualFromBar) : (autoFromBar ?? (manualToBar !== "" ? 1 : null));
+    fromBar ??
+    (manualFromBar !== ""
+      ? Number(manualFromBar)
+      : (autoFromBar ?? (manualToBar !== "" ? 1 : null)));
   const effectiveToBar =
-    manualToBar !== ""
+    toBar ??
+    (manualToBar !== ""
       ? Number(manualToBar)
-      : (autoToBar ?? (manualFromBar !== "" ? lastBar : null));
+      : (autoToBar ?? (manualFromBar !== "" ? lastBar : null)));
+  const rangeFixed = fromBar != null || toBar != null;
 
   // 表示範囲が変わるたびにOSMDのオプションを更新して再描画する(再取得・
   // 再ロードは不要、既にロード済みの譜面に対する描画範囲の変更のみ)。
@@ -239,34 +263,38 @@ export function ScorePreview({ projectId, score, selectedNoteIds }: ScorePreview
 
   return (
     <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-      <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">楽譜プレビュー</h3>
-      <div className="flex flex-wrap items-end gap-4">
-        <label className={INPUT_LABEL_CLASS}>
-          表示小節(開始)
-          <input
-            type="number"
-            min={1}
-            value={manualFromBar}
-            onChange={(e) => setManualFromBar(e.target.value)}
-            placeholder="全体"
-            className={INPUT_CLASS}
-          />
-        </label>
-        <label className={INPUT_LABEL_CLASS}>
-          表示小節(終了)
-          <input
-            type="number"
-            min={1}
-            value={manualToBar}
-            onChange={(e) => setManualToBar(e.target.value)}
-            placeholder="全体"
-            className={INPUT_CLASS}
-          />
-        </label>
-        <span className="text-xs text-gray-500 dark:text-gray-400">
-          空欄なら全体を表示(1件選択中はその小節付近へ自動追従)
-        </span>
-      </div>
+      {showHeading && (
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">楽譜プレビュー</h3>
+      )}
+      {!rangeFixed && (
+        <div className="flex flex-wrap items-end gap-4">
+          <label className={INPUT_LABEL_CLASS}>
+            表示小節(開始)
+            <input
+              type="number"
+              min={1}
+              value={manualFromBar}
+              onChange={(e) => setManualFromBar(e.target.value)}
+              placeholder="全体"
+              className={INPUT_CLASS}
+            />
+          </label>
+          <label className={INPUT_LABEL_CLASS}>
+            表示小節(終了)
+            <input
+              type="number"
+              min={1}
+              value={manualToBar}
+              onChange={(e) => setManualToBar(e.target.value)}
+              placeholder="全体"
+              className={INPUT_CLASS}
+            />
+          </label>
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            空欄なら全体を表示(1件選択中はその小節付近へ自動追従)
+          </span>
+        </div>
+      )}
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       <div ref={containerRef} className="bg-white w-full overflow-x-auto" />
     </section>
