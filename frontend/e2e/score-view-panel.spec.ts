@@ -65,7 +65,10 @@ function buildScore() {
     key_signatures: [],
     chords: [],
     parts: [{ id: "piano", name: "Piano", notes }],
-    meta: { stages: {} },
+    // #174: バックエンドが量子化時に残す「実際に適用した設定」。
+    meta: {
+      stages: { quantize: { settings: { min_value: "1/16", strength: 1, enabled: true } } },
+    },
     next_note_id: notes.length + 1,
   };
 }
@@ -308,8 +311,9 @@ test("quantize settings (min note value, strength, on/off) reach the panel and t
     });
 
     await test.step("パネルが現在の量子化設定を表示する", async () => {
+      // 保存値(次回の実行)と、スコアに記録された適用済みの設定を出し分ける。
       await expect(panel.getByTestId("quantize-summary")).toContainText(
-        "32分音符・強さ40%・クオンタイズON",
+        "適用中: 16分音符・強さ100%・クオンタイズON / 次回の実行: 32分音符・強さ40%・クオンタイズON",
       );
     });
 
@@ -324,7 +328,7 @@ test("quantize settings (min note value, strength, on/off) reach the panel and t
         .nth(0)
         .click();
       await expect(panel.getByTestId("quantize-summary")).toContainText(
-        "32分音符・強さ40%・クオンタイズON",
+        "次回の実行: 32分音符・強さ40%・クオンタイズON",
       );
     });
 

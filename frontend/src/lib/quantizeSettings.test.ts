@@ -1,11 +1,15 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  appliedQuantizeSettings,
   DEFAULT_QUANTIZE_SETTINGS,
   minValueLabel,
   normalizeMinValue,
   normalizeQuantizeSettings,
   normalizeStrengthPercent,
+  QUANTIZE_MIN_VALUE_CHOICES,
   quantizeSettingsSummary,
+  quantizeStatusLine,
   readStoredQuantizeSettings,
   storeQuantizeSettings,
   toStageParams,
@@ -106,5 +110,59 @@ describe("量子化の適用設定(#174)", () => {
     expect(quantizeSettingsSummary({ minValue: "1/8", strengthPercent: 50, enabled: false })).toBe(
       "8分音符・クオンタイズOFF(生の演奏位置)",
     );
+  });
+
+  it("スコアの meta.stages から「適用済み」の設定を読む", () => {
+    const score = {
+      meta: {
+        stages: {
+          quantize: { settings: { min_value: "1/32", strength: 0.5, enabled: true } },
+        },
+      },
+    };
+    expect(appliedQuantizeSettings(score)).toEqual({
+      minValue: "1/32",
+      strengthPercent: 50,
+      enabled: true,
+    });
+    // 記録が無い/壊れている場合は「適用中」と言わない(存在しない設定を主張しない)。
+    expect(appliedQuantizeSettings({ meta: { stages: {} } })).toBeNull();
+    expect(appliedQuantizeSettings({})).toBeNull();
+    expect(
+      appliedQuantizeSettings({
+        meta: { stages: { quantize: { settings: { min_value: "1/16" } } } },
+      }),
+    ).toBeNull();
+    expect(appliedQuantizeSettings({ meta: { stages: { quantize: "x" } } })).toBeNull();
+  });
+
+  it("適用済みと次回の実行を出し分ける", () => {
+    const pending = { minValue: "1/32", strengthPercent: 40, enabled: true } as const;
+    const applied = { minValue: "1/16", strengthPercent: 100, enabled: true } as const;
+    expect(quantizeStatusLine(null, pending)).toBe("次回の実行: 32分音符・強さ40%・クオンタイズON");
+    expect(quantizeStatusLine(applied, pending)).toBe(
+      "適用中: 16分音符・強さ100%・クオンタイズON / 次回の実行: 32分音符・強さ40%・クオンタイズON",
+    );
+    expect(quantizeStatusLine(applied, applied)).toBe("適用中: 16分音符・強さ100%・クオンタイズON");
+  });
+
+  it("バックエンドの定義と食い違っていない(契約テスト)", () => {
+    // 最小音符単位の選択肢とパラメータのキー名は、バックエンドのソースと一致して
+    // いなければならない(片方だけ変えると送信値が未知の単位として弾かれる/設定が
+    // 黙って無視される。LOWレビュー指摘)。
+    const repoRoot = new URL("../../../", import.meta.url);
+    const quantizePy = readFileSync(new URL("backend/app/pipeline/quantize.py", repoRoot), "utf8");
+    const dspPy = readFileSync(new URL("backend/app/worker/dsp_main.py", repoRoot), "utf8");
+
+    const block = /_MIN_VALUE_DIVISOR: dict\[str, int\] = \{([\s\S]*?)\n\}/.exec(quantizePy);
+    // 定義が見つからないときに黙って通さない(定数が移動したら「無い」ことで
+    // 通ってしまうテストにしない)。
+    expect(block, "_MIN_VALUE_DIVISOR がバックエンドで見つかりません").not.toBeNull();
+    const backendChoices = [...(block?.[1] ?? "").matchAll(/"([^"]+)":/g)].map((match) => match[1]);
+    expect([...backendChoices].sort()).toEqual([...QUANTIZE_MIN_VALUE_CHOICES].sort());
+
+    for (const key of Object.keys(toStageParams(DEFAULT_QUANTIZE_SETTINGS))) {
+      expect(dspPy.includes(`"${key}"`), `${key} が dsp_main.py にありません`).toBe(true);
+    }
   });
 });

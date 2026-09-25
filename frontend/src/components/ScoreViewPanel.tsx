@@ -1,7 +1,11 @@
 import { runQuantizeStage } from "../api/client";
 import { scoreKey, useScore } from "../hooks/useScore";
 import { useStageRunner } from "../hooks/useStageRunner";
-import { quantizeSettingsSummary, toStageParams } from "../lib/quantizeSettings";
+import {
+  appliedQuantizeSettings,
+  quantizeStatusLine,
+  toStageParams,
+} from "../lib/quantizeSettings";
 import { PREVIEW_BARS_CHOICES, previewNotes, previewWindowResult } from "../lib/scoreView";
 import type { StepId } from "../lib/workflow";
 import { useQuantizeStore } from "../stores/quantizeStore";
@@ -65,6 +69,9 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
     },
   );
   const quantizeSettings = useQuantizeStore((s) => s.settings);
+  // 「適用中」は表示中の楽譜を作った設定(スコアの meta.stages)であって、
+  // 保存値(次回の実行で使う設定)ではない。
+  const appliedQuantize = score ? appliedQuantizeSettings(score) : null;
 
   // 範囲か理由かを1回の解析で受け取る(同じ解析を2回走らせない)。
   const analysis = score ? previewWindowResult(score, bars) : null;
@@ -108,7 +115,7 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
           {runner.isRunning ? "更新中..." : "ビート補正を反映して更新"}
         </button>
         <span className="text-xs text-gray-500 dark:text-gray-400" data-testid="quantize-summary">
-          現在の量子化: {quantizeSettingsSummary(quantizeSettings)}
+          {quantizeStatusLine(appliedQuantize, quantizeSettings)}
         </span>
         <span className="text-xs text-gray-500 dark:text-gray-400">
           {canRerunQuantize

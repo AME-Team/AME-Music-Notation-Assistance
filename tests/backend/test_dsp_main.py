@@ -1438,6 +1438,12 @@ def test_quantize_stage_applies_settings_and_reruns_on_change(
     assert meta["extra"]["quantize_settings"]["strength"] == 0.5
     assert meta["extra"]["quantize_settings"]["min_value"] == "1/16"
 
+    # 「実際に適用した設定」はスコアの meta.stages にも残る(UIが /score 応答から
+    # 読めるように。#174レビュー指摘)。
+    written = service.read_score(project_id)
+    assert written.meta.stages["quantize"]["settings"]["strength"] == 0.5
+    assert written.meta.stages["quantize"]["settings"]["enabled"] is True
+
 
 def test_quantize_stage_rejects_invalid_settings(tmp_path: Path) -> None:
     """#174: 未知の最小音符単位は、値とともに`ValueError`で落ちる。"""
@@ -1453,6 +1459,17 @@ def test_quantize_stage_rejects_invalid_settings(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="量子化設定が不正"):
         dsp_main.run_quantize_stage(
             "job2", project_id, tmp_path, {"quantize_strength": 1.5}
+        )
+
+    # `bool("false")`はTrueになるため、真偽値以外は受け付けない(LOWレビュー指摘)。
+    with pytest.raises(ValueError, match="真偽値"):
+        dsp_main.run_quantize_stage(
+            "job3", project_id, tmp_path, {"quantize_enabled": "false"}
+        )
+
+    with pytest.raises(ValueError, match="真偽値"):
+        dsp_main.run_quantize_stage(
+            "job4", project_id, tmp_path, {"quantize_enabled": None}
         )
 
 

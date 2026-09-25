@@ -101,6 +101,54 @@ export function toStageParams(settings: QuantizeSettings): Record<string, unknow
   };
 }
 
+/**
+ * スコアの `meta.stages.quantize.settings`(バックエンドが実際に適用した設定)を読む。
+ *
+ * 保存値は「次回の実行で使う設定」であり、表示中の楽譜を作った設定とは限らない。
+ * 両者を混同しないよう、適用済みはスコア側から取る(#174レビュー指摘)。
+ */
+export function appliedQuantizeSettings(score: {
+  meta?: { stages?: Record<string, unknown> } | undefined;
+}): QuantizeSettings | null {
+  const stages = score.meta?.stages;
+  if (!stages || typeof stages !== "object") return null;
+  const quantize = (stages as Record<string, unknown>).quantize;
+  if (!quantize || typeof quantize !== "object") return null;
+  const settings = (quantize as Record<string, unknown>).settings;
+  if (!settings || typeof settings !== "object") return null;
+  const record = settings as Record<string, unknown>;
+  // 3項目が揃っているときだけ「適用済み」として扱う(壊れた値は無いものとする)。
+  if (
+    typeof record.minValue === "string" ||
+    typeof record.min_value !== "string" ||
+    typeof record.strength !== "number" ||
+    typeof record.enabled !== "boolean"
+  ) {
+    return null;
+  }
+  return normalizeQuantizeSettings({
+    minValue: record.min_value,
+    strengthPercent: Math.round(record.strength * 100),
+    enabled: record.enabled,
+  });
+}
+
+/**
+ * パネル等へ出す1行。適用済みと次回の実行が違うときは両方を出す。
+ *
+ * 保存値を「適用中」と表示すると、再実行前に適用済みと誤解される(#174レビュー指摘)。
+ */
+export function quantizeStatusLine(
+  applied: QuantizeSettings | null,
+  pending: QuantizeSettings,
+): string {
+  const pendingText = quantizeSettingsSummary(pending);
+  if (!applied) return `次回の実行: ${pendingText}`;
+  const appliedText = quantizeSettingsSummary(applied);
+  if (appliedText === pendingText) return `適用中: ${appliedText}`;
+  return `適用中: ${appliedText} / 次回の実行: ${pendingText}`;
+}
+
 /** 「16分音符・強さ100%・クオンタイズON」のような現在値の要約。 */
 export function quantizeSettingsSummary(settings: QuantizeSettings): string {
   const normalized = normalizeQuantizeSettings(settings);

@@ -117,6 +117,10 @@ def _quantize_settings_from_params(params: dict) -> QuantizeSettings:
     min_value = params.get("quantize_min_value", DEFAULT_MIN_VALUE)
     strength = params.get("quantize_strength", DEFAULT_QUANTIZE_STRENGTH)
     enabled = params.get("quantize_enabled", True)
+    # `bool("false")`はTrueになるため、真偽値だけを受け付ける(LOWレビュー指摘:
+    # API経由の文字列で無効化の意図が黙って無視されるのを避ける)。
+    if not isinstance(enabled, bool):
+        raise ValueError(f"quantize_enabledは真偽値(true/false)で指定してください: {enabled!r}")
     try:
         return QuantizeSettings(
             min_value=str(min_value),
@@ -1185,7 +1189,8 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
             "quantize_algo_version": QUANTIZE_ALGO_VERSION,
             # #174: 量子化の設定もこのステージへの入力なので、変更したら
             # 再実行されるようにする(設定だけ変えた再実行がスキップされない)。
-            "quantize_settings": settings.as_metadata(),
+            # ハッシュには実効値を使う(`hash_payload`のdocstring参照)。
+            "quantize_settings": settings.hash_payload(),
         },
         sort_keys=True,
     )
@@ -1360,6 +1365,13 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         )
         return
 
+    # #174: 実際に適用した設定を ScoreIR の `meta.stages` にも残す(§10.2)。
+    # UIは同じ `/score` 応答から「適用中の設定」を読めるので、保存値(次回適用)と
+    # 取り違えない(MIDDLEレビュー指摘)。
+    score.meta.stages["quantize"] = {
+        "settings": settings.as_metadata(),
+        "quantize_algo_version": QUANTIZE_ALGO_VERSION,
+    }
     score_service.write_score(project_id, score)
     _reset_undo_history_or_warn(workspace_dir, project_id)
     storage.write_stage_metadata(

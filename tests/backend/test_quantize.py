@@ -521,6 +521,20 @@ class TestQuantizeSettings:
         with pytest.raises(ValueError, match="強さ"):
             QuantizeSettings(strength=1.5)
 
+    def test_hash_payload_uses_the_effective_strength(self) -> None:
+        """無効(enabled=False)のときは強さが出力に影響しないので、ハッシュも同じ。
+
+        強さだけを変えた無意味な再実行を避ける(LOWレビュー指摘)。
+        """
+        off_0 = QuantizeSettings(strength=0.0, enabled=False).hash_payload()
+        off_100 = QuantizeSettings(strength=1.0, enabled=False).hash_payload()
+        assert off_0 == off_100
+        # 有効にすれば強さは効くので、ハッシュも変わる。
+        on_0 = QuantizeSettings(strength=0.0, enabled=True).hash_payload()
+        assert on_0 != off_0
+        # 最小音符単位は無効時も snap_candidates を変えるため、常にハッシュに含む。
+        assert QuantizeSettings(min_value="1/8", enabled=False).hash_payload() != off_0
+
     def test_metadata_shape_for_the_ui(self) -> None:
         assert QuantizeSettings(
             min_value="1/8", strength=0.5, enabled=False

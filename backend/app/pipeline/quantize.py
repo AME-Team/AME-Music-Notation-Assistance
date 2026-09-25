@@ -101,6 +101,20 @@ class QuantizeSettings:
         strength = self.applied_strength
         return round(raw_tick + (target_tick - raw_tick) * strength)
 
+    def hash_payload(self) -> dict[str, object]:
+        """入力ハッシュに含める形。
+
+        `strength`は**実効値**(`enabled=False`なら0.0)で入れる。無効のときに
+        強さだけを変えても出力は同じなので、無意味な再実行を避ける
+        (LOWレビュー指摘)。`min_value`は無効時も`snap_candidates`の内容を
+        変えるため、常に含める。
+        """
+        return {
+            "min_value": self.min_value,
+            "strength": self.applied_strength,
+            "enabled": self.enabled,
+        }
+
     def as_metadata(self) -> dict[str, object]:
         """`stage_metadata`へ残す形(UIが「実際に使った設定」を表示できるように)。"""
         return {
