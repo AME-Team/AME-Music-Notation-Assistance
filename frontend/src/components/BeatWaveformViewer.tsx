@@ -159,6 +159,18 @@ export function BeatWaveformViewer({
     scheduledClicksRef.current = [];
   }, []);
 
+  /** 取得中の通信と音源を解放する(アンマウント・プロジェクト切替)。 */
+  const releaseAudio = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    loadedProjectIdRef.current = null;
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = null;
+    stopScheduledClicks();
+  }, [stopScheduledClicks]);
+
   /**
    * 原音を認証付きで取得して`<audio>`を作る(`<audio src>`ではトークンを送れないため。
    * `AudioPlayer`と同じ理由)。
@@ -169,6 +181,9 @@ export function BeatWaveformViewer({
    */
   const ensureAudio = useCallback(async (): Promise<HTMLAudioElement | null> => {
     if (audioRef.current && loadedProjectIdRef.current === projectId) return audioRef.current;
+    // 別プロジェクトの音源が残っている場合は、取得し直す前に必ず解放する
+    // (上書きすると旧音源が鳴り続け、Blob URL もリークする。#173レビュー指摘)。
+    if (audioRef.current || objectUrlRef.current) releaseAudio();
     if (abortRef.current) return null;
 
     const controller = new AbortController();
@@ -201,19 +216,7 @@ export function BeatWaveformViewer({
       setIsLoadingAudio(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [projectId]);
-
-  /** 取得中の通信と音源を解放する(アンマウント・プロジェクト切替)。 */
-  const releaseAudio = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    audioRef.current?.pause();
-    audioRef.current = null;
-    loadedProjectIdRef.current = null;
-    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-    objectUrlRef.current = null;
-    stopScheduledClicks();
-  }, [stopScheduledClicks]);
+  }, [projectId, releaseAudio]);
 
   // 画面を離れる時に、通信・音源・AudioContextを片付ける(#173レビュー指摘)。
   useEffect(() => {

@@ -251,6 +251,10 @@ export function BeatStep({
             波形とビートグリッド
           </h3>
           <BeatWaveformViewer
+            // プロジェクトが変わったら作り直す(音源・AudioContext・再生状態を
+            // 引き継がない。#173レビュー指摘)。key を替えるとアンマウントされ、
+            // クリーンアップで releaseAudio() が走る。
+            key={projectId}
             projectId={projectId}
             peaks={peaks.peaks}
             durationSec={peaks.duration_sec}
