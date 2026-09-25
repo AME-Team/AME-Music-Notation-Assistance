@@ -251,6 +251,7 @@ export function BeatStep({
             波形とビートグリッド
           </h3>
           <BeatWaveformViewer
+            projectId={projectId}
             peaks={peaks.peaks}
             durationSec={peaks.duration_sec}
             beatmap={beatmap ?? null}

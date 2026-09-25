@@ -1,5 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Beatmap } from "../api/client";
+import { getBackendInfo } from "../lib/backendInfo";
+import {
+  beatsInRange,
+  CLICK_DURATION_SEC,
+  CLICK_LOOKAHEAD_SEC,
+  clickFrequencyHz,
+  DEFAULT_CLICK_VOLUME,
+  downbeatTimeSet,
+} from "../lib/beatClick";
 import { formatSeconds } from "../lib/beatSummary";
 import {
   fullView,
@@ -18,6 +27,7 @@ import { BeatGridOverlay } from "./BeatGridOverlay";
 import { Waveform } from "./Waveform";
 
 interface BeatWaveformViewerProps {
+  projectId: string;
   peaks: number[][];
   durationSec: number;
   beatmap: Beatmap | null;
@@ -29,21 +39,33 @@ interface BeatWaveformViewerProps {
 /** 幅を測る前(初回レンダー)に目盛りを間引くための想定幅。 */
 const FALLBACK_WIDTH_PX = 900;
 
+/** クリック音の先読みループの間隔(ms)。 */
+const CLICK_TICK_MS = 25;
+
+/** 再生ヘッドがこの比率を外れたら表示区間を追従させる。 */
+const FOLLOW_LEFT_RATIO = 0.05;
+const FOLLOW_RIGHT_RATIO = 0.95;
+/** 追従時に再生ヘッドを置く位置(表示区間の左端からの比率)。 */
+const FOLLOW_TARGET_RATIO = 0.2;
+
 /**
- * #169: ビートグリッド補正用の波形ビュー(ズーム・横スクロール付き)。
+ * #169/#171: ビートグリッド補正用の波形ビュー。
  *
- * 以前は全曲をそのまま横幅へ圧縮して描いていたため、3分程度の曲では1拍が
- * 数ピクセルになり、「拍の頭が波形のどこに乗っているか」を目で確認できず、
- * 全体オフセットの補正が事実上できなかった。表示区間(`view`)を明示的に持ち、
- * 拡大(ズーム)と横スクロールで任意の区間を等倍以上で見られるようにする。
+ * 表示区間(`view`)を明示的に持ち、拡大(ズーム)と横スクロールで任意の区間を
+ * 等倍以上で見られるようにする(#169)。加えて、**推定したビートが正しいかを耳で
+ * 確かめられる**よう、原音の再生・再生ヘッド・拍ごとのクリック音を提供する(#171)。
+ * クリック音は音声要素の`timeupdate`(粗い)ではなく、Web Audioへ数十ms先まで
+ * 予約する方式で鳴らす(そのままでは拍の間隔で正確に鳴らない)。
  *
  * 操作:
  * - 「＋」「−」ボタン: 表示中央を固定して拡大/縮小
  * - 「全体表示」: 全曲表示へ戻す
  * - ホイール: 横スクロール / Ctrl(⌘)+ホイール: ポインタ位置を固定して拡大
  * - 下部のスライダ: 横スクロール(キーボードの←→でも動く)
+ * - 「再生」: 原音を再生し、拍にクリック音を重ねる(再生ヘッドは表示区間に追従)
  */
 export function BeatWaveformViewer({
+  projectId,
   peaks,
   durationSec,
   beatmap,
@@ -52,13 +74,105 @@ export function BeatWaveformViewer({
   height = 128,
 }: BeatWaveformViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const playheadRef = useRef<HTMLDivElement>(null);
+  const timeTextRef = useRef<HTMLSpanElement>(null);
   const [widthPx, setWidthPx] = useState(FALLBACK_WIDTH_PX);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [clickEnabled, setClickEnabled] = useState(true);
+  const [clickVolume, setClickVolume] = useState(DEFAULT_CLICK_VOLUME);
+  const [followPlayhead, setFollowPlayhead] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const clickGainRef = useRef<GainNode | null>(null);
+  /** 予約済みの最後の拍(シーク時に数え直す)。 */
+  const lastClickSecRef = useRef(Number.NEGATIVE_INFINITY);
+  /** 直前の再生位置(シーク検出用)。 */
+  const lastPositionRef = useRef(0);
+  const rafRef = useRef(0);
+
+  // 先読みループと再生ヘッドの更新は毎フレーム走るため、依存する値はrefで読む
+  // (レンダーごとに新しい配列やコールバックを依存に入れると、再生中にループが
+  //  張り直されて拍が飛ぶ)。
+  const beatTimesRef = useRef<number[]>([]);
+  const downbeatSetRef = useRef<Set<number>>(new Set());
+  const volumeRef = useRef(DEFAULT_CLICK_VOLUME);
+  const viewRef = useRef(view);
+  const spanRef = useRef(viewSpanSec(view));
+  const durationRef = useRef(durationSec);
+  const followRef = useRef(true);
+  const onViewChangeRef = useRef(onViewChange);
 
   const span = viewSpanSec(view);
   const factor = zoomFactor(view, durationSec);
   const granularityMs = Math.round(pointDurationSec(peaks.length, durationSec) * 1000);
   const scrollable = span < durationSec - 1e-6;
   const ticks = rulerTicks(view, widthPx);
+
+  useEffect(() => {
+    beatTimesRef.current = (beatmap?.beats ?? [])
+      .map((beat) => beat.time_sec)
+      .sort((a, b) => a - b);
+    downbeatSetRef.current = downbeatTimeSet(beatmap?.downbeats_sec ?? []);
+  }, [beatmap]);
+
+  useEffect(() => {
+    volumeRef.current = clickEnabled ? clickVolume : 0;
+    const context = audioContextRef.current;
+    if (clickGainRef.current && context) {
+      clickGainRef.current.gain.setValueAtTime(volumeRef.current, context.currentTime);
+    }
+  }, [clickEnabled, clickVolume]);
+
+  useEffect(() => {
+    followRef.current = followPlayhead;
+  }, [followPlayhead]);
+
+  useEffect(() => {
+    viewRef.current = view;
+    spanRef.current = span;
+    durationRef.current = durationSec;
+    onViewChangeRef.current = onViewChange;
+  }, [view, span, durationSec, onViewChange]);
+
+  // 原音を認証付きで取得し、Blob URLとして`<audio>`に渡す(`<audio src>`では
+  // トークンを送れないため。`AudioPlayer`と同じ理由)。
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const { baseUrl, token } = await getBackendInfo();
+        const headers = new Headers();
+        if (token) headers.set("X-AME-Token", token);
+        const resp = await fetch(`${baseUrl}/api/projects/${projectId}/audio/original`, {
+          headers,
+        });
+        if (!resp.ok) throw new Error(`音源の読み込みに失敗しました (${resp.status})`);
+        const blob = await resp.blob();
+        if (cancelled) return;
+
+        objectUrl = URL.createObjectURL(blob);
+        const audio = new Audio(objectUrl);
+        audio.preload = "auto";
+        audio.addEventListener("ended", () => setIsPlaying(false));
+        audioRef.current = audio;
+      } catch (err) {
+        if (!cancelled) setError((err as Error).message);
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+      audioRef.current?.pause();
+      audioRef.current = null;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [projectId]);
 
   // 目盛りの間引きは実際の表示幅で決めるため、幅を測って追従させる。
   useEffect(() => {
@@ -85,22 +199,169 @@ export function BeatWaveformViewer({
       if (!rect || rect.width <= 0) return;
       event.preventDefault();
 
-      const timeAtCursor = view.startSec + ((event.clientX - rect.left) / rect.width) * span;
+      const currentView = viewRef.current;
+      const currentSpan = spanRef.current;
+      const timeAtCursor =
+        currentView.startSec + ((event.clientX - rect.left) / rect.width) * currentSpan;
       if (event.ctrlKey || event.metaKey) {
         // ポインタ位置を固定して拡大/縮小する。
         const zoomIn = event.deltaY < 0;
-        onViewChange(zoomView(view, zoomIn ? ZOOM_STEP : 1 / ZOOM_STEP, timeAtCursor, durationSec));
+        onViewChangeRef.current(
+          zoomView(
+            currentView,
+            zoomIn ? ZOOM_STEP : 1 / ZOOM_STEP,
+            timeAtCursor,
+            durationRef.current,
+          ),
+        );
         return;
       }
 
       // 横スクロール(トラックパッドの横成分も拾う)。
       const deltaPx = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-      onViewChange(panView(view, (deltaPx / rect.width) * span, durationSec));
+      onViewChangeRef.current(
+        panView(currentView, (deltaPx / rect.width) * currentSpan, durationRef.current),
+      );
     }
 
     element.addEventListener("wheel", handleWheel, { passive: false });
     return () => element.removeEventListener("wheel", handleWheel);
-  }, [view, span, durationSec, onViewChange]);
+  }, []);
+
+  /** 拍のクリック音を先読みして予約する(25msごとに呼ばれる)。 */
+  const scheduleClicks = useCallback(() => {
+    const audio = audioRef.current;
+    const context = audioContextRef.current;
+    const gain = clickGainRef.current;
+    if (!audio || !context || !gain || gain.gain.value <= 0) return;
+
+    const now = audio.currentTime;
+    const previous = lastPositionRef.current;
+    lastPositionRef.current = now;
+    // シーク(前後どちらでも)を検出したら、予約済みの続きから外して数え直す。
+    if (now < previous - 1e-3 || now - previous > 1) {
+      lastClickSecRef.current = Number.NEGATIVE_INFINITY;
+    }
+
+    const from = Math.max(now, lastClickSecRef.current + 1e-6);
+    const until = now + CLICK_LOOKAHEAD_SEC;
+    for (const timeSec of beatsInRange(beatTimesRef.current, from, until)) {
+      const startAt = context.currentTime + Math.max(timeSec - now, 0);
+      const oscillator = context.createOscillator();
+      const envelope = context.createGain();
+      oscillator.frequency.value = clickFrequencyHz(downbeatSetRef.current.has(timeSec));
+      envelope.gain.setValueAtTime(0, startAt);
+      envelope.gain.linearRampToValueAtTime(1, startAt + 0.002);
+      envelope.gain.exponentialRampToValueAtTime(0.001, startAt + CLICK_DURATION_SEC);
+      oscillator.connect(envelope).connect(gain);
+      oscillator.start(startAt);
+      oscillator.stop(startAt + CLICK_DURATION_SEC + 0.02);
+      lastClickSecRef.current = timeSec;
+    }
+  }, []);
+
+  /** 再生ヘッドと時刻表示を更新し、必要なら表示区間を追従させる。 */
+  const updatePlayhead = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const time = audio.currentTime;
+    const currentView = viewRef.current;
+    const currentSpan = spanRef.current;
+    const ratio = (time - currentView.startSec) / currentSpan;
+
+    if (playheadRef.current) {
+      playheadRef.current.style.left = `${ratio * 100}%`;
+      playheadRef.current.style.opacity = ratio < 0 || ratio > 1 ? "0" : "1";
+    }
+    if (timeTextRef.current) timeTextRef.current.textContent = formatSeconds(time);
+
+    // 追従は「表示区間から出たとき」だけ状態を更新する(毎フレーム再レンダーさせない)。
+    if (
+      followRef.current &&
+      currentSpan < durationRef.current - 1e-6 &&
+      (ratio < FOLLOW_LEFT_RATIO || ratio > FOLLOW_RIGHT_RATIO)
+    ) {
+      const target = time - currentSpan * FOLLOW_TARGET_RATIO;
+      onViewChangeRef.current(
+        panView(currentView, target - currentView.startSec, durationRef.current),
+      );
+    }
+  }, []);
+
+  // 再生中だけ先読みループと再生ヘッドの描画を回す。
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    const timer = window.setInterval(scheduleClicks, CLICK_TICK_MS);
+    const frame = () => {
+      updatePlayhead();
+      rafRef.current = window.requestAnimationFrame(frame);
+    };
+    rafRef.current = window.requestAnimationFrame(frame);
+
+    return () => {
+      window.clearInterval(timer);
+      window.cancelAnimationFrame(rafRef.current);
+    };
+  }, [isPlaying, scheduleClicks, updatePlayhead]);
+
+  /**
+   * クリック音の出力を用意する。音声出力が使えない環境(CI等)でも再生自体は
+   * 続けたいので、失敗しても例外を投げない。
+   */
+  function ensureClickGain(): GainNode | null {
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext();
+      }
+      const context = audioContextRef.current;
+      if (!clickGainRef.current) {
+        const gain = context.createGain();
+        gain.connect(context.destination);
+        clickGainRef.current = gain;
+      }
+      clickGainRef.current.gain.value = volumeRef.current;
+      return clickGainRef.current;
+    } catch {
+      return null;
+    }
+  }
+
+  function togglePlayback() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setError(null);
+
+    if (isPlaying) {
+      audio.pause();
+      setIsPlaying(false);
+      return;
+    }
+
+    ensureClickGain();
+    void audioContextRef.current?.resume?.();
+    // 停止→再生で、前回予約した拍を飛ばさないように数え直す。
+    lastClickSecRef.current = Number.NEGATIVE_INFINITY;
+    lastPositionRef.current = audio.currentTime;
+    audio
+      .play()
+      .then(() => setIsPlaying(true))
+      .catch((err: Error) => setError(`再生できませんでした: ${err.message}`));
+  }
+
+  function rewind() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    lastClickSecRef.current = Number.NEGATIVE_INFINITY;
+    lastPositionRef.current = 0;
+    if (playheadRef.current) {
+      playheadRef.current.style.left = "-100%";
+      playheadRef.current.style.opacity = "0";
+    }
+    if (timeTextRef.current) timeTextRef.current.textContent = formatSeconds(0);
+  }
 
   function zoomAtCenter(nextFactor: number) {
     onViewChange(zoomView(view, nextFactor, view.startSec + span / 2, durationSec));
@@ -135,6 +396,59 @@ export function BeatWaveformViewer({
             全体表示
           </button>
         </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={togglePlayback}
+            disabled={!beatmap}
+            className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isPlaying ? "一時停止" : "再生"}
+          </button>
+          <button
+            type="button"
+            onClick={rewind}
+            disabled={!beatmap}
+            className="rounded-md border border-gray-300 px-2 py-1 text-xs hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:hover:bg-gray-800"
+          >
+            先頭へ
+          </button>
+          <span className="text-xs tabular-nums" data-testid="beat-position">
+            再生位置 <span ref={timeTextRef}>0.00 秒</span>
+          </span>
+        </div>
+        <label className="flex items-center gap-1 text-xs">
+          <input
+            type="checkbox"
+            checked={clickEnabled}
+            onChange={(event) => setClickEnabled(event.target.checked)}
+            className="h-3.5 w-3.5"
+          />
+          ビートにクリック音(小節の頭は高く)
+        </label>
+        <label className="flex items-center gap-1 text-xs">
+          音量
+          <input
+            type="range"
+            aria-label="クリック音の音量"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(clickVolume * 100)}
+            disabled={!clickEnabled}
+            onChange={(event) => setClickVolume(Number(event.target.value) / 100)}
+            className="h-1 w-24 cursor-pointer accent-blue-600 disabled:opacity-50"
+          />
+        </label>
+        <label className="flex items-center gap-1 text-xs">
+          <input
+            type="checkbox"
+            checked={followPlayhead}
+            onChange={(event) => setFollowPlayhead(event.target.checked)}
+            className="h-3.5 w-3.5"
+          />
+          再生位置に追従
+        </label>
         <span className="text-xs">
           表示幅 {formatSeconds(span)}(全体 {formatSeconds(durationSec)}・倍率 {factor.toFixed(1)}×)
         </span>
@@ -142,6 +456,8 @@ export function BeatWaveformViewer({
           波形の粒度 {granularityMs} ms/点
         </span>
       </div>
+
+      {error && <p className="text-red-600 text-sm dark:text-red-400">{error}</p>}
 
       <div className="overflow-hidden rounded-md border border-gray-200 dark:border-gray-700">
         <div ref={containerRef} className="relative">
@@ -159,6 +475,12 @@ export function BeatWaveformViewer({
           <div className="relative">
             <Waveform peaks={peaks} durationSec={durationSec} view={view} height={height} />
             {beatmap && <BeatGridOverlay beatmap={beatmap} durationSec={durationSec} view={view} />}
+            <div
+              ref={playheadRef}
+              data-testid="beat-playhead"
+              className="pointer-events-none absolute inset-y-0 w-px bg-red-500"
+              style={{ left: "-100%", opacity: 0 }}
+            />
           </div>
         </div>
         <div className="flex items-center gap-2 border-gray-200 border-t px-2 py-1 dark:border-gray-700">
