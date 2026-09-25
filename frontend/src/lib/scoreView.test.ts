@@ -8,6 +8,7 @@ import {
   previewPitchRange,
   previewUnavailableReason,
   previewWindow,
+  previewWindowResult,
   readStoredPreviewBars,
   storePreviewBars,
 } from "./scoreView";
@@ -99,6 +100,19 @@ describe("previewWindow", () => {
     ).toBe("no-notes");
     // 作れるときは理由はnull。
     expect(previewUnavailableReason(score, 4)).toBeNull();
+  });
+
+  it("previewWindowResult は範囲か理由のどちらかを1回の解析で返す", () => {
+    const score = makeScore();
+    const ok = previewWindowResult(score, 2);
+    expect("window" in ok).toBe(true);
+    expect("window" in ok && ok.window.toBar).toBe(2);
+    // previewWindow / previewUnavailableReason と同じ結論になる。
+    expect("window" in ok && ok.window).toEqual(previewWindow(score, 2));
+
+    const ng = previewWindowResult({ ...score, parts: [] }, 2);
+    expect("reason" in ng && ng.reason).toBe(previewUnavailableReason({ ...score, parts: [] }, 2));
+    expect("reason" in ng && ng.reason).toBe("no-notes");
   });
 });
 

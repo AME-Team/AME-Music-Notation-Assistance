@@ -1,19 +1,30 @@
 import { runQuantizeStage } from "../api/client";
 import { scoreKey, useScore } from "../hooks/useScore";
 import { useStageRunner } from "../hooks/useStageRunner";
-import {
-  PREVIEW_BARS_CHOICES,
-  previewNotes,
-  previewUnavailableReason,
-  previewWindow,
-} from "../lib/scoreView";
+import { PREVIEW_BARS_CHOICES, previewNotes, previewWindowResult } from "../lib/scoreView";
+import type { StepId } from "../lib/workflow";
 import { useScoreViewStore } from "../stores/scoreViewStore";
 import { MidiBar } from "./MidiBar";
 import { ScorePreview } from "./ScorePreview";
 
 interface ScoreViewPanelProps {
   projectId: string;
+  /** いま開いている作業ステップ(下流の作業を壊さない判断に使う)。 */
+  activeStep: StepId;
 }
+
+/**
+ * ④を再実行してよいステップ。⑤リファイン以降は手動補正の結果を持っているため、
+ * ここから④を再実行すると下流の作業を上書き・無効化しうる(MIDDLEレビュー指摘)。
+ */
+const QUANTIZE_RERUN_STEPS: readonly StepId[] = ["separate", "beat", "transcribe", "quantize"];
+
+/**
+ * そのページが自前で楽譜プレビューを出すステップ(⑤⑥は`DiffPanel`等が
+ * `ScorePreview`を持つ)。同じ画面でOSMDを二重に走らせないため、パネル側の
+ * 埋め込み楽譜は出さない(MIDDLEレビュー指摘)。
+ */
+const STEPS_WITH_OWN_SCORE: readonly StepId[] = ["refine", "review"];
 
 /** パネルはノート選択を持たないため、再レンダーで作り直さないよう固定する。 */
 const NO_SELECTION: ReadonlySet<number> = new Set();
@@ -35,7 +46,7 @@ const UNAVAILABLE_MESSAGE = {
  *
  * 表示は読み取り専用の`MidiBar`と、既存の`ScorePreview`(表示範囲だけ固定)を使う。
  */
-export function ScoreViewPanel({ projectId }: ScoreViewPanelProps) {
+export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
   const bars = useScoreViewStore((s) => s.bars);
   const setBars = useScoreViewStore((s) => s.setBars);
   const scoreQuery = useScore(projectId);
@@ -48,8 +59,12 @@ export function ScoreViewPanel({ projectId }: ScoreViewPanelProps) {
     label: "④ クオンタイズ(プレビューの更新)",
   });
 
-  const barWindow = score ? previewWindow(score, bars) : null;
-  const unavailableReason = score && !barWindow ? previewUnavailableReason(score, bars) : null;
+  // 範囲か理由かを1回の解析で受け取る(同じ解析を2回走らせない)。
+  const analysis = score ? previewWindowResult(score, bars) : null;
+  const barWindow = analysis && "window" in analysis ? analysis.window : null;
+  const unavailableReason = analysis && "reason" in analysis ? analysis.reason : null;
+  const canRerunQuantize = QUANTIZE_RERUN_STEPS.includes(activeStep);
+  const showsOwnScore = STEPS_WITH_OWN_SCORE.includes(activeStep);
   const notes = score && barWindow ? previewNotes(score, barWindow) : [];
 
   return (
@@ -59,7 +74,8 @@ export function ScoreViewPanel({ projectId }: ScoreViewPanelProps) {
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-          先頭{barWindow ? barWindow.toBar : bars}小節のプレビュー(MIDI・楽譜)
+          先頭{barWindow ? barWindow.toBar : bars}小節のプレビュー(
+          {showsOwnScore ? "MIDI" : "MIDI・楽譜"})
         </h3>
         <label className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300">
           表示する小節数
@@ -79,14 +95,15 @@ export function ScoreViewPanel({ projectId }: ScoreViewPanelProps) {
         <button
           type="button"
           onClick={() => void runner.run()}
-          disabled={runner.isRunning || !score}
+          disabled={runner.isRunning || !score || !canRerunQuantize}
           className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50"
         >
           {runner.isRunning ? "更新中..." : "ビート補正を反映して更新"}
         </button>
         <span className="text-xs text-gray-500 dark:text-gray-400">
-          ビート・拍子・テンポを補正したら、ここで先頭{barWindow ? barWindow.toBar : bars}
-          小節を作り直せます
+          {canRerunQuantize
+            ? `ビート・拍子・テンポを補正したら、ここで先頭${barWindow ? barWindow.toBar : bars}小節を作り直せます`
+            : "このページの作業(⑤以降)を上書きしないよう、ここからは④を再実行できません"}
         </span>
       </div>
 
@@ -117,14 +134,20 @@ export function ScoreViewPanel({ projectId }: ScoreViewPanelProps) {
               先頭{barWindow.toBar}小節に音符がありません。
             </p>
           )}
-          <ScorePreview
-            projectId={projectId}
-            score={score}
-            selectedNoteIds={NO_SELECTION}
-            fromBar={1}
-            toBar={barWindow.toBar}
-            showHeading={false}
-          />
+          {showsOwnScore ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              このページは元から譜面を表示しているため、パネルはMIDIバーのみ表示します。
+            </p>
+          ) : (
+            <ScorePreview
+              projectId={projectId}
+              score={score}
+              selectedNoteIds={NO_SELECTION}
+              fromBar={1}
+              toBar={barWindow.toBar}
+              showHeading={false}
+            />
+          )}
         </div>
       )}
     </section>

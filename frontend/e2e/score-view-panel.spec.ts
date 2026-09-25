@@ -170,9 +170,26 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         // 小節番号は実在する小節の数だけ(線は右端の次小節線を含むため+1本)。
         expect(await panel.getByTestId("midi-bar-label").count()).toBe(4);
         expect(await panel.getByTestId("midi-barline").count()).toBe(5);
-        // 楽譜(OSMD)も同じページに描画されている。見出しは埋め込み側で消しているため、
-        // 実際に譜面が描かれたこと(SVG)を確かめる。
-        await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
+        // ⑤リファイン/⑥レビューは自前の楽譜プレビュー(DiffPanel等)を持つため、
+        // パネル側の埋め込み楽譜は出さない(同じ画面でOSMDを二重に走らせない)。
+        const stepId = ["separate", "beat", "transcribe", "quantize", "refine", "review", "export"][
+          index
+        ];
+        if (stepId === "refine" || stepId === "review") {
+          await expect(panel).toContainText("先頭4小節のプレビュー(MIDI)");
+          await expect(panel).toContainText("パネルはMIDIバーのみ表示します");
+        } else {
+          await expect(panel).toContainText("先頭4小節のプレビュー(MIDI・楽譜)");
+          await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
+        }
+        // ④を再実行してよいのは①〜④のページだけ(⑤以降の手動補正を上書きしない)。
+        const rerun = panel.getByRole("button", { name: "ビート補正を反映して更新" });
+        if (["separate", "beat", "transcribe", "quantize"].includes(stepId)) {
+          await expect(rerun).toBeEnabled();
+        } else {
+          await expect(rerun).toBeDisabled();
+          await expect(panel).toContainText("ここからは④を再実行できません");
+        }
       }
     });
 

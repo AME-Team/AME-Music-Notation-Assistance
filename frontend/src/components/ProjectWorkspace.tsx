@@ -307,7 +307,7 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
           />
         )}
 
-        <ScoreViewPanel projectId={projectId} />
+        <ScoreViewPanel projectId={projectId} activeStep={activeStep} />
       </div>
     </div>
   );

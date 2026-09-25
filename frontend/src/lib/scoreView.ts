@@ -77,7 +77,7 @@ function lastTickOf(score: Pick<ScoreIR, "parts">): number {
 /** プレビューを作れない理由。呼び出し側が案内文を出し分けるために返す。 */
 export type PreviewUnavailableReason = "no-notes" | "invalid-divisions" | "too-short";
 
-type WindowResult = { window: BarWindow } | { reason: PreviewUnavailableReason };
+export type WindowResult = { window: BarWindow } | { reason: PreviewUnavailableReason };
 
 function analyzeWindow(
   score: Pick<ScoreIR, "time_signatures" | "divisions" | "parts">,
@@ -103,6 +103,17 @@ function analyzeWindow(
       divisions,
     },
   };
+}
+
+/**
+ * 範囲か理由のどちらかを1回の解析で返す(呼び出し側が両方を知りたい場合に、
+ * 同じ解析を2回走らせないため。LOWレビュー指摘)。
+ */
+export function previewWindowResult(
+  score: Pick<ScoreIR, "time_signatures" | "divisions" | "parts">,
+  bars: number,
+): WindowResult {
+  return analyzeWindow(score, bars);
 }
 
 /**
