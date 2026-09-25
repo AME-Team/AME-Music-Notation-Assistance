@@ -167,6 +167,9 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         // 先頭4小節(既定)に音符が描かれている。
         expect(await panel.getByTestId("midi-note").count()).toBeGreaterThan(0);
         await expect(panel).toContainText("先頭4小節のプレビュー");
+        // 小節番号は実在する小節の数だけ(線は右端の次小節線を含むため+1本)。
+        expect(await panel.getByTestId("midi-bar-label").count()).toBe(4);
+        expect(await panel.getByTestId("midi-barline").count()).toBe(5);
         // 楽譜(OSMD)も同じページに描画されている。見出しは埋め込み側で消しているため、
         // 実際に譜面が描かれたこと(SVG)を確かめる。
         await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
@@ -178,6 +181,7 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
       await panel.getByLabel("表示する小節数").selectOption("8");
       await expect(panel).toContainText("先頭8小節のプレビュー");
       expect(await panel.getByTestId("midi-barline").count()).toBeGreaterThan(before);
+      expect(await panel.getByTestId("midi-bar-label").count()).toBe(8);
       expect(await page.evaluate(() => localStorage.getItem("ame.scoreView.bars"))).toBe("8");
     });
 

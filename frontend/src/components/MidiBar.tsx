@@ -23,10 +23,15 @@ const LABEL_MAX_BARS = 8;
 export function MidiBar({ notes, window: barWindow, height = 96 }: MidiBarProps) {
   const range = previewPitchRange(notes);
   const span = Math.max(barWindow.toTick - barWindow.fromTick, 1);
-  const bookmarks = barWindow.boundaries
-    .filter((tick) => tick >= barWindow.fromTick && tick <= barWindow.toTick)
-    .map((tick, index) => ({ tick, bar: index + 1 }));
+  const boundariesInView = barWindow.boundaries.filter(
+    (tick) => tick >= barWindow.fromTick && tick <= barWindow.toTick,
+  );
+  // 小節番号は「実在する小節」の左端に置く。`boundaries`の末尾は次小節の開始線
+  // (表示範囲の右端)なので、そのまま数えると存在しない小節番号が1つ増え、
+  // 等幅カラムに並べると小節線の位置ともずれる(MIDDLEレビュー指摘)。
+  const labelTicks = boundariesInView.slice(0, barWindow.toBar);
   const showLabels = barWindow.toBar <= LABEL_MAX_BARS;
+  const ratioOf = (tick: number) => ((tick - barWindow.fromTick) / span) * 100;
 
   return (
     <div className="overflow-hidden rounded-md border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
@@ -55,12 +60,12 @@ export function MidiBar({ notes, window: barWindow, height = 96 }: MidiBarProps)
             />
           );
         })}
-        {bookmarks.map(({ tick }) => (
+        {boundariesInView.map((tick) => (
           <line
             key={`line-${tick}`}
             data-testid="midi-barline"
-            x1={((tick - barWindow.fromTick) / span) * VIEW_WIDTH}
-            x2={((tick - barWindow.fromTick) / span) * VIEW_WIDTH}
+            x1={(ratioOf(tick) / 100) * VIEW_WIDTH}
+            x2={(ratioOf(tick) / 100) * VIEW_WIDTH}
             y1={0}
             y2={height}
             className="stroke-gray-300 dark:stroke-gray-600"
@@ -70,14 +75,16 @@ export function MidiBar({ notes, window: barWindow, height = 96 }: MidiBarProps)
         ))}
       </svg>
       {showLabels && (
-        <div className="flex px-1 pb-1">
-          {bookmarks.map(({ tick, bar }) => (
+        <div className="relative h-4" data-testid="midi-bar-labels">
+          {labelTicks.map((tick, index) => (
             <span
               key={`label-${tick}`}
-              className="text-[10px] text-gray-400 dark:text-gray-500"
-              style={{ flex: 1 }}
+              data-testid="midi-bar-label"
+              className="absolute top-0 text-[10px] text-gray-400 dark:text-gray-500"
+              // 小節線と同じ比率で置く(等幅カラムでは線と一致しない)。
+              style={{ left: `calc(${ratioOf(tick)}% + 2px)` }}
             >
-              {bar}
+              {index + 1}
             </span>
           ))}
         </div>
