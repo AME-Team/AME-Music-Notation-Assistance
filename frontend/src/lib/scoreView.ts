@@ -74,33 +74,56 @@ function lastTickOf(score: Pick<ScoreIR, "parts">): number {
   return last;
 }
 
+/** プレビューを作れない理由。呼び出し側が案内文を出し分けるために返す。 */
+export type PreviewUnavailableReason = "no-notes" | "invalid-divisions" | "too-short";
+
+type WindowResult = { window: BarWindow } | { reason: PreviewUnavailableReason };
+
+function analyzeWindow(
+  score: Pick<ScoreIR, "time_signatures" | "divisions" | "parts">,
+  bars: number,
+): WindowResult {
+  const divisions = score.divisions;
+  if (!Number.isFinite(divisions) || divisions <= 0) return { reason: "invalid-divisions" };
+
+  // 量子化前は`onset_tick`が無く、tick空間の範囲を作れない。
+  const lastTick = lastTickOf(score);
+  if (lastTick <= 0) return { reason: "no-notes" };
+
+  const boundaries = barBoundariesTicks(score.time_signatures, divisions, lastTick);
+  if (boundaries.length < 2) return { reason: "too-short" };
+
+  const toBar = Math.max(1, Math.min(Math.floor(bars), boundaries.length - 1));
+  return {
+    window: {
+      toBar,
+      fromTick: boundaries[0],
+      toTick: boundaries[toBar],
+      boundaries,
+      divisions,
+    },
+  };
+}
+
 /**
- * スコアの先頭から`bars`小節ぶんの範囲を返す。
- *
- * 量子化前(`onset_tick`が無い)スコアでは範囲を作れないため`null`を返す
- * (呼び出し側は「④量子化の後に表示できる」と案内する)。
+ * スコアの先頭から`bars`小節ぶんの範囲を返す。作れない場合は`null`
+ * (理由は`previewUnavailableReason`で取る)。
  */
 export function previewWindow(
   score: Pick<ScoreIR, "time_signatures" | "divisions" | "parts">,
   bars: number,
 ): BarWindow | null {
-  const divisions = score.divisions;
-  if (!Number.isFinite(divisions) || divisions <= 0) return null;
+  const result = analyzeWindow(score, bars);
+  return "window" in result ? result.window : null;
+}
 
-  const lastTick = lastTickOf(score);
-  if (lastTick <= 0) return null;
-
-  const boundaries = barBoundariesTicks(score.time_signatures, divisions, lastTick);
-  if (boundaries.length < 2) return null;
-
-  const toBar = Math.max(1, Math.min(Math.floor(bars), boundaries.length - 1));
-  return {
-    toBar,
-    fromTick: boundaries[0],
-    toTick: boundaries[toBar],
-    boundaries,
-    divisions,
-  };
+/** 範囲を作れない理由(作れる場合は`null`)。 */
+export function previewUnavailableReason(
+  score: Pick<ScoreIR, "time_signatures" | "divisions" | "parts">,
+  bars: number,
+): PreviewUnavailableReason | null {
+  const result = analyzeWindow(score, bars);
+  return "reason" in result ? result.reason : null;
 }
 
 /** 範囲に入る音符を返す(範囲の外へはみ出す長さは切り詰める)。 */

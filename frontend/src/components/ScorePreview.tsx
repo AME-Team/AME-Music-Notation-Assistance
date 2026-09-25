@@ -16,6 +16,11 @@ interface ScorePreviewProps {
    */
   fromBar?: number | null;
   toBar?: number | null;
+  /**
+   * #172: 見出し(「楽譜プレビュー」)を出すか。先頭N小節パネルのように他の見出しの
+   * 下へ埋め込む場合は、同じ見出しが二重にならないよう`false`にする。
+   */
+  showHeading?: boolean;
 }
 
 const DEBOUNCE_MS = 500; // NFR-03: 編集後500ms以内にプレビューが更新される
@@ -57,6 +62,7 @@ export function ScorePreview({
   selectedNoteIds,
   fromBar = null,
   toBar = null,
+  showHeading = true,
 }: ScorePreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const osmdRef = useRef<OpenSheetMusicDisplay | null>(null);
@@ -257,7 +263,9 @@ export function ScorePreview({
 
   return (
     <section className="space-y-3 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-      <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">楽譜プレビュー</h3>
+      {showHeading && (
+        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">楽譜プレビュー</h3>
+      )}
       {!rangeFixed && (
         <div className="flex flex-wrap items-end gap-4">
           <label className={INPUT_LABEL_CLASS}>

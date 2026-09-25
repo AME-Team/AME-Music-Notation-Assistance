@@ -167,8 +167,9 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         // 先頭4小節(既定)に音符が描かれている。
         expect(await panel.getByTestId("midi-note").count()).toBeGreaterThan(0);
         await expect(panel).toContainText("先頭4小節のプレビュー");
-        // 楽譜(OSMD)も同じページに出ている。
-        await expect(panel.getByText("楽譜プレビュー")).toBeVisible();
+        // 楽譜(OSMD)も同じページに描画されている。見出しは埋め込み側で消しているため、
+        // 実際に譜面が描かれたこと(SVG)を確かめる。
+        await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
       }
     });
 

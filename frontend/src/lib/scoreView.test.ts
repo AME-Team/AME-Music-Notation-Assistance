@@ -6,6 +6,7 @@ import {
   normalizePreviewBars,
   previewNotes,
   previewPitchRange,
+  previewUnavailableReason,
   previewWindow,
   readStoredPreviewBars,
   storePreviewBars,
@@ -79,10 +80,25 @@ describe("previewWindow", () => {
     expect(previewWindow(makeScore(), 100)?.toBar).toBe(3);
   });
 
-  it("量子化前(音符が無い/divisions不正)は null", () => {
+  it("作れない理由を区別して返す(量子化前/分解能不正/曲が短い)", () => {
     const score = makeScore();
+    // 量子化前はonset_tickが無い = 音符0件と同じ扱い。
     expect(previewWindow({ ...score, parts: [] }, 4)).toBeNull();
-    expect(previewWindow({ ...score, divisions: 0 }, 4)).toBeNull();
+    expect(previewUnavailableReason({ ...score, parts: [] }, 4)).toBe("no-notes");
+    expect(previewUnavailableReason({ ...score, divisions: 0 }, 4)).toBe("invalid-divisions");
+    // 1小節に満たないスコア。
+    expect(
+      previewUnavailableReason(
+        {
+          divisions: 480,
+          time_signatures: [{ bar: 1, numerator: 4, denominator: 4 }],
+          parts: [{ notes: [] }],
+        } as never,
+        4,
+      ),
+    ).toBe("no-notes");
+    // 作れるときは理由はnull。
+    expect(previewUnavailableReason(score, 4)).toBeNull();
   });
 });
 

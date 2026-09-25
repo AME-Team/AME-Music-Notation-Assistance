@@ -1,7 +1,12 @@
 import { runQuantizeStage } from "../api/client";
 import { scoreKey, useScore } from "../hooks/useScore";
 import { useStageRunner } from "../hooks/useStageRunner";
-import { PREVIEW_BARS_CHOICES, previewNotes, previewWindow } from "../lib/scoreView";
+import {
+  PREVIEW_BARS_CHOICES,
+  previewNotes,
+  previewUnavailableReason,
+  previewWindow,
+} from "../lib/scoreView";
 import { useScoreViewStore } from "../stores/scoreViewStore";
 import { MidiBar } from "./MidiBar";
 import { ScorePreview } from "./ScorePreview";
@@ -12,6 +17,13 @@ interface ScoreViewPanelProps {
 
 /** パネルはノート選択を持たないため、再レンダーで作り直さないよう固定する。 */
 const NO_SELECTION: ReadonlySet<number> = new Set();
+
+/** 表示できない理由ごとの案内文(1つに丸めると誤誘導になる)。 */
+const UNAVAILABLE_MESSAGE = {
+  "no-notes": "④クオンタイズが完了すると表示できます(音符にtickがまだ付いていません)。",
+  "invalid-divisions": "スコアの分解能(divisions)が不正なため、小節単位で表示できません。",
+  "too-short": "曲が1小節に満たないため、小節単位のプレビューを作れません。",
+} as const;
 
 /**
  * #172: **全ての作業ページ**に常設する「先頭N小節プレビュー」。
@@ -37,6 +49,7 @@ export function ScoreViewPanel({ projectId }: ScoreViewPanelProps) {
   });
 
   const barWindow = score ? previewWindow(score, bars) : null;
+  const unavailableReason = score && !barWindow ? previewUnavailableReason(score, bars) : null;
   const notes = score && barWindow ? previewNotes(score, barWindow) : [];
 
   return (
@@ -90,9 +103,9 @@ export function ScoreViewPanel({ projectId }: ScoreViewPanelProps) {
         </p>
       )}
 
-      {score && !barWindow && (
+      {score && unavailableReason && (
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          ④クオンタイズが完了すると表示できます(音符に音符位置(tick)がまだ付いていません)。
+          {UNAVAILABLE_MESSAGE[unavailableReason]}
         </p>
       )}
 
@@ -110,6 +123,7 @@ export function ScoreViewPanel({ projectId }: ScoreViewPanelProps) {
             selectedNoteIds={NO_SELECTION}
             fromBar={1}
             toBar={barWindow.toBar}
+            showHeading={false}
           />
         </div>
       )}
