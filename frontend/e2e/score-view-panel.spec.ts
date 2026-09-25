@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { _electron as electron, expect, test } from "@playwright/test";
+import { type ElectronApplication, _electron as electron, expect, test } from "@playwright/test";
 
 // package.json の "type": "module" により __dirname は使えないため import.meta.url から導出する。
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -65,7 +65,10 @@ function buildScore() {
     key_signatures: [],
     chords: [],
     parts: [{ id: "piano", name: "Piano", notes }],
-    meta: { stages: {} },
+    // #174: バックエンドが量子化時に残す「実際に適用した設定」。
+    meta: {
+      stages: { quantize: { settings: { min_value: "1/16", strength: 1, enabled: true } } },
+    },
     next_note_id: notes.length + 1,
   };
 }
@@ -85,10 +88,15 @@ function buildMusicXml(): string {
   );
 }
 
-/** 指定秒数の無音WAV(8kHz・モノラル・16bit)を書く。 */
-function makeSilentWavFile(seconds: number): string {
+/**
+ * 指定秒数の無音WAV(8kHz・モノラル・16bit)を書く。
+ *
+ * `filename`を指定できるのは、同じ実行のワークスペースを共有する2つ目の
+ * テストが、1つ目のテストのプロジェクト名と衝突しないようにするため。
+ */
+function makeSilentWavFile(seconds: number, filename = "preview.wav"): string {
   const dir = mkdtempSync(path.join(tmpdir(), "ame-e2e-"));
-  const filePath = path.join(dir, "preview.wav");
+  const filePath = path.join(dir, filename);
   const dataSize = Math.round(seconds * SAMPLE_RATE) * 2;
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
@@ -144,7 +152,11 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
 
     // 表示小節数はlocalStorageに残るため、前回実行の値を持ち越さないよう初期化する
     // (このアプリのウィンドウは仕様上リロードできる。#172の既定は4小節)。
-    await page.evaluate(() => window.localStorage.removeItem("ame.scoreView.bars"));
+    await page.evaluate(() => {
+      window.localStorage.removeItem("ame.scoreView.bars");
+      // #174: 量子化の設定も前回実行の値を持ち越さない。
+      window.localStorage.removeItem("ame.quantize");
+    });
     await page.reload();
     await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({ timeout: 30_000 });
 
@@ -180,6 +192,10 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
           await expect(panel).toContainText("パネルはMIDIバーのみ表示します");
         } else {
           await expect(panel).toContainText("先頭4小節のプレビュー(MIDI・楽譜)");
+          // #174: 量子化の既定は16分音符・強さ100%・有効。現在値がその場に出る。
+          await expect(panel.getByTestId("quantize-summary")).toContainText(
+            "16分音符・強さ100%・クオンタイズON",
+          );
           await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
         }
         // ④を再実行してよいのは①〜④のページだけ(⑤以降の手動補正を上書きしない)。
@@ -205,6 +221,134 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
     await test.step("パネルが全ページで閉じずに残っている(設定変更後も)", async () => {
       await steps.nth(0).click();
       await expect(panel).toContainText("先頭8小節のプレビュー");
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+/** ネイティブメニューの「編集 > 設定」を実行する(mainプロセス側で操作)。 */
+async function clickSettingsMenuItem(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ Menu }) => {
+    const edit = Menu.getApplicationMenu()?.items.find((item) => item.label === "編集");
+    const settings = edit?.submenu?.items.find((item) => item.label === "設定");
+    if (!settings) throw new Error("ネイティブメニューに 編集 > 設定 が見つかりません");
+    settings.click();
+  });
+}
+
+test("quantize settings (min note value, strength, on/off) reach the panel and the job (#174)", async () => {
+  const mainPath = path.join(__dirname, "..", "dist-electron", "main.js");
+  const app = await electron.launch({
+    args: [mainPath],
+    env: { ...process.env, AME_E2E_DISABLE_CSP_HEADER: "1" },
+  });
+  const page = await app.firstWindow();
+  try {
+    await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({ timeout: 30_000 });
+
+    await page.route("**/score/preview.musicxml", (route) =>
+      route.fulfill({ status: 200, contentType: "application/xml", body: buildMusicXml() }),
+    );
+    await page.route(/\/api\/projects\/[^/]+\/score$/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(buildScore()),
+      }),
+    );
+    await page.route(/\/api\/projects\/[^/]+$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const body = await response.json();
+      const doneStage = { status: "succeeded", progress: 1, stale: false };
+      body.stages = {
+        separate: doneStage,
+        beat: doneStage,
+        transcribe: doneStage,
+        quantize: doneStage,
+      };
+      return route.fulfill({ response, json: body });
+    });
+
+    // #174: 量子化の設定もlocalStorageに残るため、前回実行の値を持ち越さない。
+    await page.evaluate(() => {
+      window.localStorage.removeItem("ame.quantize");
+      window.localStorage.removeItem("ame.scoreView.bars");
+    });
+    await page.reload();
+    await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({ timeout: 30_000 });
+
+    const panel = page.getByTestId("score-view-panel");
+
+    await test.step("プロジェクトを作成して①を開く", async () => {
+      await page
+        .getByLabel("音声ファイルを選択")
+        .setInputFiles(makeSilentWavFile(DURATION_SEC, "settings.wav"));
+      await expect(page.getByText("settings.wav")).toBeVisible({ timeout: 20_000 });
+      // リロード後は前回のプロジェクトが開いた状態で戻ることがあるため、
+      // パネルが出ていなければ一覧からプロジェクトを開く。
+      if (!(await panel.isVisible())) {
+        await page.getByText("settings.wav").first().click();
+      }
+      await page
+        .getByRole("button", { name: /^\d+\. / })
+        .nth(0)
+        .click();
+      await expect(panel).toBeVisible({ timeout: 20_000 });
+    });
+
+    await test.step("設定モーダルで最小音符単位・強さ・入切を変える", async () => {
+      await clickSettingsMenuItem(app);
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible();
+      await dialog.getByTestId("quantize-strength").fill("40");
+      await dialog.getByLabel("32分音符").check();
+      await dialog.getByTestId("quantize-enabled").check();
+      await expect(dialog.getByTestId("quantize-strength-value")).toHaveText("40%");
+      await dialog.getByRole("button", { name: "閉じる" }).click();
+      await expect(dialog).toBeHidden();
+    });
+
+    await test.step("パネルが現在の量子化設定を表示する", async () => {
+      // 保存値(次回の実行)と、スコアに記録された適用済みの設定を出し分ける。
+      await expect(panel.getByTestId("quantize-summary")).toContainText(
+        "適用中: 16分音符・強さ100%・クオンタイズON / 次回の実行: 32分音符・強さ40%・クオンタイズON",
+      );
+    });
+
+    await test.step("設定はリロード後も維持される", async () => {
+      await page.reload();
+      await expect(page.getByText("AME Music Notation Assistance")).toBeVisible({
+        timeout: 30_000,
+      });
+      await page.getByText("settings.wav").click();
+      await page
+        .getByRole("button", { name: /^\d+\. / })
+        .nth(0)
+        .click();
+      await expect(panel.getByTestId("quantize-summary")).toContainText(
+        "次回の実行: 32分音符・強さ40%・クオンタイズON",
+      );
+    });
+
+    await test.step("④の再実行が設定をパラメータで送る", async () => {
+      let posted: { params?: Record<string, unknown> } | null = null;
+      await page.route("**/stages/quantize/run", async (route) => {
+        posted = JSON.parse(route.request().postData() ?? "{}");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ job_id: "job_settings" }),
+        });
+      });
+      await panel.getByRole("button", { name: "ビート補正を反映して更新" }).click();
+      await expect.poll(() => posted).not.toBeNull();
+      expect(posted?.params).toMatchObject({
+        quantize_min_value: "1/32",
+        quantize_strength: 0.4,
+        quantize_enabled: true,
+      });
     });
   } finally {
     await app.close();

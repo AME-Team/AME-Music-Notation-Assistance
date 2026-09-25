@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import pytest
 from app.pipeline.quantize import (
+    DEFAULT_MIN_VALUE,
     DEFAULT_TOP_N,
+    MIN_VALUE_CHOICES,
+    QuantizeSettings,
     beat_tick_anchors,
     detect_swing_ratio,
     quantize_note_onsets,
@@ -450,3 +453,93 @@ class TestQuantizePedalTicks:
         )
         start_tick, stop_tick = result[0]
         assert stop_tick > start_tick
+
+
+class TestQuantizeSettings:
+    """#174: 最小音符単位とクオンタイズの強さ/入切。"""
+
+    # 1/32格子(60tick)ちょうどのオンセット。120bpm・4/4なので1拍=0.5秒=480tick。
+    _ONETICK32_SEC = 0.0625
+    _NOTES = [(1, _ONETICK32_SEC, 0.5)]
+
+    def _quantize(self, **kwargs) -> dict:
+        settings = QuantizeSettings(**kwargs) if kwargs else None
+        return quantize_note_onsets(
+            self._NOTES,
+            _BEATS_120BPM_4_4,
+            _TIME_SIGNATURES_4_4,
+            divisions=480,
+            settings=settings,
+        )
+
+    def test_raw_position_is_a_thirty_second_note(self) -> None:
+        anchors = beat_tick_anchors(_BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, 480)
+        assert seconds_to_raw_tick(self._ONETICK32_SEC, anchors) == pytest.approx(60.0)
+
+    def test_default_min_value_is_sixteenth(self) -> None:
+        assert DEFAULT_MIN_VALUE == "1/16"
+        assert QuantizeSettings().min_value == "1/16"
+        assert "1/16" in MIN_VALUE_CHOICES
+
+    def test_min_value_excludes_finer_grids_from_candidates(self) -> None:
+        # 既定(16分)では1/32・1/16Tは候補にならない。
+        result = self._quantize()
+        resolutions = {c.resolution for c in result[1].snap_candidates}
+        # 1/8T(除数3 = 全音符の1/12)は1/16(同1/16)より粗いので残る。落ちるのは
+        # 1/16T(1/24)と1/32(1/32)で、判定は除数ではなく「格子の細かさ」で行う。
+        assert resolutions <= {"1/4", "1/8", "1/8T", "1/16"}
+        # 60tickは0tick(小節頭・強拍)と120tickの中間なので、重みで小節頭が選ばれる。
+        assert result[1].onset_tick == 0
+
+    def test_min_value_allows_the_named_grid(self) -> None:
+        # 最小音符単位を1/32にすれば、1/32格子の60tickのまま残せる。
+        assert self._quantize(min_value="1/32")[1].onset_tick == 60
+
+    def test_strength_blends_between_raw_and_snapped(self) -> None:
+        # 強さ0.5: 生60tickとスナップ先0tickの中間=30tick。音価は0.5秒=480tickのまま。
+        result = self._quantize(strength=0.5)
+        assert result[1].onset_tick == 30
+        assert result[1].duration_tick == 480
+
+    def test_disabled_keeps_the_raw_position(self) -> None:
+        # 入切OFF(または強さ0)は生位置と生音価のまま。
+        result = self._quantize(enabled=False)
+        assert result[1].onset_tick == 60
+        assert result[1].duration_tick == 480
+
+    def test_default_settings_equal_an_explicit_default(self) -> None:
+        assert (
+            self._quantize()[1]
+            == self._quantize(min_value="1/16", strength=1.0, enabled=True)[1]
+        )
+
+    def test_invalid_min_value_raises_with_context(self) -> None:
+        with pytest.raises(ValueError, match="最小音符単位"):
+            QuantizeSettings(min_value="1/3")
+
+    def test_out_of_range_strength_raises(self) -> None:
+        with pytest.raises(ValueError, match="強さ"):
+            QuantizeSettings(strength=1.5)
+
+    def test_hash_payload_uses_the_effective_strength(self) -> None:
+        """無効(enabled=False)のときは強さが出力に影響しないので、ハッシュも同じ。
+
+        強さだけを変えた無意味な再実行を避ける(LOWレビュー指摘)。
+        """
+        off_0 = QuantizeSettings(strength=0.0, enabled=False).hash_payload()
+        off_100 = QuantizeSettings(strength=1.0, enabled=False).hash_payload()
+        assert off_0 == off_100
+        # 有効にすれば強さは効くので、ハッシュも変わる。
+        on_0 = QuantizeSettings(strength=0.0, enabled=True).hash_payload()
+        assert on_0 != off_0
+        # 最小音符単位は無効時も snap_candidates を変えるため、常にハッシュに含む。
+        assert QuantizeSettings(min_value="1/8", enabled=False).hash_payload() != off_0
+
+    def test_metadata_shape_for_the_ui(self) -> None:
+        assert QuantizeSettings(
+            min_value="1/8", strength=0.5, enabled=False
+        ).as_metadata() == {
+            "min_value": "1/8",
+            "strength": 0.5,
+            "enabled": False,
+        }

@@ -40,7 +40,14 @@ from app.domain.score import (
 )
 from app.infra import storage
 from app.pipeline.beat import run_beat_estimation
-from app.pipeline.quantize import DEFAULT_TOP_N, quantize_note_onsets, quantize_pedal_ticks
+from app.pipeline.quantize import (
+    DEFAULT_MIN_VALUE,
+    DEFAULT_QUANTIZE_STRENGTH,
+    DEFAULT_TOP_N,
+    QuantizeSettings,
+    quantize_note_onsets,
+    quantize_pedal_ticks,
+)
 from app.pipeline.refine.baseline import RefineNoteInput, estimate_key_fifths, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
 from app.pipeline.transcribe.bass import BASS_ALGO_VERSION, run_bass_transcription
@@ -97,6 +104,35 @@ def _reset_undo_history_or_warn(workspace_dir: Path, project_id: str) -> None:
             f"[dsp_main] warning: failed to reset undo history for project {project_id}: {exc}",
             file=sys.stderr,
         )
+
+
+def _quantize_settings_from_params(params: dict) -> QuantizeSettings:
+    """ジョブの`params`から量子化の適用設定を取り出す(#174)。
+
+    キーは `quantize_min_value` / `quantize_strength` / `quantize_enabled`。
+    未指定は既定(16分音符・強さ1.0・有効)。未知の最小音符単位や範囲外の強さは
+    `QuantizeSettings`が例外を投げるので、ここで文脈付きの`ValueError`へ包む
+    (`_beatmap_time_signatures`と同じ方針: 境界で検証し、原因を値とともに出す)。
+    """
+    min_value = params.get("quantize_min_value", DEFAULT_MIN_VALUE)
+    strength = params.get("quantize_strength", DEFAULT_QUANTIZE_STRENGTH)
+    enabled = params.get("quantize_enabled", True)
+    # `bool("false")`はTrueになるため、真偽値だけを受け付ける(LOWレビュー指摘:
+    # API経由の文字列で無効化の意図が黙って無視されるのを避ける)。
+    if not isinstance(enabled, bool):
+        raise ValueError(f"quantize_enabledは真偽値(true/false)で指定してください: {enabled!r}")
+    try:
+        return QuantizeSettings(
+            min_value=str(min_value),
+            strength=float(strength),
+            enabled=bool(enabled),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "量子化設定が不正です: "
+            f"quantize_min_value={min_value!r} quantize_strength={strength!r} "
+            f"quantize_enabled={enabled!r} ({type(exc).__name__}: {exc})"
+        ) from exc
 
 
 def _beatmap_time_signatures(beatmap: dict) -> list[TimeSignatureEntry]:
@@ -458,7 +494,9 @@ _SINGLE_STAFF_STEM_NAMES = frozenset(QUANTIZABLE_STEM_NAMES) - {PIANO_STEM_NAME}
 # 再実行されて`ScoreIR`が更新される(`beatmap.json`の拍子・テンポの取り込みは
 # 「入力が同じでも出力が変わる」変更のため、`transcribe`の`*_ALGO_VERSION`と同じ
 # 仕組みで明示的に再計算させる)。v2: 拍子・テンポを`ScoreIR`へ取り込む修正。
-QUANTIZE_ALGO_VERSION = 2
+# #174: 最小音符単位・クオンタイズの強さ/入切を導入したため2→3(出力が変わる
+# ので、既存プロジェクトも一度は再実行される)。
+QUANTIZE_ALGO_VERSION = 3
 
 
 def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
@@ -1067,6 +1105,8 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     実際には単一譜表しか持たないため`single_staff=True`を渡す。
     """
     force = params.get("force", False)
+    # #174: 最小音符単位・適用度合い(入切と強さ)はジョブのparamsで受け取る。
+    settings = _quantize_settings_from_params(params)
     emit({"job_id": job_id, "stage": "quantize", "progress": 0.0, "message": "quantizing"})
 
     beatmap_file = storage.beatmap_path(workspace_dir, project_id)
@@ -1147,6 +1187,10 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
             "divisions": score.divisions,
             "music21_version": music21_version,
             "quantize_algo_version": QUANTIZE_ALGO_VERSION,
+            # #174: 量子化の設定もこのステージへの入力なので、変更したら
+            # 再実行されるようにする(設定だけ変えた再実行がスキップされない)。
+            # ハッシュには実効値を使う(`hash_payload`のdocstring参照)。
+            "quantize_settings": settings.hash_payload(),
         },
         sort_keys=True,
     )
@@ -1209,6 +1253,8 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         beatmap.get("time_signatures", []),
         divisions=score.divisions,
         top_n=DEFAULT_TOP_N,
+        # #174: 最小音符単位と適用度合い(入切・強さ)。
+        settings=settings,
     )
     # 調号はスコア全体のノートから一度だけ推定し、全パートで共有する(#56:
     # パートごとに独立推定すると、同じ曲なのにパートごとに異なる調号が
@@ -1319,6 +1365,13 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
         )
         return
 
+    # #174: 実際に適用した設定を ScoreIR の `meta.stages` にも残す(§10.2)。
+    # UIは同じ `/score` 応答から「適用中の設定」を読めるので、保存値(次回適用)と
+    # 取り違えない(MIDDLEレビュー指摘)。
+    score.meta.stages["quantize"] = {
+        "settings": settings.as_metadata(),
+        "quantize_algo_version": QUANTIZE_ALGO_VERSION,
+    }
     score_service.write_score(project_id, score)
     _reset_undo_history_or_warn(workspace_dir, project_id)
     storage.write_stage_metadata(
@@ -1330,6 +1383,9 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
             "music21": music21_version,
             "quantize_algo_version": str(QUANTIZE_ALGO_VERSION),
         },
+        # #174: 実際に適用した設定を残し、UIが「今どの設定で量子化されたか」を
+        # 表示できるようにする。
+        extra={"quantize_settings": settings.as_metadata()},
     )
     total_notes = len(all_active_notes)
     parts_summary = ", ".join(

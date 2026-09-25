@@ -242,9 +242,17 @@ export async function runTranscribeStage(projectId: string): Promise<{ job_id: s
   return runStage(projectId, "transcribe", {});
 }
 
-/** #25/#26: Stage 4 決定論的クオンタイズ + L0整音を実行する。 */
-export async function runQuantizeStage(projectId: string): Promise<{ job_id: string }> {
-  return runStage(projectId, "quantize", {});
+/**
+ * #25/#26: Stage 4 決定論的クオンタイズ + L0整音を実行する。
+ *
+ * #174: 最小音符単位・クオンタイズの強さ/入切をパラメータで渡せる
+ * (`lib/quantizeSettings.ts`の`toStageParams`を参照)。
+ */
+export async function runQuantizeStage(
+  projectId: string,
+  params: Record<string, unknown> = {},
+): Promise<{ job_id: string }> {
+  return runStage(projectId, "quantize", params);
 }
 
 export type ExportFormat = "musicxml" | "midi";

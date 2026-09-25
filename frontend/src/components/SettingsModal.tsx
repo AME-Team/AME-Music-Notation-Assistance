@@ -1,7 +1,9 @@
 import { useRef } from "react";
 import { useDialogA11y } from "../hooks/useDialogA11y";
+import { minValueLabel, QUANTIZE_MIN_VALUE_CHOICES } from "../lib/quantizeSettings";
 import { PREVIEW_BARS_CHOICES } from "../lib/scoreView";
 import { THEME_LABEL, type ThemeMode } from "../lib/theme";
+import { useQuantizeStore } from "../stores/quantizeStore";
 import { useScoreViewStore } from "../stores/scoreViewStore";
 import { useThemeStore } from "../stores/themeStore";
 
@@ -39,6 +41,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const setTheme = useThemeStore((s) => s.setTheme);
   const previewBars = useScoreViewStore((s) => s.bars);
   const setPreviewBars = useScoreViewStore((s) => s.setBars);
+  // #174: 量子化の適用設定(最小音符単位・強さ・入切)。
+  const quantizeSettings = useQuantizeStore((s) => s.settings);
+  const updateQuantizeSettings = useQuantizeStore((s) => s.update);
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogA11y(dialogRef, open, onClose);
 
@@ -119,6 +124,60 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               </label>
             ))}
           </div>
+        </fieldset>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium text-gray-700 dark:text-gray-200">
+            クオンタイズ(縦位置の自動整列)
+          </legend>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            MIDIと楽譜で扱う最小音符単位(既定は16分音符)と、格子へ寄せる強さです。
+            ④クオンタイズと先頭N小節プレビューの更新に効きます。
+          </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {QUANTIZE_MIN_VALUE_CHOICES.map((value) => (
+              <label
+                key={value}
+                className={`${OPTION_CLASS} ${quantizeSettings.minValue === value ? SELECTED_CLASS : UNSELECTED_CLASS}`}
+              >
+                <input
+                  type="radio"
+                  name="quantize-min-value"
+                  value={value}
+                  checked={quantizeSettings.minValue === value}
+                  onChange={() => updateQuantizeSettings({ minValue: value })}
+                />
+                {minValueLabel(value)}
+              </label>
+            ))}
+          </div>
+          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+            <input
+              type="checkbox"
+              data-testid="quantize-enabled"
+              checked={quantizeSettings.enabled}
+              onChange={(event) => updateQuantizeSettings({ enabled: event.target.checked })}
+            />
+            クオンタイズする(外すと生の演奏位置のまま)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+            強さ
+            <input
+              type="range"
+              data-testid="quantize-strength"
+              min={0}
+              max={100}
+              step={5}
+              value={quantizeSettings.strengthPercent}
+              onChange={(event) =>
+                updateQuantizeSettings({ strengthPercent: Number(event.target.value) })
+              }
+              className="w-48"
+            />
+            <span className="tabular-nums" data-testid="quantize-strength-value">
+              {quantizeSettings.strengthPercent}%
+            </span>
+          </label>
         </fieldset>
       </div>
     </div>

@@ -32,6 +32,101 @@ _GRID_DIVISOR_BY_RESOLUTION: dict[str, int] = {
     "1/32": 8,
 }
 
+# #174: 最小音符単位(= これより細かい格子は使わない)。値は「四分音符を何等分
+# するか」の除数(`_GRID_DIVISOR_BY_RESOLUTION`の値)で表す。例: "1/16" なら4分
+# 音符の4等分までで、1/16T(6)や1/32(8)は候補から外れる。
+_MIN_VALUE_DIVISOR: dict[str, int] = {
+    "1/4": 1,
+    "1/8": 2,
+    "1/16": 4,
+    "1/32": 8,
+}
+
+# 最小音符単位の既定値(#174: デフォルトは16分音符)。
+DEFAULT_MIN_VALUE = "1/16"
+
+# UIへ渡す選択肢(粗い順)。
+MIN_VALUE_CHOICES: tuple[str, ...] = tuple(_MIN_VALUE_DIVISOR)
+
+# クオンタイズの適用度合いの既定値(#174)。1.0で完全に格子へ寄せ、0.0で生位置の
+# まま。`enabled=False` は 0.0 と同じ扱い。
+DEFAULT_QUANTIZE_STRENGTH = 1.0
+
+# スウィング候補("1/8-swing")が乗る格子の除数(オフビート8分音符=2)。
+_SWING_BASE_DIVISOR = 2
+
+
+def max_divisor_for(min_value: str) -> int:
+    """最小音符単位に対応する除数を返す(#174)。未知の値は`ValueError`にする。"""
+    try:
+        return _MIN_VALUE_DIVISOR[min_value]
+    except KeyError as exc:
+        raise ValueError(
+            f"未知の最小音符単位です: {min_value!r} (対応: {', '.join(_MIN_VALUE_DIVISOR)})"
+        ) from exc
+
+
+@dataclass(frozen=True)
+class QuantizeSettings:
+    """量子化の適用設定(#174)。
+
+    `min_value`は最小音符単位(`MIN_VALUE_CHOICES`のいずれか)、`strength`は
+    格子へ寄せる度合い(0.0〜1.0)、`enabled=False`は生位置をそのまま使う。
+    強さは「生tickからスナップ先tickへの線形補間の比率」であり、1.0で従来と
+    同じ完全なスナップになる。
+    """
+
+    min_value: str = DEFAULT_MIN_VALUE
+    strength: float = DEFAULT_QUANTIZE_STRENGTH
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        # 未知の最小音符単位・範囲外の強さを、生成時点で文脈付きで落とす。
+        max_divisor_for(self.min_value)
+        if not 0.0 <= self.strength <= 1.0:
+            raise ValueError(f"クオンタイズの強さは0.0〜1.0です: {self.strength!r}")
+
+    @property
+    def max_divisor(self) -> int:
+        """この設定で許される最も細かい格子の除数。"""
+        return max_divisor_for(self.min_value)
+
+    @property
+    def applied_strength(self) -> float:
+        """実際に格子へ寄せる比率(`enabled=False`なら0.0)。"""
+        return self.strength if self.enabled else 0.0
+
+    def blend(self, raw_tick: float, target_tick: float) -> int:
+        """生tickを目標tickへ寄せた整数tickを返す(#174の強さ)。"""
+        strength = self.applied_strength
+        return round(raw_tick + (target_tick - raw_tick) * strength)
+
+    def hash_payload(self) -> dict[str, object]:
+        """入力ハッシュに含める形。
+
+        `strength`は**実効値**(`enabled=False`なら0.0)で入れる。無効のときに
+        強さだけを変えても出力は同じなので、無意味な再実行を避ける
+        (LOWレビュー指摘)。`min_value`は無効時も`snap_candidates`の内容を
+        変えるため、常に含める。
+        """
+        return {
+            "min_value": self.min_value,
+            "strength": self.applied_strength,
+            "enabled": self.enabled,
+        }
+
+    def as_metadata(self) -> dict[str, object]:
+        """`stage_metadata`へ残す形(UIが「実際に使った設定」を表示できるように)。"""
+        return {
+            "min_value": self.min_value,
+            "strength": self.strength,
+            "enabled": self.enabled,
+        }
+
+
+# 既定の設定(呼び出し側が省略した場合に使う)。
+DEFAULT_QUANTIZE_SETTINGS = QuantizeSettings()
+
 # 拍上の重み(§7.1「強拍ほど良い」)の判定に使う、四分音符の細分レベル。
 # 昇順(粗い=強い拍から)に並べ、tickがそのレベルの格子に厳密に乗っていれば
 # そのレベルの重みを採用する(最初に一致したレベル、すなわち最も粗い=最も強い
@@ -197,6 +292,7 @@ def _snap_candidates_for_tick(
     *,
     swing_ratio: float | None,
     top_n: int,
+    max_divisor: int,
 ) -> list[SnapCandidateResult]:
     """1ノート分のスナップ候補を生成・採点し、上位`top_n`件を返す(#25)。
 
@@ -209,6 +305,9 @@ def _snap_candidates_for_tick(
     """
     candidates: list[tuple[str, int, float]] = []
     for resolution, divisor in _GRID_DIVISOR_BY_RESOLUTION.items():
+        # #174: 最小音符単位より細かい格子は候補にしない(除数が大きい=細かい)。
+        if divisor > max_divisor:
+            continue
         grid = divisions / divisor
         snapped = round(raw_tick / grid) * grid
         error = round(abs(snapped - raw_tick), _ERROR_ROUNDING_NDIGITS)
@@ -216,7 +315,9 @@ def _snap_candidates_for_tick(
         score = weight * _WEIGHT_TIEBREAK_SCALE - error
         candidates.append((resolution, round(snapped), score))
 
-    if swing_ratio is not None:
+    # #174: スウィング候補はオフビート8分音符(=除数2)なので、最小音符単位が
+    # それより粗い場合は提示しない。
+    if swing_ratio is not None and max_divisor >= _SWING_BASE_DIVISOR:
         # スウィングしたオフビート位置にも候補を追加する(#25 Swing検出)。
         # 直前の四分音符境界を基準に、スウィング比の位置を候補として提示する。
         quarter_grid = divisions
@@ -296,6 +397,7 @@ def quantize_note_onsets(
     *,
     divisions: int = DEFAULT_DIVISIONS,
     top_n: int = DEFAULT_TOP_N,
+    settings: QuantizeSettings | None = None,
 ) -> dict[int, QuantizedNote]:
     """ノート列を量子化する(#25)。
 
@@ -314,7 +416,12 @@ def quantize_note_onsets(
     `onset_tick` と重なりうる/選択分解能と無関係な半端な長さになる)。それでも
     実測ノート長を丸めるだけなので、隣接ノートとの重なりを完全には排除しない
     (完全な音価表記への変換はMusicXMLエクスポート側/L0の責務)。
+
+    `settings`(#174)で最小音符単位と適用度合いを指定する。省略時は既定
+    (16分音符・強さ1.0・有効=従来と同じ完全なスナップ)。
     """
+    if settings is None:
+        settings = DEFAULT_QUANTIZE_SETTINGS
     anchors = beat_tick_anchors(beats, time_signatures, divisions)
     raw_ticks = {
         note_id: _seconds_to_raw_tick(onset_sec, anchors) for note_id, onset_sec, _ in notes
@@ -327,7 +434,11 @@ def quantize_note_onsets(
         raw_offset_tick = _seconds_to_raw_tick(onset_sec + duration_sec, anchors)
 
         candidates = _snap_candidates_for_tick(
-            raw_onset_tick, divisions, swing_ratio=swing_ratio, top_n=top_n
+            raw_onset_tick,
+            divisions,
+            swing_ratio=swing_ratio,
+            top_n=top_n,
+            max_divisor=settings.max_divisor,
         )
         best = candidates[0]
         if best.resolution in _GRID_DIVISOR_BY_RESOLUTION:
@@ -336,12 +447,18 @@ def quantize_note_onsets(
             # "1/8-swing" 等、ラベルから直接格子幅を引けない候補は、選択済みの
             # onset_tick自身が乗っている格子を逆算する(#25-M2レビュー指摘)。
             offset_grid = _offset_grid_containing_tick(best.tick, divisions)
+        # #174: 終端の丸め先も最小音符単位より細かくしない(`max`は粗い方を選ぶ)。
+        offset_grid = max(offset_grid, divisions / settings.max_divisor)
         quantized_offset_tick = round(raw_offset_tick / offset_grid) * offset_grid
-        duration_tick = max(round(quantized_offset_tick - best.tick), 1)
+        # #174: 強さ(0.0〜1.0)だけスナップ先へ寄せる。1.0なら従来と同じ完全な
+        # スナップ、0.0(または`enabled=False`)なら生位置のまま。
+        onset_tick = settings.blend(raw_onset_tick, best.tick)
+        offset_tick = settings.blend(raw_offset_tick, quantized_offset_tick)
+        duration_tick = max(offset_tick - onset_tick, 1)
 
         result[note_id] = QuantizedNote(
             note_id=note_id,
-            onset_tick=best.tick,
+            onset_tick=onset_tick,
             duration_tick=duration_tick,
             snap_candidates=candidates,
             selected_snap=best.id,

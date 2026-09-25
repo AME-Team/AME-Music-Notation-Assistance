@@ -1381,6 +1381,98 @@ def test_quantize_stage_skips_when_input_unchanged(
     assert call_count == 1  # 2回目はハッシュ一致でスキップされる
 
 
+def test_quantize_stage_applies_settings_and_reruns_on_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#174: 最小音符単位とクオンタイズの強さが実際のtickに効き、設定変更で再実行される。"""
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        # 1/32格子(60tick)ちょうどのオンセット(120bpm・4/4で0.0625秒)。
+        _fake_transcription_result([(0.0625, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    from app.pipeline.quantize import quantize_note_onsets as _original_quantize
+
+    call_count = 0
+
+    def _counting_quantize(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return _original_quantize(*args, **kwargs)
+
+    monkeypatch.setattr(dsp_main, "quantize_note_onsets", _counting_quantize)
+    service = ScoreService(workspace_dir=tmp_path)
+
+    # 既定(16分・強さ1.0): 60tickは小節頭(0tick)へ寄る。
+    dsp_main.run_quantize_stage("job2", project_id, tmp_path, {})
+    part = service.read_score(project_id).find_part("piano")
+    assert part is not None
+    assert part.notes[0].onset_tick == 0
+
+    # 設定を変えた再実行はスキップされない。強さ0.5なら生60tickとスナップ先0tickの
+    # 中間=30tickになり、生のonset_secは変わらない。
+    dsp_main.run_quantize_stage(
+        "job3", project_id, tmp_path, {"quantize_strength": 0.5}
+    )
+    part = service.read_score(project_id).find_part("piano")
+    assert part is not None
+    assert part.notes[0].onset_tick == 30
+    assert part.notes[0].onset_sec == pytest.approx(0.0625)
+
+    # 同じ設定での再実行はハッシュ一致でスキップされる。
+    dsp_main.run_quantize_stage(
+        "job4", project_id, tmp_path, {"quantize_strength": 0.5}
+    )
+    assert call_count == 2
+
+    # 実際に使った設定は stage_metadata に残る(UIが「今の設定」を表示できる)。
+    meta = storage.read_json(
+        storage.stage_metadata_path(tmp_path, project_id, "quantize")
+    )
+    assert meta["extra"]["quantize_settings"]["strength"] == 0.5
+    assert meta["extra"]["quantize_settings"]["min_value"] == "1/16"
+
+    # 「実際に適用した設定」はスコアの meta.stages にも残る(UIが /score 応答から
+    # 読めるように。#174レビュー指摘)。
+    written = service.read_score(project_id)
+    assert written.meta.stages["quantize"]["settings"]["strength"] == 0.5
+    assert written.meta.stages["quantize"]["settings"]["enabled"] is True
+
+
+def test_quantize_stage_rejects_invalid_settings(tmp_path: Path) -> None:
+    """#174: 未知の最小音符単位は、値とともに`ValueError`で落ちる。"""
+    project_id = "proj_bad_settings"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_beatmap(tmp_path, project_id)
+
+    with pytest.raises(ValueError, match="量子化設定が不正"):
+        dsp_main.run_quantize_stage(
+            "job1", project_id, tmp_path, {"quantize_min_value": "1/3"}
+        )
+
+    with pytest.raises(ValueError, match="量子化設定が不正"):
+        dsp_main.run_quantize_stage(
+            "job2", project_id, tmp_path, {"quantize_strength": 1.5}
+        )
+
+    # `bool("false")`はTrueになるため、真偽値以外は受け付けない(LOWレビュー指摘)。
+    with pytest.raises(ValueError, match="真偽値"):
+        dsp_main.run_quantize_stage(
+            "job3", project_id, tmp_path, {"quantize_enabled": "false"}
+        )
+
+    with pytest.raises(ValueError, match="真偽値"):
+        dsp_main.run_quantize_stage(
+            "job4", project_id, tmp_path, {"quantize_enabled": None}
+        )
+
+
 def test_quantize_stage_reruns_if_pedals_change_even_if_notes_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
