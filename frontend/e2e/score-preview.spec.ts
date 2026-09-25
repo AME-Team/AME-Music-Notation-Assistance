@@ -186,7 +186,8 @@ test("score preview keeps the app alive when the sheet fails to render (#160)", 
     // UI刷新でプロジェクト選択中はヘッダーがプロジェクト名表示に変わるため、
     // 「プロジェクト一覧に戻る」ボタン(常設)の健在で生存を確認する。
     await expect(page.getByRole("button", { name: /プロジェクト一覧/ })).toBeVisible();
-    await expect(page.getByText("楽譜プレビュー")).toBeVisible();
+    // #172: 同じ見出しが常設の先頭N小節パネル側にも出るため、既存のプレビューを指す。
+    await expect(page.getByText("楽譜プレビュー").first()).toBeVisible();
   } finally {
     await app.close();
   }

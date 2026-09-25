@@ -1,6 +1,8 @@
 import { useRef } from "react";
 import { useDialogA11y } from "../hooks/useDialogA11y";
+import { PREVIEW_BARS_CHOICES } from "../lib/scoreView";
 import { THEME_LABEL, type ThemeMode } from "../lib/theme";
+import { useScoreViewStore } from "../stores/scoreViewStore";
 import { useThemeStore } from "../stores/themeStore";
 
 // 枠線は「幅・線種」だけを共通にし、**色は選択状態ごとに排他**で指定する。
@@ -35,6 +37,8 @@ interface SettingsModalProps {
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const theme = useThemeStore((s) => s.theme);
   const setTheme = useThemeStore((s) => s.setTheme);
+  const previewBars = useScoreViewStore((s) => s.bars);
+  const setPreviewBars = useScoreViewStore((s) => s.setBars);
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogA11y(dialogRef, open, onClose);
 
@@ -86,6 +90,32 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                   onChange={() => setTheme(mode)}
                 />
                 {THEME_LABEL[mode]}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-1">
+          <legend className="text-sm font-medium text-gray-700 dark:text-gray-200">
+            先頭N小節プレビュー
+          </legend>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            すべての作業ページに出す「先頭N小節のMIDIと楽譜」の小節数です(既定は4小節)。
+          </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {PREVIEW_BARS_CHOICES.map((value) => (
+              <label
+                key={value}
+                className={`${OPTION_CLASS} ${previewBars === value ? SELECTED_CLASS : UNSELECTED_CLASS}`}
+              >
+                <input
+                  type="radio"
+                  name="preview-bars"
+                  value={value}
+                  checked={previewBars === value}
+                  onChange={() => setPreviewBars(value)}
+                />
+                {value} 小節
               </label>
             ))}
           </div>
