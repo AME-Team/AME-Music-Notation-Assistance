@@ -37,11 +37,19 @@ describe("beatClick", () => {
     expect(CLICK_FREQ_HZ.downbeat).toBeGreaterThan(CLICK_FREQ_HZ.beat);
   });
 
-  it("ダウンビートの集合は拍の時刻をそのままキーにする", () => {
-    // 丸めると別の拍と衝突しうるため、JSON由来の数値をそのまま使う。
-    const set = downbeatTimeSet([0.04, 2.04]);
+  it("ダウンビートは拍の時刻へ許容誤差つきで対応付ける", () => {
+    // 返す集合のキーは拍の時刻そのもの(呼び出し側は拍の時刻で引く)。
+    const beatTimes = [0.04, 0.54, 1.04, 1.54, 2.04];
+    const set = downbeatTimeSet(beatTimes, [0.04, 2.04]);
 
     expect(set.has(0.04)).toBe(true);
     expect(set.has(0.54)).toBe(false);
+    // 保存・編集の経路が違って丸めがずれても、同じ拍をダウンビートとみなす
+    // (#173レビュー指摘: 厳密一致に依存すると常に低い音になり無言で壊れる)。
+    const shifted = downbeatTimeSet(beatTimes, [0.0400001, 2.039999]);
+    expect(shifted.has(0.04)).toBe(true);
+    expect(shifted.has(2.04)).toBe(true);
+    // 隣の拍(0.54)はダウンビートではない。
+    expect(downbeatTimeSet(beatTimes, [0.6]).size).toBe(0);
   });
 });

@@ -92,6 +92,8 @@ export function BeatWaveformViewer({
   /** 直前の再生位置(シーク検出用)。 */
   const lastPositionRef = useRef(0);
   const rafRef = useRef(0);
+  /** 予約済みのクリック音(停止時に鳴り残らないよう止める)。 */
+  const scheduledClicksRef = useRef<{ oscillator: OscillatorNode; endAt: number }[]>([]);
 
   // 先読みループと再生ヘッドの更新は毎フレーム走るため、依存する値はrefで読む
   // (レンダーごとに新しい配列やコールバックを依存に入れると、再生中にループが
@@ -112,10 +114,11 @@ export function BeatWaveformViewer({
   const ticks = rulerTicks(view, widthPx);
 
   useEffect(() => {
-    beatTimesRef.current = (beatmap?.beats ?? [])
-      .map((beat) => beat.time_sec)
-      .sort((a, b) => a - b);
-    downbeatSetRef.current = downbeatTimeSet(beatmap?.downbeats_sec ?? []);
+    const beatTimes = (beatmap?.beats ?? []).map((beat) => beat.time_sec).sort((a, b) => a - b);
+    beatTimesRef.current = beatTimes;
+    // ダウンビートは拍の時刻へ許容誤差つきで対応付ける(別経路の丸めで厳密一致が
+    // 崩れると、クリック音の高低が無言で壊れるため。#173レビュー指摘)。
+    downbeatSetRef.current = downbeatTimeSet(beatTimes, beatmap?.downbeats_sec ?? []);
   }, [beatmap]);
 
   useEffect(() => {
@@ -136,6 +139,18 @@ export function BeatWaveformViewer({
     durationRef.current = durationSec;
     onViewChangeRef.current = onViewChange;
   }, [view, span, durationSec, onViewChange]);
+
+  /** 予約済みのクリック音を止める(一時停止・先頭へ戻すとき)。 */
+  const stopScheduledClicks = useCallback(() => {
+    for (const entry of scheduledClicksRef.current) {
+      try {
+        entry.oscillator.stop();
+      } catch {
+        // 既に停止した発振器への stop() は環境によって例外になるため無視する。
+      }
+    }
+    scheduledClicksRef.current = [];
+  }, []);
 
   // 原音を認証付きで取得し、Blob URLとして`<audio>`に渡す(`<audio src>`では
   // トークンを送れないため。`AudioPlayer`と同じ理由)。
@@ -171,8 +186,14 @@ export function BeatWaveformViewer({
       audioRef.current?.pause();
       audioRef.current = null;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
+      stopScheduledClicks();
+      // AudioContextを開いたままにすると、画面を往復するたびに蓄積するため閉じる
+      // (#173レビュー指摘)。次に再生したときに作り直す。
+      void audioContextRef.current?.close().catch(() => undefined);
+      audioContextRef.current = null;
+      clickGainRef.current = null;
     };
-  }, [projectId]);
+  }, [projectId, stopScheduledClicks]);
 
   // 目盛りの間引きは実際の表示幅で決めるため、幅を測って追従させる。
   useEffect(() => {
@@ -255,8 +276,15 @@ export function BeatWaveformViewer({
       envelope.gain.exponentialRampToValueAtTime(0.001, startAt + CLICK_DURATION_SEC);
       oscillator.connect(envelope).connect(gain);
       oscillator.start(startAt);
-      oscillator.stop(startAt + CLICK_DURATION_SEC + 0.02);
+      const endAt = startAt + CLICK_DURATION_SEC + 0.02;
+      oscillator.stop(endAt);
       lastClickSecRef.current = timeSec;
+
+      // 鳴り終わった予約は捨てる(停止時にまとめて止められるように保持する)。
+      scheduledClicksRef.current = scheduledClicksRef.current.filter(
+        (entry) => entry.endAt > context.currentTime,
+      );
+      scheduledClicksRef.current.push({ oscillator, endAt });
     }
   }, []);
 
@@ -335,6 +363,8 @@ export function BeatWaveformViewer({
 
     if (isPlaying) {
       audio.pause();
+      // 先読みしていた分が鳴り残らないように止める(#173レビュー指摘)。
+      stopScheduledClicks();
       setIsPlaying(false);
       return;
     }
@@ -356,6 +386,7 @@ export function BeatWaveformViewer({
     audio.currentTime = 0;
     lastClickSecRef.current = Number.NEGATIVE_INFINITY;
     lastPositionRef.current = 0;
+    stopScheduledClicks();
     if (playheadRef.current) {
       playheadRef.current.style.left = "-100%";
       playheadRef.current.style.opacity = "0";

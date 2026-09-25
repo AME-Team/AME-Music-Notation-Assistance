@@ -41,13 +41,40 @@ export const DEFAULT_CLICK_VOLUME = 0.7;
 export const CLICK_LOOKAHEAD_SEC = 0.2;
 
 /**
- * 拍の時刻から「ダウンビートである」ことを引く集合を作る。
+ * ダウンビートと拍の時刻を突き合わせる許容誤差(秒)。
  *
- * `downbeats_sec`と`beats[].time_sec`は同じJSON由来の同じ数値なので、丸めずに
- * そのままキーにしてよい(丸めると別の拍と衝突しうる)。
+ * `downbeats_sec`と`beats[].time_sec`は同じ推定結果から作られるが、保存や編集の
+ * 経路が異なるため、丸めの結果が完全に一致する保証はない。厳密一致(`Set.has`)に
+ * 依存すると、わずかな差で**全てのクリックが低い方の周波数になり**、「小節の頭は
+ * 高く」という仕様が無言で壊れる(#173レビュー指摘)。5msは最速の曲でも隣の拍と
+ * 間違えない十分に小さな値である。
  */
-export function downbeatTimeSet(downbeats: number[]): Set<number> {
-  return new Set(downbeats);
+export const DOWNBEAT_MATCH_TOLERANCE_SEC = 0.005;
+
+/**
+ * 「ダウンビートである拍」の時刻の集合を作る。
+ *
+ * 返すのは`downbeats`ではなく**`beatTimes`側の値**にする。呼び出し側(クリック音の
+ * 予約)は拍の時刻で引くため、キーの空間を揃えないと結局一致しない。
+ *
+ * `beat_in_bar == 1`で判定しないのは、`build_beatmap`の`_assign_bars`が
+ * 「ダウンビートが1つも無いときは先頭ビートを暗黙の小節頭にする」仕様を持ち、
+ * 先頭拍が常に`beat_in_bar == 1`になりうるためである
+ * (`backend/app/pipeline/beatmap_edit.py::rotate_downbeat`のdocstring参照)。
+ */
+export function downbeatTimeSet(
+  beatTimes: number[],
+  downbeats: number[],
+  toleranceSec: number = DOWNBEAT_MATCH_TOLERANCE_SEC,
+): Set<number> {
+  const result = new Set<number>();
+  for (const downbeat of downbeats) {
+    const index = beatIndexAtOrAfter(beatTimes, downbeat - toleranceSec);
+    if (index >= beatTimes.length) continue;
+    const candidate = beatTimes[index];
+    if (Math.abs(candidate - downbeat) <= toleranceSec) result.add(candidate);
+  }
+  return result;
 }
 
 /**
