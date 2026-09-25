@@ -94,6 +94,15 @@ test("beat step plays the audio with beat clicks and shows current values (#171)
         body: JSON.stringify(buildBeatmap()),
       }),
     );
+    // 原音の取得は初回の「再生」まで遅延させる(②を開いただけで数十MBの音源を
+    // 載せない)。その回数を数えて検証する。同じURLはグローバルの再生バー
+    // (`AudioPlayer`)も取得するため、「再生を押す前後で増えること」だけを見る。
+    let audioRequests = 0;
+    let audioRequestsBeforePlay = 0;
+    await page.route("**/audio/original", (route) => {
+      audioRequests += 1;
+      return route.continue();
+    });
     await page.route(/\/api\/projects\/[^/]+$/, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       const response = await route.fetch();
@@ -116,6 +125,7 @@ test("beat step plays the audio with beat clicks and shows current values (#171)
       await expect(page.getByRole("heading", { name: "2. テンポ・拍の検出" })).toBeVisible();
       // 波形(と再生ボタン)が出るまで待つ。
       await expect(page.getByTestId("beat-playhead")).toBeAttached({ timeout: 30_000 });
+      audioRequestsBeforePlay = audioRequests;
     });
 
     const viewer = page.locator("section", { hasText: "波形とビートグリッド" });
@@ -165,6 +175,8 @@ test("beat step plays the audio with beat clicks and shows current values (#171)
       await expect(viewer.getByRole("button", { name: "一時停止" })).toBeVisible({
         timeout: 10_000,
       });
+      // 再生を押した時点で原音を取りに行く(遅延読み込み)。
+      expect(audioRequests).toBeGreaterThan(audioRequestsBeforePlay);
       const position = viewer.getByTestId("beat-position");
       await expect
         .poll(() => position.innerText(), { timeout: 15_000 })

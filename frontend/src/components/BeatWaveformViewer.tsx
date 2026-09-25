@@ -83,8 +83,15 @@ export function BeatWaveformViewer({
   const [clickVolume, setClickVolume] = useState(DEFAULT_CLICK_VOLUME);
   const [followPlayhead, setFollowPlayhead] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  /** 生成した音源の Blob URL(アンマウント時に revoke する)。 */
+  const objectUrlRef = useRef<string | null>(null);
+  /** 音源取得中の通信(アンマウント・プロジェクト切替で中断する)。 */
+  const abortRef = useRef<AbortController | null>(null);
+  /** 読み込み済みの音源がどのプロジェクトのものか。 */
+  const loadedProjectIdRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const clickGainRef = useRef<GainNode | null>(null);
   /** 予約済みの最後の拍(シーク時に数え直す)。 */
@@ -152,48 +159,73 @@ export function BeatWaveformViewer({
     scheduledClicksRef.current = [];
   }, []);
 
-  // 原音を認証付きで取得し、Blob URLとして`<audio>`に渡す(`<audio src>`では
-  // トークンを送れないため。`AudioPlayer`と同じ理由)。
-  useEffect(() => {
-    let objectUrl: string | null = null;
-    let cancelled = false;
+  /**
+   * 原音を認証付きで取得して`<audio>`を作る(`<audio src>`ではトークンを送れないため。
+   * `AudioPlayer`と同じ理由)。
+   *
+   * 取得は**初回の再生まで遅延**させる。②を開いただけで数十MBの音源をメモリへ載せない
+   * ようにするため。通信は`AbortController`で中断でき、画面を離れたらダウンロードも止める
+   * (#173レビュー指摘)。
+   */
+  const ensureAudio = useCallback(async (): Promise<HTMLAudioElement | null> => {
+    if (audioRef.current && loadedProjectIdRef.current === projectId) return audioRef.current;
+    if (abortRef.current) return null;
 
-    async function load() {
-      try {
-        const { baseUrl, token } = await getBackendInfo();
-        const headers = new Headers();
-        if (token) headers.set("X-AME-Token", token);
-        const resp = await fetch(`${baseUrl}/api/projects/${projectId}/audio/original`, {
-          headers,
-        });
-        if (!resp.ok) throw new Error(`音源の読み込みに失敗しました (${resp.status})`);
-        const blob = await resp.blob();
-        if (cancelled) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setIsLoadingAudio(true);
+    try {
+      const { baseUrl, token } = await getBackendInfo();
+      const headers = new Headers();
+      if (token) headers.set("X-AME-Token", token);
+      const resp = await fetch(`${baseUrl}/api/projects/${projectId}/audio/original`, {
+        headers,
+        signal: controller.signal,
+      });
+      if (!resp.ok) throw new Error(`音源の読み込みに失敗しました (${resp.status})`);
+      const blob = await resp.blob();
+      if (controller.signal.aborted) return null;
 
-        objectUrl = URL.createObjectURL(blob);
-        const audio = new Audio(objectUrl);
-        audio.preload = "auto";
-        audio.addEventListener("ended", () => setIsPlaying(false));
-        audioRef.current = audio;
-      } catch (err) {
-        if (!cancelled) setError((err as Error).message);
-      }
+      objectUrlRef.current = URL.createObjectURL(blob);
+      const audio = new Audio(objectUrlRef.current);
+      audio.preload = "auto";
+      audio.addEventListener("ended", () => setIsPlaying(false));
+      audioRef.current = audio;
+      loadedProjectIdRef.current = projectId;
+      return audio;
+    } catch (err) {
+      // 中断(abort)は失敗ではないので、エラー表示しない。
+      if (!controller.signal.aborted) setError((err as Error).message);
+      return null;
+    } finally {
+      setIsLoadingAudio(false);
+      if (abortRef.current === controller) abortRef.current = null;
     }
+  }, [projectId]);
 
-    void load();
+  /** 取得中の通信と音源を解放する(アンマウント・プロジェクト切替)。 */
+  const releaseAudio = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    loadedProjectIdRef.current = null;
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = null;
+    stopScheduledClicks();
+  }, [stopScheduledClicks]);
+
+  // 画面を離れる時に、通信・音源・AudioContextを片付ける(#173レビュー指摘)。
+  useEffect(() => {
     return () => {
-      cancelled = true;
-      audioRef.current?.pause();
-      audioRef.current = null;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      stopScheduledClicks();
-      // AudioContextを開いたままにすると、画面を往復するたびに蓄積するため閉じる
-      // (#173レビュー指摘)。次に再生したときに作り直す。
+      releaseAudio();
+      // AudioContextを開いたままにすると、画面を往復するたびに蓄積するため閉じる。
+      // 次に再生したときに作り直す。
       void audioContextRef.current?.close().catch(() => undefined);
       audioContextRef.current = null;
       clickGainRef.current = null;
     };
-  }, [projectId, stopScheduledClicks]);
+  }, [releaseAudio]);
 
   // 目盛りの間引きは実際の表示幅で決めるため、幅を測って追従させる。
   useEffect(() => {
@@ -356,28 +388,31 @@ export function BeatWaveformViewer({
     }
   }
 
-  function togglePlayback() {
-    const audio = audioRef.current;
-    if (!audio) return;
+  async function togglePlayback() {
     setError(null);
 
     if (isPlaying) {
-      audio.pause();
+      audioRef.current?.pause();
       // 先読みしていた分が鳴り残らないように止める(#173レビュー指摘)。
       stopScheduledClicks();
       setIsPlaying(false);
       return;
     }
 
+    const audio = await ensureAudio();
+    if (!audio) return;
+
     ensureClickGain();
     void audioContextRef.current?.resume?.();
     // 停止→再生で、前回予約した拍を飛ばさないように数え直す。
     lastClickSecRef.current = Number.NEGATIVE_INFINITY;
     lastPositionRef.current = audio.currentTime;
-    audio
-      .play()
-      .then(() => setIsPlaying(true))
-      .catch((err: Error) => setError(`再生できませんでした: ${err.message}`));
+    try {
+      await audio.play();
+      setIsPlaying(true);
+    } catch (err) {
+      setError(`再生できませんでした: ${(err as Error).message}`);
+    }
   }
 
   function rewind() {
@@ -430,11 +465,11 @@ export function BeatWaveformViewer({
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={togglePlayback}
-            disabled={!beatmap}
+            onClick={() => void togglePlayback()}
+            disabled={!beatmap || isLoadingAudio}
             className="rounded-md bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            {isPlaying ? "一時停止" : "再生"}
+            {isLoadingAudio ? "読み込み中…" : isPlaying ? "一時停止" : "再生"}
           </button>
           <button
             type="button"
