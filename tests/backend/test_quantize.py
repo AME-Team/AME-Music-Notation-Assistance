@@ -556,6 +556,45 @@ class TestQuantizeSettings:
             assert result[1].duration_tick == floor, min_value
             assert result[2].duration_tick == floor, min_value
 
+    def test_zero_strength_keeps_the_raw_duration(self) -> None:
+        """強さ0は「生位置のまま」なので音価の下限も適用しない(MIDDLEレビュー指摘)。
+
+        有効(enabled=True)でも強さ0なら格子へ寄せていないため、音価だけを切り上げると
+        終端位置が生位置から動いてしまう。下限を課すのは実効的な強さが0より大きいとき
+        だけにする。
+        """
+        notes = [(1, 0.5, 0.01)]
+        result = quantize_note_onsets(
+            notes,
+            _BEATS_120BPM_4_4,
+            _TIME_SIGNATURES_4_4,
+            divisions=480,
+            settings=QuantizeSettings(strength=0.0),
+        )
+
+        assert result[1].onset_tick == 480
+        assert result[1].duration_tick == 10  # 生の10msのまま
+
+    def test_min_value_lift_may_overlap_the_next_note(self) -> None:
+        """オンセット間隔が下限より短いと、下限への切り上げが重なりを生む(仕様)。
+
+        MIDDLEレビュー指摘への回答: 重なりを許容する仕様であることを回帰テストとして
+        固定する。オンセット側は最小音符単位より細かい格子(swing・3連符)を選びうるため、
+        「下限を守る」と「重ねない」を同時には満たせない。重なりの解消はMusicXML書き出し
+        側の責務。
+        """
+        notes = [(1, 0.5, 0.02), (2, 0.52, 0.02)]  # 生の間隔は約19tick(<1/16の120tick)
+
+        result = quantize_note_onsets(
+            notes, _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, divisions=480
+        )
+
+        first, second = result[1], result[2]
+        assert first.duration_tick == 120  # 下限(1/16)
+        # 2音は同じ格子点へ丸まるため、下限を守ると重なる。
+        assert second.onset_tick == first.onset_tick
+        assert first.onset_tick + first.duration_tick > second.onset_tick
+
     def test_min_grid_ticks_rounds_up_when_not_divisible(self) -> None:
         """割り切れないときは切り上げる(切り下げると格子より短い下限になる)。"""
         assert min_grid_ticks("1/16", 480) == 120

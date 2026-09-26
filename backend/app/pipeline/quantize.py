@@ -431,6 +431,12 @@ def quantize_note_onsets(
 
     `settings`(#174)で最小音符単位と適用度合いを指定する。省略時は既定
     (16分音符・強さ1.0・有効=従来と同じ完全なスナップ)。
+
+    実効的な強さが0より大きいときは、`duration_tick`が最小音符単位の格子1つぶんを
+    下回らないようにする(#177)。ただしオンセット側は最小音符単位より細かい格子
+    (swing・3連符)を選びうるため、オンセット間隔が下限より短い隣接音符では、この
+    下限への切り上げが**重なりを生みうる**(仕様として許容する。重なりの解消は
+    MusicXML書き出し側の責務。既存の「重なりを完全には排除しない」記述と同じ扱い)。
     """
     if settings is None:
         settings = DEFAULT_QUANTIZE_SETTINGS
@@ -469,11 +475,14 @@ def quantize_note_onsets(
         # #174(ユーザー報告「16分音符を設定したのに、それより短い音符が存在する」):
         # オンセットと終端が同じ格子点へ丸まると音価が0になる。従来はそれを1tick
         # (divisions=480で1/480拍)へ潰していたため、設定した最小音符単位より桁違いに
-        # 短い音価が楽譜に現れていた。有効時は最小音符単位の格子1つぶんを下限にする。
-        # 無効(enabled=False)は生演奏の音価をそのまま使う意図なので、丸めない代わり
-        # に下限も1tickのままにする。
+        # 短い音価が楽譜に現れていた。実際に格子へ寄せているときは、最小音符単位の
+        # 格子1つぶんを音価の下限にする。
+        #
+        # 下限を課すのは**実効的な強さが0より大きいとき**だけにする(MIDDLEレビュー
+        # 指摘)。強さ0(`enabled=False`や強さ0%)は「格子へ寄せない=生位置のまま」という
+        # 契約なので、そこで音価だけを切り上げると終端位置が生位置から動いてしまう。
         min_duration_tick = 1
-        if settings.enabled:
+        if settings.applied_strength > 0.0:
             min_duration_tick = min_grid_ticks(settings.min_value, divisions)
         duration_tick = max(offset_tick - onset_tick, min_duration_tick)
 
