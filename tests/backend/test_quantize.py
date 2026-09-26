@@ -8,6 +8,7 @@ Swing検出のそれぞれを、決定論的なロジックとして厚くテス
 from __future__ import annotations
 
 import pytest
+
 from app.pipeline.quantize import (
     DEFAULT_MIN_VALUE,
     DEFAULT_TOP_N,
@@ -270,6 +271,10 @@ class TestQuantizeNoteOnsets:
         ノートの終端がonsetより手前に丸まり `duration_tick` が1へ不正に潰れて
         いた。onset_tick自身が乗る格子(この場合1/32=60)から終端を求めることで、
         正の妥当な音価(72)が得られることを検証する。
+
+        最小音符単位は1/32にしてある(#174)。既定の16分(=120tick)だと、音価の下限
+        (最小音符単位の格子1つぶん)が72より長いため、この検証したい「swing格子から
+        求めた音価」ではなく下限の120になる。
         """
         notes = [(0, 0.3, 52 / 960)]  # raw_onset_tick=288, raw_offset_tick=340
         # detect_swing_ratio が0.6を検出するのに十分なオフビートサンプルを追加する。
@@ -277,7 +282,12 @@ class TestQuantizeNoteOnsets:
             notes.append((beat, beat * 0.5, 0.05))
             notes.append((100 + beat, beat * 0.5 + 0.3, 0.05))
 
-        result = quantize_note_onsets(notes, _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4)
+        result = quantize_note_onsets(
+            notes,
+            _BEATS_120BPM_4_4,
+            _TIME_SIGNATURES_4_4,
+            settings=QuantizeSettings(min_value="1/32"),
+        )
 
         quantized = result[0]
         best = next(
@@ -506,6 +516,49 @@ class TestQuantizeSettings:
         result = self._quantize(enabled=False)
         assert result[1].onset_tick == 60
         assert result[1].duration_tick == 480
+
+    def test_short_note_is_not_shorter_than_the_min_value(self) -> None:
+        """実演奏が極端に短くても、最小音符単位より短い音価を作らない。
+
+        ユーザー報告「16分音符を設定したのに、それより短い音符が存在する」の回帰
+        テスト。生の終端がオンセットと同じ1/16格子(=120tick)へ丸まるケースで、
+        従来は1tick(=1/480拍)の音符になっていた。
+        """
+        notes = [(1, 0.5, 0.01)]  # ちょうど拍上・10ms
+        result = quantize_note_onsets(
+            notes, _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, divisions=480
+        )
+
+        # divisions=480は四分音符あたりのtickなので、16分音符=120tick。
+        assert result[1].duration_tick == 120
+
+    def test_min_value_is_the_floor_for_every_choice(self) -> None:
+        """最小音符単位の選択ごとに、その格子1つぶんが音価の下限になる。"""
+        notes = [(1, 0.5, 0.001), (2, 0.52, 0.001)]
+        floor_by_choice = {"1/4": 480, "1/8": 240, "1/16": 120, "1/32": 60}
+        for min_value, floor in floor_by_choice.items():
+            result = quantize_note_onsets(
+                notes,
+                _BEATS_120BPM_4_4,
+                _TIME_SIGNATURES_4_4,
+                divisions=480,
+                settings=QuantizeSettings(min_value=min_value),
+            )
+            assert result[1].duration_tick >= floor, min_value
+            assert result[2].duration_tick >= floor, min_value
+
+    def test_disabled_keeps_the_short_raw_duration(self) -> None:
+        """入切OFFは丸めない=生の音価のまま(下限も従来どおり1tick)。"""
+        notes = [(1, 0.5, 0.01)]
+        result = quantize_note_onsets(
+            notes,
+            _BEATS_120BPM_4_4,
+            _TIME_SIGNATURES_4_4,
+            divisions=480,
+            settings=QuantizeSettings(enabled=False),
+        )
+
+        assert result[1].duration_tick == 10  # 10ms = 9.6tickを丸めた値
 
     def test_default_settings_equal_an_explicit_default(self) -> None:
         assert (

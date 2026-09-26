@@ -454,7 +454,16 @@ def quantize_note_onsets(
         # スナップ、0.0(または`enabled=False`)なら生位置のまま。
         onset_tick = settings.blend(raw_onset_tick, best.tick)
         offset_tick = settings.blend(raw_offset_tick, quantized_offset_tick)
-        duration_tick = max(offset_tick - onset_tick, 1)
+        # #174(ユーザー報告「16分音符を設定したのに、それより短い音符が存在する」):
+        # オンセットと終端が同じ格子点へ丸まると音価が0になる。従来はそれを1tick
+        # (divisions=480で1/480拍)へ潰していたため、設定した最小音符単位より桁違いに
+        # 短い音価が楽譜に現れていた。有効時は最小音符単位の格子1つぶんを下限にする。
+        # 無効(enabled=False)は生演奏の音価をそのまま使う意図なので、丸めない代わり
+        # に下限も1tickのままにする。
+        min_duration_tick = 1
+        if settings.enabled:
+            min_duration_tick = max(round(divisions / settings.max_divisor), 1)
+        duration_tick = max(offset_tick - onset_tick, min_duration_tick)
 
         result[note_id] = QuantizedNote(
             note_id=note_id,
