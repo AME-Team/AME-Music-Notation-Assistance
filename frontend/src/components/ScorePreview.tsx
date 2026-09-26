@@ -21,6 +21,25 @@ interface ScorePreviewProps {
    * 下へ埋め込む場合は、同じ見出しが二重にならないよう`false`にする。
    */
   showHeading?: boolean;
+  /**
+   * #179: 5線譜を1本の横方向の段に並べる(OSMDの`renderSingleHorizontalStaffline`)。
+   * 楽譜清書ソフトのように5線譜をメインに据え、表示小節だけを横に並べたい用途で
+   * 使う。既定は`false`(従来どおり幅に合わせて折り返す)。
+   */
+  singleHorizontalStaffline?: boolean;
+  /** #179: 拡大率(OSMDの`Zoom`)。既定は1.0。 */
+  zoom?: number;
+}
+
+/**
+ * #179: 描画の直前に拡大率を適用する。
+ *
+ * 「1本の横方向の段」設定はインスタンス生成時に渡して固定する。`setOptions`は
+ * OSMD内部で再描画を起こしうるため、ここで毎回渡すと呼び出し側の`render()`と
+ * 合わせて二重描画になる(LOWレビュー指摘)。`Zoom`はプロパティなので代入だけする。
+ */
+function applyZoom(osmd: OpenSheetMusicDisplay, zoom: number): void {
+  osmd.Zoom = zoom;
 }
 
 const DEBOUNCE_MS = 500; // NFR-03: 編集後500ms以内にプレビューが更新される
@@ -63,9 +82,17 @@ export function ScorePreview({
   fromBar = null,
   toBar = null,
   showHeading = true,
+  singleHorizontalStaffline = false,
+  zoom = 1,
 }: ScorePreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const osmdRef = useRef<OpenSheetMusicDisplay | null>(null);
+  // #179: OSMDのオプションはインスタンス生成時に渡す必要があるが、生成effectは
+  // 依存を空にして再生成(=再ロード)を避けている。描画の直前に読む最新値はrefで
+  // 持ち(ロードeffectの依存に表示設定を混ぜると、設定変更のたびに再ロードして
+  // しまう)、生成時の初期値は`initialRenderOptionRef`で渡す。
+  const renderOptionRef = useRef({ singleHorizontalStaffline, zoom });
+  const initialRenderOptionRef = useRef({ singleHorizontalStaffline, zoom });
   // #33-M3レビュー指摘: `loaded`はrefではなくstateにする。refだと`true`に
   // なっても後述の表示範囲effect(`[effectiveFromBar, effectiveToBar, loaded]`
   // 依存)が再評価されず、初回ロード完了時点で既に選択済みだった自動追従の
@@ -93,11 +120,19 @@ export function ScorePreview({
     osmdRef.current = new OpenSheetMusicDisplay(containerRef.current, {
       autoResize: true,
       drawTitle: false,
+      // #179: 5線譜を1本の横方向の段に並べる(表示小節を横に並べる)。
+      renderSingleHorizontalStaffline: initialRenderOptionRef.current.singleHorizontalStaffline,
     });
     return () => {
       latestRequestIdRef.current += 1;
     };
   }, []);
+
+  // #179: 表示設定(横並び・拡大率)の最新値を保持する。描画の直前に適用するため、
+  // ロードeffectの依存には入れない(入れると設定変更のたびに再取得が走る)。
+  useEffect(() => {
+    renderOptionRef.current = { singleHorizontalStaffline, zoom };
+  }, [singleHorizontalStaffline, zoom]);
 
   // NFR-03: scoreが変わるたびにタイマーをリセットし、500ms操作が無ければ
   // まとめて再取得・再描画する(デバウンス)。初回ロード時(scoreが最初に
@@ -113,6 +148,8 @@ export function ScorePreview({
           if (latestRequestIdRef.current !== requestId) return; // 古いリクエストの結果は破棄
           setError(null);
           setLoaded(true);
+          // #179: 初回描画でも拡大率を反映する(横並びは生成時のオプションで確定済み)。
+          applyZoom(osmd, renderOptionRef.current.zoom);
           osmd.render();
         })
         .catch((err: unknown) => {
@@ -202,6 +239,15 @@ export function ScorePreview({
     // (実測: 全パートの小節数が揃っていないMusicXMLで `Cannot read properties of
     // undefined (reading 'staffEntries')`)。表示範囲の変更は付加的な機能なので
     // ここで握ってエラー表示に留め、プレビュー以外のUIを巻き込まない。
+    // #179: 拡大率は描画の直前に確定させる(変更には再描画が必要なので、この
+    // effectの依存に入れて1クリックごとに描き直す。debounceは掛けない)。
+    //
+    // `singleHorizontalStaffline`は**このeffectの本体で参照しない**ため依存に入れて
+    // いない(MIDDLEレビュー指摘)。この設定は表示範囲や拡大率と違い`setOptions`を
+    // 伴うと二重描画になるため、`OpenSheetMusicDisplay`の生成時オプションで確定して
+    // いる(上の生成effect、`renderSingleHorizontalStaffline`)。prop自体は静的なので、
+    // 途中で変更しても再生成しない(呼び出し側は`key`で作り直す)。
+    applyZoom(osmd, zoom);
     try {
       osmd.render();
       // 表示範囲の変更で成功したら、以前の失敗(#154の例: 譜面が壊れていて一時的に
@@ -211,7 +257,7 @@ export function ScorePreview({
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [effectiveFromBar, effectiveToBar, loaded]);
+  }, [effectiveFromBar, effectiveToBar, loaded, zoom]);
 
   // #34: 譜面が(再)ロードされた直後は小節1から同期を始める(直前のプロジェクト
   // /直前ロードの小節位置を引き継がない)。
@@ -296,7 +342,15 @@ export function ScorePreview({
         </div>
       )}
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-      <div ref={containerRef} className="bg-white w-full overflow-x-auto" />
+      <div
+        ref={containerRef}
+        data-testid="score-preview-canvas"
+        // #179: e2eから「横に並べる設定がインスタンスに渡っているか」を確認できる
+        // ようにする(実際に1本の段で描かれたことはSVGの幅でも検証する)。
+        data-single-horizontal-staffline={singleHorizontalStaffline ? "true" : "false"}
+        data-zoom={String(zoom)}
+        className="bg-white w-full overflow-x-auto"
+      />
     </section>
   );
 }

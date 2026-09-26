@@ -238,82 +238,86 @@ export function ProjectWorkspace({ projectId }: ProjectWorkspaceProps) {
         isRunningRemaining={isAutoRunning}
       />
 
-      {/* #172: 先頭N小節のMIDIと楽譜を、どの作業ページでも常に見えるようにする。 */}
-      <div className="flex-1 space-y-4">
-        {activeStep === "separate" && (
-          <SeparateStep
-            projectId={projectId}
-            project={project}
-            preset={preset}
-            onPresetChange={setPreset}
-            executionProvider={executionProvider}
-            onExecutionProviderChange={setExecutionProvider}
-            runner={separateRunner}
-            onNext={() => goTo(neighbor(1) ?? "separate")}
-          />
-        )}
-        {activeStep === "beat" && (
-          <BeatStep
-            projectId={projectId}
-            project={project}
-            beatmap={beatmap}
-            beatmapError={beatmapError as Error | null}
-            runner={beatRunner}
-            onBack={() => goTo(neighbor(-1) ?? "beat")}
-            onNext={() => goTo(neighbor(1) ?? "beat")}
-          />
-        )}
-        {activeStep === "transcribe" && (
-          <TranscribeStep
-            project={project}
-            runner={transcribeRunner}
-            onBack={() => goTo(neighbor(-1) ?? "transcribe")}
-            onNext={() => goTo(neighbor(1) ?? "transcribe")}
-          />
-        )}
-        {activeStep === "quantize" && (
-          <QuantizeStep
-            project={project}
-            runner={quantizeRunner}
-            onBack={() => goTo(neighbor(-1) ?? "quantize")}
-            onNext={() => goTo(neighbor(1) ?? "quantize")}
-          />
-        )}
-        {activeStep === "refine" && (
-          <RefineStep
-            projectId={projectId}
-            project={project}
-            activeRefineRunId={activeRefineRunId}
-            onRefineComplete={setActiveRefineRunId}
-            onDismissDiff={() => setActiveRefineRunId(null)}
-            onBack={() => goTo(neighbor(-1) ?? "refine")}
-            onNext={() => {
-              if (!activeRefineRunId) setRefineSkipped(true);
-              goTo(neighbor(1) ?? "refine");
-            }}
-          />
-        )}
-        {activeStep === "review" && (
-          <ReviewStep
-            projectId={projectId}
-            activeAgentRunId={activeAgentRunId}
-            onAgentRunStarted={setActiveAgentRunId}
-            onDismissAgent={() => setActiveAgentRunId(null)}
-            onBack={() => goTo(neighbor(-1) ?? "review")}
-            onNext={() => goTo(neighbor(1) ?? "review")}
-          />
-        )}
-        {activeStep === "export" && (
-          <ExportStep
-            project={project}
-            exportingFormat={exportingFormat}
-            exportError={exportError}
-            onExport={(format) => void handleExport(format)}
-            onBack={() => goTo(neighbor(-1) ?? "export")}
-          />
-        )}
-
+      {/* #179: 楽譜とMIDIをメインに据える。ステップ操作より上(最上部)に置き、
+          操作をスクロールしても楽譜が隠れないようにする(パネル自身がsticky)。 */}
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
         <ScoreViewPanel projectId={projectId} activeStep={activeStep} />
+
+        {/* 選択中のステップの操作は楽譜の下に置く。 */}
+        <div className="space-y-4" data-testid="step-content">
+          {activeStep === "separate" && (
+            <SeparateStep
+              projectId={projectId}
+              project={project}
+              preset={preset}
+              onPresetChange={setPreset}
+              executionProvider={executionProvider}
+              onExecutionProviderChange={setExecutionProvider}
+              runner={separateRunner}
+              onNext={() => goTo(neighbor(1) ?? "separate")}
+            />
+          )}
+          {activeStep === "beat" && (
+            <BeatStep
+              projectId={projectId}
+              project={project}
+              beatmap={beatmap}
+              beatmapError={beatmapError as Error | null}
+              runner={beatRunner}
+              onBack={() => goTo(neighbor(-1) ?? "beat")}
+              onNext={() => goTo(neighbor(1) ?? "beat")}
+            />
+          )}
+          {activeStep === "transcribe" && (
+            <TranscribeStep
+              project={project}
+              runner={transcribeRunner}
+              onBack={() => goTo(neighbor(-1) ?? "transcribe")}
+              onNext={() => goTo(neighbor(1) ?? "transcribe")}
+            />
+          )}
+          {activeStep === "quantize" && (
+            <QuantizeStep
+              project={project}
+              runner={quantizeRunner}
+              onBack={() => goTo(neighbor(-1) ?? "quantize")}
+              onNext={() => goTo(neighbor(1) ?? "quantize")}
+            />
+          )}
+          {activeStep === "refine" && (
+            <RefineStep
+              projectId={projectId}
+              project={project}
+              activeRefineRunId={activeRefineRunId}
+              onRefineComplete={setActiveRefineRunId}
+              onDismissDiff={() => setActiveRefineRunId(null)}
+              onBack={() => goTo(neighbor(-1) ?? "refine")}
+              onNext={() => {
+                if (!activeRefineRunId) setRefineSkipped(true);
+                goTo(neighbor(1) ?? "refine");
+              }}
+            />
+          )}
+          {activeStep === "review" && (
+            <ReviewStep
+              projectId={projectId}
+              activeAgentRunId={activeAgentRunId}
+              onAgentRunStarted={setActiveAgentRunId}
+              onDismissAgent={() => setActiveAgentRunId(null)}
+              onBack={() => goTo(neighbor(-1) ?? "review")}
+              onNext={() => goTo(neighbor(1) ?? "review")}
+            />
+          )}
+          {activeStep === "export" && (
+            <ExportStep
+              project={project}
+              exportingFormat={exportingFormat}
+              exportError={exportError}
+              onExport={(format) => void handleExport(format)}
+              onBack={() => goTo(neighbor(-1) ?? "export")}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@
 
 import type { ScoreIR } from "../api/client";
 import { barBoundariesTicks } from "./pianoRoll";
+import type { StepId } from "./workflow";
 
 /** 既定の表示小節数(ユーザー指定: 先頭4小節)。 */
 export const DEFAULT_PREVIEW_BARS = 4;
@@ -39,6 +40,60 @@ export function readStoredPreviewBars(storage: Storage): number {
 /** 表示小節数を保存する。 */
 export function storePreviewBars(storage: Storage, bars: number): void {
   storage.setItem(PREVIEW_BARS_STORAGE_KEY, String(normalizePreviewBars(bars)));
+}
+
+/**
+ * 自前の譜面を描く作業ステップ(#179)。
+ *
+ * ⑤リファイン/⑥レビューは`DiffPanel`等が自前の`ScorePreview`(差分表示)を持つため、
+ * 最上部の「楽譜とMIDI」パネルはMIDIバーのみを出す(同一画面でOSMDを二重に走らせ
+ * ない。#172のMIDDLEレビュー指摘)。e2eもこの定数を参照し、実装とテストで同じ知識を
+ * 二重管理しない(LOWレビュー指摘)。
+ */
+export const STEPS_WITH_OWN_SCORE: readonly StepId[] = ["refine", "review"];
+
+/** 楽譜の拡大率(#179)。OSMDの`Zoom`へそのまま渡す。 */
+export const DEFAULT_ZOOM = 1;
+
+/**
+ * 拡大率の下限・上限と、ズームボタン1回あたりの増減幅(#179)。
+ *
+ * 下限・上限は増減幅の格子と既定値(1.0)に揃える。0.5のように格子へ乗らない値を
+ * 下限にすると、下限まで縮小した後は 0.5→0.7→0.9→1.1… と進み、**既定の100%へ
+ * 二度と戻れなくなる**(MIDDLEレビュー指摘)。
+ */
+export const ZOOM_MIN = 0.6;
+export const ZOOM_MAX = 3;
+export const ZOOM_STEP = 0.2;
+
+/**
+ * 拡大率を扱える範囲へ寄せる(小数1桁へ丸める)。
+ *
+ * 保存値はユーザーが直接書き換えられるため、そのまま使うとOSMDの`Zoom`へ
+ * 0や負値、極端な拡大率が渡りうる。
+ */
+export function normalizeZoom(value: unknown): number {
+  // 未保存(`null`/`undefined`)や空文字は「既定」として扱う。`Number(null)`は0に
+  // なってしまうため、数値化の前に弾く(保存値が無い利用者の既定が下限`ZOOM_MIN`
+  // へ化けるのを防ぐ)。
+  if (value === null || value === undefined || value === "") return DEFAULT_ZOOM;
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_ZOOM;
+  const clamped = Math.min(Math.max(number, ZOOM_MIN), ZOOM_MAX);
+  // 0.2刻みを二進小数の誤差なく比較・保存できるよう小数1桁へ丸める。
+  return Math.round(clamped * 10) / 10;
+}
+
+const ZOOM_STORAGE_KEY = "ame.scoreView.zoom";
+
+/** 保存された拡大率を読む(壊れていれば既定値)。 */
+export function readStoredZoom(storage: Storage): number {
+  return normalizeZoom(storage.getItem(ZOOM_STORAGE_KEY));
+}
+
+/** 拡大率を保存する。 */
+export function storeZoom(storage: Storage, zoom: number): void {
+  storage.setItem(ZOOM_STORAGE_KEY, String(normalizeZoom(zoom)));
 }
 
 /** プレビューが扱う範囲(小節とtick)。 */
