@@ -41,6 +41,44 @@ export function storePreviewBars(storage: Storage, bars: number): void {
   storage.setItem(PREVIEW_BARS_STORAGE_KEY, String(normalizePreviewBars(bars)));
 }
 
+/** 楽譜の拡大率(#179)。OSMDの`Zoom`へそのまま渡す。 */
+export const DEFAULT_ZOOM = 1;
+
+/** 拡大率の下限・上限と、ズームボタン1回あたりの増減幅(#179)。 */
+export const ZOOM_MIN = 0.5;
+export const ZOOM_MAX = 3;
+export const ZOOM_STEP = 0.2;
+
+/**
+ * 拡大率を扱える範囲へ寄せる(小数1桁へ丸める)。
+ *
+ * 保存値はユーザーが直接書き換えられるため、そのまま使うとOSMDの`Zoom`へ
+ * 0や負値、極端な拡大率が渡りうる。
+ */
+export function normalizeZoom(value: unknown): number {
+  // 未保存(`null`/`undefined`)や空文字は「既定」として扱う。`Number(null)`は0に
+  // なってしまうため、数値化の前に弾く(保存値が無い利用者の既定が下限0.5へ
+  // 化けるのを防ぐ)。
+  if (value === null || value === undefined || value === "") return DEFAULT_ZOOM;
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_ZOOM;
+  const clamped = Math.min(Math.max(number, ZOOM_MIN), ZOOM_MAX);
+  // 0.2刻みを二進小数の誤差なく比較・保存できるよう小数1桁へ丸める。
+  return Math.round(clamped * 10) / 10;
+}
+
+const ZOOM_STORAGE_KEY = "ame.scoreView.zoom";
+
+/** 保存された拡大率を読む(壊れていれば既定値)。 */
+export function readStoredZoom(storage: Storage): number {
+  return normalizeZoom(storage.getItem(ZOOM_STORAGE_KEY));
+}
+
+/** 拡大率を保存する。 */
+export function storeZoom(storage: Storage, zoom: number): void {
+  storage.setItem(ZOOM_STORAGE_KEY, String(normalizeZoom(zoom)));
+}
+
 /** プレビューが扱う範囲(小節とtick)。 */
 export interface BarWindow {
   /** 表示する最後の小節番号(1始まり)。楽譜が短ければ実際の小節数に丸める。 */

@@ -2,15 +2,22 @@ import { describe, expect, it } from "vitest";
 import type { ScoreIR } from "../api/client";
 import {
   DEFAULT_PREVIEW_BARS,
+  DEFAULT_ZOOM,
   midiBarRect,
   normalizePreviewBars,
+  normalizeZoom,
   previewNotes,
   previewPitchRange,
   previewUnavailableReason,
   previewWindow,
   previewWindowResult,
   readStoredPreviewBars,
+  readStoredZoom,
   storePreviewBars,
+  storeZoom,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STEP,
 } from "./scoreView";
 
 /** 4/4・divisions=480(1拍=480tick、1小節=1920tick)の最小スコア。 */
@@ -179,5 +186,52 @@ describe("midiBarRect", () => {
 
   it("音符が無ければ音高範囲は null", () => {
     expect(previewPitchRange([])).toBeNull();
+  });
+});
+
+describe("normalizeZoom (#179)", () => {
+  it("扱える範囲へ寄せて小数1桁に丸める", () => {
+    expect(normalizeZoom(1)).toBe(1);
+    expect(normalizeZoom("1.2")).toBe(1.2);
+    expect(normalizeZoom(1.2345)).toBe(1.2);
+    // 0.2刻みの増減で二進小数の誤差を蓄積させない。
+    expect(normalizeZoom(1 + ZOOM_STEP * 3)).toBe(1.6);
+  });
+
+  it("範囲外は下限・上限へ寄せる", () => {
+    expect(normalizeZoom(0.01)).toBe(ZOOM_MIN);
+    expect(normalizeZoom(99)).toBe(ZOOM_MAX);
+  });
+
+  it("数値にならない値は既定へ落とす", () => {
+    expect(normalizeZoom("abc")).toBe(DEFAULT_ZOOM);
+    expect(normalizeZoom(null)).toBe(DEFAULT_ZOOM);
+  });
+});
+
+describe("readStoredZoom / storeZoom (#179)", () => {
+  function makeStorage(initial: Record<string, string> = {}): Storage {
+    const map = new Map(Object.entries(initial));
+    return {
+      getItem: (key: string) => map.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        map.set(key, value);
+      },
+      length: map.size,
+    } as unknown as Storage;
+  }
+
+  it("保存して読み戻せる", () => {
+    const storage = makeStorage();
+    storeZoom(storage, 1.4);
+
+    expect(storage.getItem("ame.scoreView.zoom")).toBe("1.4");
+    expect(readStoredZoom(storage)).toBe(1.4);
+  });
+
+  it("壊れた保存値は既定へ落とす", () => {
+    expect(readStoredZoom(makeStorage({ "ame.scoreView.zoom": "x" }))).toBe(DEFAULT_ZOOM);
+    expect(readStoredZoom(makeStorage({ "ame.scoreView.zoom": "100" }))).toBe(ZOOM_MAX);
+    expect(readStoredZoom(makeStorage())).toBe(DEFAULT_ZOOM);
   });
 });

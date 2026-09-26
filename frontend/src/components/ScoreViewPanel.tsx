@@ -6,7 +6,14 @@ import {
   quantizeStatusLine,
   toStageParams,
 } from "../lib/quantizeSettings";
-import { PREVIEW_BARS_CHOICES, previewNotes, previewWindowResult } from "../lib/scoreView";
+import {
+  PREVIEW_BARS_CHOICES,
+  previewNotes,
+  previewWindowResult,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STEP,
+} from "../lib/scoreView";
 import type { StepId } from "../lib/workflow";
 import { useQuantizeStore } from "../stores/quantizeStore";
 import { useScoreViewStore } from "../stores/scoreViewStore";
@@ -25,13 +32,6 @@ interface ScoreViewPanelProps {
  */
 const QUANTIZE_RERUN_STEPS: readonly StepId[] = ["separate", "beat", "transcribe", "quantize"];
 
-/**
- * そのページが自前で楽譜プレビューを出すステップ(⑤⑥は`DiffPanel`等が
- * `ScorePreview`を持つ)。同じ画面でOSMDを二重に走らせないため、パネル側の
- * 埋め込み楽譜は出さない(MIDDLEレビュー指摘)。
- */
-const STEPS_WITH_OWN_SCORE: readonly StepId[] = ["refine", "review"];
-
 /** パネルはノート選択を持たないため、再レンダーで作り直さないよう固定する。 */
 const NO_SELECTION: ReadonlySet<number> = new Set();
 
@@ -42,19 +42,26 @@ const UNAVAILABLE_MESSAGE = {
   "too-short": "曲が1小節に満たないため、小節単位のプレビューを作れません。",
 } as const;
 
+const ZOOM_BUTTON_CLASS =
+  "rounded-md border border-gray-300 dark:border-gray-600 px-2 py-0.5 text-sm text-gray-700 " +
+  "dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40";
+
 /**
- * #172: **全ての作業ページ**に常設する「先頭N小節プレビュー」。
+ * #179: **全ての作業ページの最上部**に固定する「楽譜とMIDI」ビュー。
  *
- * 補正は実際のMIDIと楽譜を見ながら行う必要がある(このアプリの根幹)。以前は
- * 補正できる②には楽譜もMIDIも無く、楽譜が出る⑤⑥には補正手段が無かったため、
- * 数値を勘で入れるしかなかった。ここでは先頭N小節(Nは設定・既定4)を常に表示し、
- * ビートや拍子を補正したら「④を再実行して更新」で作り直せるようにする。
+ * 楽譜清書ソフトでは5線譜がメインであり、補正は実際の楽譜とMIDIを見ながら行う
+ * (このアプリの根幹)。#172では補正UIの**下**に置いていたため、補正中に楽譜が
+ * 画面外へスクロールし「楽譜を見ながら補正」ができなかった。
  *
- * 表示は読み取り専用の`MidiBar`と、既存の`ScorePreview`(表示範囲だけ固定)を使う。
+ * ここでは先頭N小節(Nは設定・既定4)のMIDIバーと5線譜を最上部に固定し、5線譜は
+ * 1本の横方向の段に並べる(OSMDの`renderSingleHorizontalStaffline`)。ビートや拍子を
+ * 補正したら「ビート補正を反映して更新」で作り直せる。
  */
 export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
   const bars = useScoreViewStore((s) => s.bars);
   const setBars = useScoreViewStore((s) => s.setBars);
+  const zoom = useScoreViewStore((s) => s.zoom);
+  const setZoom = useScoreViewStore((s) => s.setZoom);
   const scoreQuery = useScore(projectId);
   const score = scoreQuery.data ?? null;
 
@@ -78,19 +85,20 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
   const barWindow = analysis && "window" in analysis ? analysis.window : null;
   const unavailableReason = analysis && "reason" in analysis ? analysis.reason : null;
   const canRerunQuantize = QUANTIZE_RERUN_STEPS.includes(activeStep);
-  const showsOwnScore = STEPS_WITH_OWN_SCORE.includes(activeStep);
   const notes = score && barWindow ? previewNotes(score, barWindow) : [];
+  const shownBars = barWindow ? barWindow.toBar : bars;
 
   return (
     <section
-      className="space-y-2 rounded-lg border border-gray-200 p-4 dark:border-gray-700"
+      // 作業ステップの操作をスクロールしても楽譜とMIDIが隠れないよう、最上部に固定する。
+      className="-mx-4 sticky top-0 z-10 space-y-2 border-b border-gray-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-gray-700 dark:bg-gray-950/95"
       data-testid="score-view-panel"
+      aria-label="楽譜とMIDIのプレビュー"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-200">
-          先頭{barWindow ? barWindow.toBar : bars}小節のプレビュー(
-          {showsOwnScore ? "MIDI" : "MIDI・楽譜"})
-        </h3>
+        <h2 className="text-base font-semibold text-gray-800 dark:text-gray-100">
+          楽譜とMIDI(先頭{shownBars}小節)
+        </h2>
         <label className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300">
           表示する小節数
           <select
@@ -106,6 +114,33 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
             ))}
           </select>
         </label>
+        {/* ズームの増減(ボタン自体にaria-labelを付ける)。 */}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setZoom(zoom - ZOOM_STEP)}
+            disabled={zoom <= ZOOM_MIN}
+            className={ZOOM_BUTTON_CLASS}
+            aria-label="楽譜を縮小"
+          >
+            −
+          </button>
+          <span
+            className="w-12 text-center text-xs text-gray-500 dark:text-gray-400"
+            data-testid="score-zoom"
+          >
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={() => setZoom(zoom + ZOOM_STEP)}
+            disabled={zoom >= ZOOM_MAX}
+            className={ZOOM_BUTTON_CLASS}
+            aria-label="楽譜を拡大"
+          >
+            ＋
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => void runner.run()}
@@ -117,12 +152,13 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
         <span className="text-xs text-gray-500 dark:text-gray-400" data-testid="quantize-summary">
           {quantizeStatusLine(appliedQuantize, quantizeSettings)}
         </span>
-        <span className="text-xs text-gray-500 dark:text-gray-400">
-          {canRerunQuantize
-            ? `ビート・拍子・テンポを補正したら、ここで先頭${barWindow ? barWindow.toBar : bars}小節を作り直せます`
-            : "このページの作業(⑤以降)を上書きしないよう、ここからは④を再実行できません"}
-        </span>
       </div>
+
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        {canRerunQuantize
+          ? `ビート・拍子・テンポを補正したら、ここで先頭${shownBars}小節を作り直せます`
+          : "このページの作業(⑤以降)を上書きしないよう、ここからは④を再実行できません"}
+      </p>
 
       {runner.error && <p className="text-sm text-red-600 dark:text-red-400">{runner.error}</p>}
 
@@ -132,8 +168,7 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
 
       {!scoreQuery.isPending && !score && (
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          ③採譜が完了すると、ここに先頭{barWindow ? barWindow.toBar : bars}
-          小節のMIDIと楽譜が出ます。
+          ③採譜が完了すると、ここに先頭{shownBars}小節のMIDIと楽譜が出ます。
         </p>
       )}
 
@@ -144,27 +179,25 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
       )}
 
       {score && barWindow && (
-        <div className="space-y-2">
+        <div className="space-y-1">
+          {/* MIDIバーと5線譜を並べて置き、同じ区間を同時に見ながら補正する。 */}
           <MidiBar notes={notes} window={barWindow} />
           {notes.length === 0 && (
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              先頭{barWindow.toBar}小節に音符がありません。
+              先頭{shownBars}小節に音符がありません。
             </p>
           )}
-          {showsOwnScore ? (
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              このページは元から譜面を表示しているため、パネルはMIDIバーのみ表示します。
-            </p>
-          ) : (
-            <ScorePreview
-              projectId={projectId}
-              score={score}
-              selectedNoteIds={NO_SELECTION}
-              fromBar={1}
-              toBar={barWindow.toBar}
-              showHeading={false}
-            />
-          )}
+          <ScorePreview
+            projectId={projectId}
+            score={score}
+            selectedNoteIds={NO_SELECTION}
+            fromBar={1}
+            toBar={barWindow.toBar}
+            showHeading={false}
+            // 5線譜は1本の横方向の段に並べる(楽譜清書ソフトと同じ見え方)。
+            singleHorizontalStaffline
+            zoom={zoom}
+          />
         </div>
       )}
     </section>

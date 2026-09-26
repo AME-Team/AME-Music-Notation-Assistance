@@ -154,6 +154,8 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
     // (このアプリのウィンドウは仕様上リロードできる。#172の既定は4小節)。
     await page.evaluate(() => {
       window.localStorage.removeItem("ame.scoreView.bars");
+      // #179: 楽譜の拡大率も前回実行の値を持ち越さない(既定は100%)。
+      window.localStorage.removeItem("ame.scoreView.zoom");
       // #174: 量子化の設定も前回実行の値を持ち越さない。
       window.localStorage.removeItem("ame.quantize");
     });
@@ -178,26 +180,19 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         await expect(panel.getByTestId("midi-bar")).toBeVisible({ timeout: 15_000 });
         // 先頭4小節(既定)に音符が描かれている。
         expect(await panel.getByTestId("midi-note").count()).toBeGreaterThan(0);
-        await expect(panel).toContainText("先頭4小節のプレビュー");
+        await expect(panel).toContainText("楽譜とMIDI(先頭4小節)");
         // 小節番号は実在する小節の数だけ(線は右端の次小節線を含むため+1本)。
         expect(await panel.getByTestId("midi-bar-label").count()).toBe(4);
         expect(await panel.getByTestId("midi-barline").count()).toBe(5);
-        // ⑤リファイン/⑥レビューは自前の楽譜プレビュー(DiffPanel等)を持つため、
-        // パネル側の埋め込み楽譜は出さない(同じ画面でOSMDを二重に走らせない)。
+        // #179: 楽譜はどの作業ページでも最上部のパネルに出る(5線譜をメインに据える)。
+        await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
+        // #174: 量子化の既定は16分音符・強さ100%・有効。現在値がその場に出る。
+        await expect(panel.getByTestId("quantize-summary")).toContainText(
+          "16分音符・強さ100%・クオンタイズON",
+        );
         const stepId = ["separate", "beat", "transcribe", "quantize", "refine", "review", "export"][
           index
         ];
-        if (stepId === "refine" || stepId === "review") {
-          await expect(panel).toContainText("先頭4小節のプレビュー(MIDI)");
-          await expect(panel).toContainText("パネルはMIDIバーのみ表示します");
-        } else {
-          await expect(panel).toContainText("先頭4小節のプレビュー(MIDI・楽譜)");
-          // #174: 量子化の既定は16分音符・強さ100%・有効。現在値がその場に出る。
-          await expect(panel.getByTestId("quantize-summary")).toContainText(
-            "16分音符・強さ100%・クオンタイズON",
-          );
-          await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
-        }
         // ④を再実行してよいのは①〜④のページだけ(⑤以降の手動補正を上書きしない)。
         const rerun = panel.getByRole("button", { name: "ビート補正を反映して更新" });
         if (["separate", "beat", "transcribe", "quantize"].includes(stepId)) {
@@ -212,15 +207,64 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
     await test.step("表示する小節数を8へ変えると追従して保存される", async () => {
       const before = await panel.getByTestId("midi-barline").count();
       await panel.getByLabel("表示する小節数").selectOption("8");
-      await expect(panel).toContainText("先頭8小節のプレビュー");
+      await expect(panel).toContainText("楽譜とMIDI(先頭8小節)");
       expect(await panel.getByTestId("midi-barline").count()).toBeGreaterThan(before);
       expect(await panel.getByTestId("midi-bar-label").count()).toBe(8);
       expect(await page.evaluate(() => localStorage.getItem("ame.scoreView.bars"))).toBe("8");
     });
 
+    await test.step("楽譜とMIDIがステップ操作より上に固定されている(#179)", async () => {
+      // ②ビート(補正UIが長いページ)を開く。
+      await steps.nth(1).click();
+      const panelBox = await panel.boundingBox();
+      const stepBox = await page.getByTestId("step-content").boundingBox();
+      expect(panelBox).not.toBeNull();
+      expect(stepBox).not.toBeNull();
+      if (panelBox && stepBox) {
+        // 楽譜とMIDIはステップの操作より上にある(「下の方にある」状態の回帰防止)。
+        expect(panelBox.y).toBeLessThan(stepBox.y);
+      }
+      // 操作をスクロールしても楽譜とMIDIは画面内に残る(sticky)。
+      await page.mouse.wheel(0, 1500);
+      await expect(panel.getByTestId("midi-bar")).toBeVisible();
+      await expect(panel.locator("div.bg-white svg").first()).toBeVisible();
+    });
+
+    await test.step("5線譜は1本の横方向の段に並び、ズームが反映される(#179)", async () => {
+      const canvas = panel.getByTestId("score-preview-canvas");
+      // 5線譜を横に並べる設定がOSMDインスタンスへ渡っている。
+      await expect(canvas).toHaveAttribute("data-single-horizontal-staffline", "true");
+      await expect(canvas).toHaveAttribute("data-zoom", "1");
+
+      // ズームを上げると実際の描画(SVG)が拡大する=再描画に反映されている。
+      const widthAt100 = await canvas
+        .locator("svg")
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().width);
+      for (let i = 0; i < 5; i += 1) {
+        await panel.getByLabel("楽譜を拡大").click();
+      }
+      await expect(panel.getByTestId("score-zoom")).toHaveText("200%");
+      await expect(canvas).toHaveAttribute("data-zoom", "2");
+      const widthAt200 = await canvas
+        .locator("svg")
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().width);
+      expect(widthAt200).toBeGreaterThan(widthAt100);
+      // 保存され、リロード後も維持される。
+      expect(await page.evaluate(() => localStorage.getItem("ame.scoreView.zoom"))).toBe("2");
+
+      // 5線譜が表示領域より横に広い=折り返して縦に積まれていない。
+      const sizes = await canvas.evaluate((el) => ({
+        clientWidth: el.clientWidth,
+        scrollWidth: el.scrollWidth,
+      }));
+      expect(sizes.scrollWidth).toBeGreaterThan(sizes.clientWidth);
+    });
+
     await test.step("パネルが全ページで閉じずに残っている(設定変更後も)", async () => {
       await steps.nth(0).click();
-      await expect(panel).toContainText("先頭8小節のプレビュー");
+      await expect(panel).toContainText("楽譜とMIDI(先頭8小節)");
     });
   } finally {
     await app.close();
