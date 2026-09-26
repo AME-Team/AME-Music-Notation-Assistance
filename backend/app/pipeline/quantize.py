@@ -66,6 +66,18 @@ def max_divisor_for(min_value: str) -> int:
         ) from exc
 
 
+def min_grid_ticks(min_value: str, divisions: int) -> int:
+    """最小音符単位をtickへ変換する(下限と候補フィルタで共有する単一情報源)。
+
+    割り切れない場合(3連符系の除数と割り切れない`divisions`など)は**切り上げる**。
+    切り捨てると下限が実際の格子より短くなり、設定より短い音価を許してしまう。
+    また`round`は銀行丸めなので、格子生成側と同じ整数演算に揃える
+    (LOWレビュー指摘: 下限の算出を一元化する)。
+    """
+    divisor = max_divisor_for(min_value)
+    return max(-(-divisions // divisor), 1)
+
+
 @dataclass(frozen=True)
 class QuantizeSettings:
     """量子化の適用設定(#174)。
@@ -419,6 +431,12 @@ def quantize_note_onsets(
 
     `settings`(#174)で最小音符単位と適用度合いを指定する。省略時は既定
     (16分音符・強さ1.0・有効=従来と同じ完全なスナップ)。
+
+    実効的な強さが0より大きいときは、`duration_tick`が最小音符単位の格子1つぶんを
+    下回らないようにする(#177)。ただしオンセット側は最小音符単位より細かい格子
+    (swing・3連符)を選びうるため、オンセット間隔が下限より短い隣接音符では、この
+    下限への切り上げが**重なりを生みうる**(仕様として許容する。重なりの解消は
+    MusicXML書き出し側の責務。既存の「重なりを完全には排除しない」記述と同じ扱い)。
     """
     if settings is None:
         settings = DEFAULT_QUANTIZE_SETTINGS
@@ -448,13 +466,25 @@ def quantize_note_onsets(
             # onset_tick自身が乗っている格子を逆算する(#25-M2レビュー指摘)。
             offset_grid = _offset_grid_containing_tick(best.tick, divisions)
         # #174: 終端の丸め先も最小音符単位より細かくしない(`max`は粗い方を選ぶ)。
-        offset_grid = max(offset_grid, divisions / settings.max_divisor)
+        offset_grid = max(offset_grid, min_grid_ticks(settings.min_value, divisions))
         quantized_offset_tick = round(raw_offset_tick / offset_grid) * offset_grid
         # #174: 強さ(0.0〜1.0)だけスナップ先へ寄せる。1.0なら従来と同じ完全な
         # スナップ、0.0(または`enabled=False`)なら生位置のまま。
         onset_tick = settings.blend(raw_onset_tick, best.tick)
         offset_tick = settings.blend(raw_offset_tick, quantized_offset_tick)
-        duration_tick = max(offset_tick - onset_tick, 1)
+        # #174(ユーザー報告「16分音符を設定したのに、それより短い音符が存在する」):
+        # オンセットと終端が同じ格子点へ丸まると音価が0になる。従来はそれを1tick
+        # (divisions=480で1/480拍)へ潰していたため、設定した最小音符単位より桁違いに
+        # 短い音価が楽譜に現れていた。実際に格子へ寄せているときは、最小音符単位の
+        # 格子1つぶんを音価の下限にする。
+        #
+        # 下限を課すのは**実効的な強さが0より大きいとき**だけにする(MIDDLEレビュー
+        # 指摘)。強さ0(`enabled=False`や強さ0%)は「格子へ寄せない=生位置のまま」という
+        # 契約なので、そこで音価だけを切り上げると終端位置が生位置から動いてしまう。
+        min_duration_tick = 1
+        if settings.applied_strength > 0.0:
+            min_duration_tick = min_grid_ticks(settings.min_value, divisions)
+        duration_tick = max(offset_tick - onset_tick, min_duration_tick)
 
         result[note_id] = QuantizedNote(
             note_id=note_id,
