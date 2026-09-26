@@ -10,6 +10,7 @@ import {
   PREVIEW_BARS_CHOICES,
   previewNotes,
   previewWindowResult,
+  STEPS_WITH_OWN_SCORE,
   ZOOM_MAX,
   ZOOM_MIN,
   ZOOM_STEP,
@@ -31,14 +32,6 @@ interface ScoreViewPanelProps {
  * ここから④を再実行すると下流の作業を上書き・無効化しうる(MIDDLEレビュー指摘)。
  */
 const QUANTIZE_RERUN_STEPS: readonly StepId[] = ["separate", "beat", "transcribe", "quantize"];
-
-/**
- * そのページが自前で楽譜プレビューを出すステップ(⑤⑥は`DiffPanel`等が
- * `ScorePreview`を持つ)。同じ画面でOSMDを二重に走らせないため、パネル側の
- * 埋め込み楽譜は出さない(#172のMIDDLEレビュー指摘。差し戻していた)。
- * ⑤⑥ではステップ側の譜面がそのページの主役(差分表示)なので、そこは譲る。
- */
-const STEPS_WITH_OWN_SCORE: readonly StepId[] = ["refine", "review"];
 
 /** パネルはノート選択を持たないため、再レンダーで作り直さないよう固定する。 */
 const NO_SELECTION: ReadonlySet<number> = new Set();

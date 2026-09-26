@@ -251,7 +251,7 @@ export function ScorePreview({
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [effectiveFromBar, effectiveToBar, loaded, singleHorizontalStaffline, zoom]);
+  }, [effectiveFromBar, effectiveToBar, loaded, zoom]);
 
   // #34: 譜面が(再)ロードされた直後は小節1から同期を始める(直前のプロジェクト
   // /直前ロードの小節位置を引き継がない)。

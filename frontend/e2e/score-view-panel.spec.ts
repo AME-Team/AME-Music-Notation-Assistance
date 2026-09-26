@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ElectronApplication, _electron as electron, expect, test } from "@playwright/test";
+// 実装と同じ知識を参照する(自前の譜面を持つステップの判定を二重管理しない)。
+import { STEPS_WITH_OWN_SCORE } from "../src/lib/scoreView";
+import type { StepId } from "../src/lib/workflow";
 
 // package.json の "type": "module" により __dirname は使えないため import.meta.url から導出する。
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

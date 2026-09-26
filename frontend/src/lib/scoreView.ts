@@ -9,6 +9,7 @@
 
 import type { ScoreIR } from "../api/client";
 import { barBoundariesTicks } from "./pianoRoll";
+import type { StepId } from "./workflow";
 
 /** 既定の表示小節数(ユーザー指定: 先頭4小節)。 */
 export const DEFAULT_PREVIEW_BARS = 4;
@@ -40,6 +41,16 @@ export function readStoredPreviewBars(storage: Storage): number {
 export function storePreviewBars(storage: Storage, bars: number): void {
   storage.setItem(PREVIEW_BARS_STORAGE_KEY, String(normalizePreviewBars(bars)));
 }
+
+/**
+ * 自前の譜面を描く作業ステップ(#179)。
+ *
+ * ⑤リファイン/⑥レビューは`DiffPanel`等が自前の`ScorePreview`(差分表示)を持つため、
+ * 最上部の「楽譜とMIDI」パネルはMIDIバーのみを出す(同一画面でOSMDを二重に走らせ
+ * ない。#172のMIDDLEレビュー指摘)。e2eもこの定数を参照し、実装とテストで同じ知識を
+ * 二重管理しない(LOWレビュー指摘)。
+ */
+export const STEPS_WITH_OWN_SCORE: readonly StepId[] = ["refine", "review"];
 
 /** 楽譜の拡大率(#179)。OSMDの`Zoom`へそのまま渡す。 */
 export const DEFAULT_ZOOM = 1;
