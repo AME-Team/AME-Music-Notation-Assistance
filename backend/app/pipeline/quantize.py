@@ -66,6 +66,18 @@ def max_divisor_for(min_value: str) -> int:
         ) from exc
 
 
+def min_grid_ticks(min_value: str, divisions: int) -> int:
+    """最小音符単位をtickへ変換する(下限と候補フィルタで共有する単一情報源)。
+
+    割り切れない場合(3連符系の除数と割り切れない`divisions`など)は**切り上げる**。
+    切り捨てると下限が実際の格子より短くなり、設定より短い音価を許してしまう。
+    また`round`は銀行丸めなので、格子生成側と同じ整数演算に揃える
+    (LOWレビュー指摘: 下限の算出を一元化する)。
+    """
+    divisor = max_divisor_for(min_value)
+    return max(-(-divisions // divisor), 1)
+
+
 @dataclass(frozen=True)
 class QuantizeSettings:
     """量子化の適用設定(#174)。
@@ -448,7 +460,7 @@ def quantize_note_onsets(
             # onset_tick自身が乗っている格子を逆算する(#25-M2レビュー指摘)。
             offset_grid = _offset_grid_containing_tick(best.tick, divisions)
         # #174: 終端の丸め先も最小音符単位より細かくしない(`max`は粗い方を選ぶ)。
-        offset_grid = max(offset_grid, divisions / settings.max_divisor)
+        offset_grid = max(offset_grid, min_grid_ticks(settings.min_value, divisions))
         quantized_offset_tick = round(raw_offset_tick / offset_grid) * offset_grid
         # #174: 強さ(0.0〜1.0)だけスナップ先へ寄せる。1.0なら従来と同じ完全な
         # スナップ、0.0(または`enabled=False`)なら生位置のまま。
@@ -462,7 +474,7 @@ def quantize_note_onsets(
         # に下限も1tickのままにする。
         min_duration_tick = 1
         if settings.enabled:
-            min_duration_tick = max(round(divisions / settings.max_divisor), 1)
+            min_duration_tick = min_grid_ticks(settings.min_value, divisions)
         duration_tick = max(offset_tick - onset_tick, min_duration_tick)
 
         result[note_id] = QuantizedNote(
