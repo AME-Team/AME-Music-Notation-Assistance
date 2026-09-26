@@ -1,12 +1,17 @@
 import { create } from "zustand";
+import type { ScoreLayout } from "../lib/scoreView";
 import {
   DEFAULT_PREVIEW_BARS,
+  DEFAULT_SCORE_LAYOUT,
   DEFAULT_ZOOM,
   normalizePreviewBars,
+  normalizeScoreLayout,
   normalizeZoom,
   readStoredPreviewBars,
+  readStoredScoreLayout,
   readStoredZoom,
   storePreviewBars,
+  storeScoreLayout,
   storeZoom,
 } from "../lib/scoreView";
 
@@ -20,6 +25,9 @@ interface ScoreViewState {
   /** 楽譜の拡大率(#179)。 */
   zoom: number;
   setZoom: (zoom: number) => void;
+  /** 5線譜の並べ方(#181)。既定は1本の横方向の段。 */
+  layout: ScoreLayout;
+  setLayout: (layout: ScoreLayout) => void;
 }
 
 export const useScoreViewStore = create<ScoreViewState>((set) => ({
@@ -35,11 +43,21 @@ export const useScoreViewStore = create<ScoreViewState>((set) => ({
     storeZoom(window.localStorage, normalized);
     set({ zoom: normalized });
   },
+  layout: DEFAULT_SCORE_LAYOUT,
+  setLayout: (layout) => {
+    const normalized = normalizeScoreLayout(layout);
+    storeScoreLayout(window.localStorage, normalized);
+    set({ layout: normalized });
+  },
 }));
 
 /** 起動時に保存値を読み込む(`main.tsx`が描画前に呼ぶ)。 */
 export function initScoreView(): number {
   const bars = readStoredPreviewBars(window.localStorage);
-  useScoreViewStore.setState({ bars, zoom: readStoredZoom(window.localStorage) });
+  useScoreViewStore.setState({
+    bars,
+    zoom: readStoredZoom(window.localStorage),
+    layout: readStoredScoreLayout(window.localStorage),
+  });
   return bars;
 }

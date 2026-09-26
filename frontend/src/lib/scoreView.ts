@@ -52,6 +52,35 @@ export function storePreviewBars(storage: Storage, bars: number): void {
  */
 export const STEPS_WITH_OWN_SCORE: readonly StepId[] = ["refine", "review"];
 
+/**
+ * 5線譜の並べ方(#181)。
+ *
+ * - `single-line`: 1本の横方向の段に並べる(#179の既定。幅に収まらなければ横スクロール)
+ * - `wrap`: 表示領域の幅に合わせて折り返す(楽譜全体を縮尺して見たいとき)
+ */
+export const SCORE_LAYOUT_MODES = ["single-line", "wrap"] as const;
+export type ScoreLayout = (typeof SCORE_LAYOUT_MODES)[number];
+export const DEFAULT_SCORE_LAYOUT: ScoreLayout = "single-line";
+
+/** 保存値やUIの値から、扱える並べ方へ寄せる。 */
+export function normalizeScoreLayout(value: unknown): ScoreLayout {
+  return SCORE_LAYOUT_MODES.includes(value as ScoreLayout)
+    ? (value as ScoreLayout)
+    : DEFAULT_SCORE_LAYOUT;
+}
+
+const LAYOUT_STORAGE_KEY = "ame.scoreView.layout";
+
+/** 保存された並べ方を読む(壊れていれば既定)。 */
+export function readStoredScoreLayout(storage: Storage): ScoreLayout {
+  return normalizeScoreLayout(storage.getItem(LAYOUT_STORAGE_KEY));
+}
+
+/** 並べ方を保存する。 */
+export function storeScoreLayout(storage: Storage, layout: ScoreLayout): void {
+  storage.setItem(LAYOUT_STORAGE_KEY, normalizeScoreLayout(layout));
+}
+
 /** 楽譜の拡大率(#179)。OSMDの`Zoom`へそのまま渡す。 */
 export const DEFAULT_ZOOM = 1;
 

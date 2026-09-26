@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { ScoreIR } from "../api/client";
 import {
   DEFAULT_PREVIEW_BARS,
+  DEFAULT_SCORE_LAYOUT,
   DEFAULT_ZOOM,
   midiBarRect,
   normalizePreviewBars,
+  normalizeScoreLayout,
   normalizeZoom,
   previewNotes,
   previewPitchRange,
@@ -12,8 +14,10 @@ import {
   previewWindow,
   previewWindowResult,
   readStoredPreviewBars,
+  readStoredScoreLayout,
   readStoredZoom,
   storePreviewBars,
+  storeScoreLayout,
   storeZoom,
   ZOOM_MAX,
   ZOOM_MIN,
@@ -244,5 +248,33 @@ describe("readStoredZoom / storeZoom (#179)", () => {
     expect(readStoredZoom(makeStorage({ "ame.scoreView.zoom": "x" }))).toBe(DEFAULT_ZOOM);
     expect(readStoredZoom(makeStorage({ "ame.scoreView.zoom": "100" }))).toBe(ZOOM_MAX);
     expect(readStoredZoom(makeStorage())).toBe(DEFAULT_ZOOM);
+  });
+});
+
+describe("normalizeScoreLayout / 保存 (#181)", () => {
+  function makeStorage(initial: Record<string, string> = {}): Storage {
+    const map = new Map(Object.entries(initial));
+    return {
+      getItem: (key: string) => map.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        map.set(key, value);
+      },
+      length: map.size,
+    } as unknown as Storage;
+  }
+
+  it("既定は横に1段(#179の要求)", () => {
+    expect(DEFAULT_SCORE_LAYOUT).toBe("single-line");
+    expect(normalizeScoreLayout(null)).toBe("single-line");
+    expect(normalizeScoreLayout("なにか")).toBe("single-line");
+  });
+
+  it("保存して読み戻せる", () => {
+    const storage = makeStorage();
+    storeScoreLayout(storage, "wrap");
+
+    expect(storage.getItem("ame.scoreView.layout")).toBe("wrap");
+    expect(readStoredScoreLayout(storage)).toBe("wrap");
+    expect(readStoredScoreLayout(makeStorage({ "ame.scoreView.layout": "x" }))).toBe("single-line");
   });
 });
