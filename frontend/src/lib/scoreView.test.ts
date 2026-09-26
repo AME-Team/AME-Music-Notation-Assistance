@@ -4,6 +4,7 @@ import {
   DEFAULT_PREVIEW_BARS,
   DEFAULT_SCORE_LAYOUT,
   DEFAULT_ZOOM,
+  DEFAULT_ZOOM,
   midiBarRect,
   normalizePreviewBars,
   normalizeScoreLayout,
@@ -276,5 +277,26 @@ describe("normalizeScoreLayout / 保存 (#181)", () => {
     expect(storage.getItem("ame.scoreView.layout")).toBe("wrap");
     expect(readStoredScoreLayout(storage)).toBe("wrap");
     expect(readStoredScoreLayout(makeStorage({ "ame.scoreView.layout": "x" }))).toBe("single-line");
+  });
+});
+
+describe("縮尺スライダーの刻みと既定値の整合 (#181レビュー指摘)", () => {
+  // rangeの有効値は min + n*step で決まる。既定の100%がその格子に乗っていないと、
+  // つまみが勝手な値へスナップし、初回ドラッグで意図しない倍率へ飛ぶ。
+  it("既定の100%と上下限が刻みの格子に乗る", () => {
+    const onGrid = (value: number) => {
+      const steps = (value - ZOOM_MIN) / ZOOM_STEP;
+      return Math.abs(steps - Math.round(steps)) < 1e-9;
+    };
+
+    expect(onGrid(DEFAULT_ZOOM)).toBe(true);
+    expect(onGrid(ZOOM_MAX)).toBe(true);
+  });
+
+  it("格子の値は丸めで動かない", () => {
+    for (let value = ZOOM_MIN; value <= ZOOM_MAX + 1e-9; value += ZOOM_STEP) {
+      expect(normalizeZoom(value)).toBeCloseTo(value, 9);
+    }
+    expect(normalizeZoom(DEFAULT_ZOOM)).toBe(DEFAULT_ZOOM);
   });
 });

@@ -269,27 +269,48 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
       expect(geometry.panelHeight).toBeLessThan(geometry.innerHeight * 0.8);
 
       // 最下部までスクロールしたとき、内容の末尾が画面内に入っていること。
-      await page.evaluate(() => {
-        const scroller = document.scrollingElement ?? document.documentElement;
-        scroller.scrollTop = scroller.scrollHeight;
-      });
-      await page.waitForTimeout(200);
-      const atBottom = await page.evaluate(() => {
-        const rect = (el: Element | null) => {
-          if (!el) return null;
-          const r = el.getBoundingClientRect();
-          return { top: Math.round(r.top), bottom: Math.round(r.bottom) };
-        };
-        const content = document.querySelector('[data-testid="step-content"]');
-        const last = content?.lastElementChild ?? null;
-        const panelEl = document.querySelector('[data-testid="score-view-panel"]');
-        return {
-          innerHeight: window.innerHeight,
-          panel: rect(panelEl),
-          lastSection: rect(last),
-          content: rect(content),
-        };
-      });
+      const readGeometry = () =>
+        page.evaluate(() => {
+          const rect = (el: Element | null) => {
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { top: Math.round(r.top), bottom: Math.round(r.bottom) };
+          };
+          const content = document.querySelector('[data-testid="step-content"]');
+          const last = content?.lastElementChild ?? null;
+          const panelEl = document.querySelector('[data-testid="score-view-panel"]');
+          return {
+            innerHeight: window.innerHeight,
+            panel: rect(panelEl),
+            lastSection: rect(last),
+            content: rect(content),
+          };
+        });
+
+      // 計測は固定待機ではなく条件が満たされるまで再評価する(固定待機は環境負荷で
+      // レイアウト確定前に測ってしまいflakyになる・LOW指摘)。
+      await expect
+        .poll(
+          async () => {
+            const scroller = await page.evaluate(() => {
+              const el = document.scrollingElement ?? document.documentElement;
+              el.scrollTop = el.scrollHeight;
+              return el.scrollTop;
+            });
+            const geometry = await readGeometry();
+            if (!geometry.lastSection || !geometry.content || !geometry.panel) return -1;
+            // 末尾が画面内(=一番下までスクロールすれば読める)、かつパネルの下に
+            // 内容が見えている(=パネルが画面を占め切っていない)。両方満たした
+            // 位置までスクロールできたときだけ正の値を返す。
+            const tailVisible = geometry.innerHeight + 1 - geometry.lastSection.bottom;
+            const hasRoomBelowPanel = geometry.content.bottom - geometry.panel.bottom;
+            return Math.min(scroller, tailVisible, hasRoomBelowPanel);
+          },
+          { timeout: 10_000 },
+        )
+        .toBeGreaterThan(0);
+
+      const atBottom = await readGeometry();
       expect(atBottom.lastSection).not.toBeNull();
       expect(atBottom.content).not.toBeNull();
       if (atBottom.lastSection && atBottom.panel && atBottom.content) {
