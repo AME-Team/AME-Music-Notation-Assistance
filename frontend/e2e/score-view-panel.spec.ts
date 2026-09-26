@@ -194,8 +194,10 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         // ⑤⑥は自前の譜面(差分表示)がステップ内にあるため、パネルはMIDIのみ
         // (同一画面でOSMDを二重に走らせない)。
         // 自前の譜面を持つステップでは見出しもMIDIのみを指す(実表示と一致させる)。
+        // "MIDI(先頭4小節)" は "楽譜とMIDI(先頭4小節)" の部分文字列なので、
+        // toContainTextでは分岐の正しさを検証できない。見出し要素へ完全一致で当てる。
         const expectsOwnScore = STEPS_WITH_OWN_SCORE.includes(stepId as StepId);
-        await expect(panel).toContainText(
+        await expect(panel.getByRole("heading", { level: 2 })).toHaveText(
           expectsOwnScore ? "MIDI(先頭4小節)" : "楽譜とMIDI(先頭4小節)",
         );
         if (expectsOwnScore) {
