@@ -101,7 +101,8 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 className="text-base font-semibold text-gray-800 dark:text-gray-100">
-          楽譜とMIDI(先頭{shownBars}小節)
+          {/* 見出しは実際に描いているものに合わせる(⑤⑥は自前の譜面があるためMIDIのみ)。 */}
+          {showsOwnScore ? `MIDI(先頭${shownBars}小節)` : `楽譜とMIDI(先頭${shownBars}小節)`}
         </h2>
         <label className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300">
           表示する小節数

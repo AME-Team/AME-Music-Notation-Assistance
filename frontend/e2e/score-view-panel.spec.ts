@@ -183,7 +183,7 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         await expect(panel.getByTestId("midi-bar")).toBeVisible({ timeout: 15_000 });
         // 先頭4小節(既定)に音符が描かれている。
         expect(await panel.getByTestId("midi-note").count()).toBeGreaterThan(0);
-        await expect(panel).toContainText("楽譜とMIDI(先頭4小節)");
+
         // 小節番号は実在する小節の数だけ(線は右端の次小節線を含むため+1本)。
         expect(await panel.getByTestId("midi-bar-label").count()).toBe(4);
         expect(await panel.getByTestId("midi-barline").count()).toBe(5);
@@ -193,7 +193,12 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         // #179: 楽譜が出るページでは最上部のパネルに5線譜が出る(メインに据える)。
         // ⑤⑥は自前の譜面(差分表示)がステップ内にあるため、パネルはMIDIのみ
         // (同一画面でOSMDを二重に走らせない)。
-        if (stepId === "refine" || stepId === "review") {
+        // 自前の譜面を持つステップでは見出しもMIDIのみを指す(実表示と一致させる)。
+        const expectsOwnScore = STEPS_WITH_OWN_SCORE.includes(stepId as StepId);
+        await expect(panel).toContainText(
+          expectsOwnScore ? "MIDI(先頭4小節)" : "楽譜とMIDI(先頭4小節)",
+        );
+        if (expectsOwnScore) {
           await expect(panel).toContainText("ここはMIDIバーのみ表示します");
         } else {
           await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
