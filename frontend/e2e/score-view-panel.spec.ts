@@ -184,15 +184,21 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         // 小節番号は実在する小節の数だけ(線は右端の次小節線を含むため+1本)。
         expect(await panel.getByTestId("midi-bar-label").count()).toBe(4);
         expect(await panel.getByTestId("midi-barline").count()).toBe(5);
-        // #179: 楽譜はどの作業ページでも最上部のパネルに出る(5線譜をメインに据える)。
-        await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
+        const stepId = ["separate", "beat", "transcribe", "quantize", "refine", "review", "export"][
+          index
+        ];
+        // #179: 楽譜が出るページでは最上部のパネルに5線譜が出る(メインに据える)。
+        // ⑤⑥は自前の譜面(差分表示)がステップ内にあるため、パネルはMIDIのみ
+        // (同一画面でOSMDを二重に走らせない)。
+        if (stepId === "refine" || stepId === "review") {
+          await expect(panel).toContainText("ここはMIDIバーのみ表示します");
+        } else {
+          await expect(panel.locator("div.bg-white svg").first()).toBeVisible({ timeout: 15_000 });
+        }
         // #174: 量子化の既定は16分音符・強さ100%・有効。現在値がその場に出る。
         await expect(panel.getByTestId("quantize-summary")).toContainText(
           "16分音符・強さ100%・クオンタイズON",
         );
-        const stepId = ["separate", "beat", "transcribe", "quantize", "refine", "review", "export"][
-          index
-        ];
         // ④を再実行してよいのは①〜④のページだけ(⑤以降の手動補正を上書きしない)。
         const rerun = panel.getByRole("button", { name: "ビート補正を反映して更新" });
         if (["separate", "beat", "transcribe", "quantize"].includes(stepId)) {

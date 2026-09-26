@@ -31,13 +31,15 @@ interface ScorePreviewProps {
   zoom?: number;
 }
 
-/** #179: 描画の直前に適用する表示設定(横並び・拡大率)。 */
-function applyRenderOptions(
-  osmd: OpenSheetMusicDisplay,
-  options: { singleHorizontalStaffline: boolean; zoom: number },
-): void {
-  osmd.setOptions({ renderSingleHorizontalStaffline: options.singleHorizontalStaffline });
-  osmd.Zoom = options.zoom;
+/**
+ * #179: 描画の直前に拡大率を適用する。
+ *
+ * 「1本の横方向の段」設定はインスタンス生成時に渡して固定する。`setOptions`は
+ * OSMD内部で再描画を起こしうるため、ここで毎回渡すと呼び出し側の`render()`と
+ * 合わせて二重描画になる(LOWレビュー指摘)。`Zoom`はプロパティなので代入だけする。
+ */
+function applyZoom(osmd: OpenSheetMusicDisplay, zoom: number): void {
+  osmd.Zoom = zoom;
 }
 
 const DEBOUNCE_MS = 500; // NFR-03: 編集後500ms以内にプレビューが更新される
@@ -146,8 +148,8 @@ export function ScorePreview({
           if (latestRequestIdRef.current !== requestId) return; // 古いリクエストの結果は破棄
           setError(null);
           setLoaded(true);
-          // #179: 初回描画でも横並び・拡大率を反映する。
-          applyRenderOptions(osmd, renderOptionRef.current);
+          // #179: 初回描画でも拡大率を反映する(横並びは生成時のオプションで確定済み)。
+          applyZoom(osmd, renderOptionRef.current.zoom);
           osmd.render();
         })
         .catch((err: unknown) => {
@@ -237,8 +239,9 @@ export function ScorePreview({
     // (実測: 全パートの小節数が揃っていないMusicXMLで `Cannot read properties of
     // undefined (reading 'staffEntries')`)。表示範囲の変更は付加的な機能なので
     // ここで握ってエラー表示に留め、プレビュー以外のUIを巻き込まない。
-    // #179: 表示範囲だけでなく、横並び・拡大率も描画の直前に確定させる。
-    applyRenderOptions(osmd, { singleHorizontalStaffline, zoom });
+    // #179: 拡大率は描画の直前に確定させる(変更には再描画が必要なので、この
+    // effectの依存に入れて1クリックごとに描き直す。debounceは掛けない)。
+    applyZoom(osmd, zoom);
     try {
       osmd.render();
       // 表示範囲の変更で成功したら、以前の失敗(#154の例: 譜面が壊れていて一時的に

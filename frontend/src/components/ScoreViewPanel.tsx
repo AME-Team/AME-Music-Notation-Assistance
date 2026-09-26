@@ -32,6 +32,14 @@ interface ScoreViewPanelProps {
  */
 const QUANTIZE_RERUN_STEPS: readonly StepId[] = ["separate", "beat", "transcribe", "quantize"];
 
+/**
+ * そのページが自前で楽譜プレビューを出すステップ(⑤⑥は`DiffPanel`等が
+ * `ScorePreview`を持つ)。同じ画面でOSMDを二重に走らせないため、パネル側の
+ * 埋め込み楽譜は出さない(#172のMIDDLEレビュー指摘。差し戻していた)。
+ * ⑤⑥ではステップ側の譜面がそのページの主役(差分表示)なので、そこは譲る。
+ */
+const STEPS_WITH_OWN_SCORE: readonly StepId[] = ["refine", "review"];
+
 /** パネルはノート選択を持たないため、再レンダーで作り直さないよう固定する。 */
 const NO_SELECTION: ReadonlySet<number> = new Set();
 
@@ -85,13 +93,16 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
   const barWindow = analysis && "window" in analysis ? analysis.window : null;
   const unavailableReason = analysis && "reason" in analysis ? analysis.reason : null;
   const canRerunQuantize = QUANTIZE_RERUN_STEPS.includes(activeStep);
+  const showsOwnScore = STEPS_WITH_OWN_SCORE.includes(activeStep);
   const notes = score && barWindow ? previewNotes(score, barWindow) : [];
   const shownBars = barWindow ? barWindow.toBar : bars;
 
   return (
     <section
       // 作業ステップの操作をスクロールしても楽譜とMIDIが隠れないよう、最上部に固定する。
-      className="-mx-4 sticky top-0 z-10 space-y-2 border-b border-gray-200 bg-white/95 px-4 py-3 backdrop-blur dark:border-gray-700 dark:bg-gray-950/95"
+      // 負マージンで親の外へはみ出させない(親に左右パディングが無いため、横スクロールの
+      // 原因になる:LOWレビュー指摘)。通常のパディングで固定する。
+      className="sticky top-0 z-10 space-y-2 border-b border-gray-200 bg-white/95 py-3 backdrop-blur dark:border-gray-700 dark:bg-gray-950/95"
       data-testid="score-view-panel"
       aria-label="楽譜とMIDIのプレビュー"
     >
@@ -187,17 +198,23 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
               先頭{shownBars}小節に音符がありません。
             </p>
           )}
-          <ScorePreview
-            projectId={projectId}
-            score={score}
-            selectedNoteIds={NO_SELECTION}
-            fromBar={1}
-            toBar={barWindow.toBar}
-            showHeading={false}
-            // 5線譜は1本の横方向の段に並べる(楽譜清書ソフトと同じ見え方)。
-            singleHorizontalStaffline
-            zoom={zoom}
-          />
+          {showsOwnScore ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              このページは自前の譜面(差分表示)が下にあるため、ここはMIDIバーのみ表示します。
+            </p>
+          ) : (
+            <ScorePreview
+              projectId={projectId}
+              score={score}
+              selectedNoteIds={NO_SELECTION}
+              fromBar={1}
+              toBar={barWindow.toBar}
+              showHeading={false}
+              // 5線譜は1本の横方向の段に並べる(楽譜清書ソフトと同じ見え方)。
+              singleHorizontalStaffline
+              zoom={zoom}
+            />
+          )}
         </div>
       )}
     </section>

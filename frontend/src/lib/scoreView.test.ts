@@ -203,6 +203,17 @@ describe("normalizeZoom (#179)", () => {
     expect(normalizeZoom(99)).toBe(ZOOM_MAX);
   });
 
+  it("下限から増やすと既定の100%へ到達できる(#179レビュー指摘)", () => {
+    // 下限が増減幅の格子に乗っていないと(例:0.5)、0.5→0.7→0.9→1.1…と進み
+    // 既定の100%へ二度と戻れなくなる。
+    let zoom = normalizeZoom(0.01); // 下限
+    for (let i = 0; i < 10 && zoom !== DEFAULT_ZOOM; i += 1) {
+      zoom = normalizeZoom(zoom + ZOOM_STEP);
+    }
+
+    expect(zoom).toBe(DEFAULT_ZOOM);
+  });
+
   it("数値にならない値は既定へ落とす", () => {
     expect(normalizeZoom("abc")).toBe(DEFAULT_ZOOM);
     expect(normalizeZoom(null)).toBe(DEFAULT_ZOOM);

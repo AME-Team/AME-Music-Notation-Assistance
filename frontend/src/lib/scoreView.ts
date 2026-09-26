@@ -44,8 +44,14 @@ export function storePreviewBars(storage: Storage, bars: number): void {
 /** 楽譜の拡大率(#179)。OSMDの`Zoom`へそのまま渡す。 */
 export const DEFAULT_ZOOM = 1;
 
-/** 拡大率の下限・上限と、ズームボタン1回あたりの増減幅(#179)。 */
-export const ZOOM_MIN = 0.5;
+/**
+ * 拡大率の下限・上限と、ズームボタン1回あたりの増減幅(#179)。
+ *
+ * 下限・上限は増減幅の格子と既定値(1.0)に揃える。0.5のように格子へ乗らない値を
+ * 下限にすると、下限まで縮小した後は 0.5→0.7→0.9→1.1… と進み、**既定の100%へ
+ * 二度と戻れなくなる**(MIDDLEレビュー指摘)。
+ */
+export const ZOOM_MIN = 0.6;
 export const ZOOM_MAX = 3;
 export const ZOOM_STEP = 0.2;
 
