@@ -7,6 +7,7 @@ import {
   toStageParams,
 } from "../lib/quantizeSettings";
 import {
+  normalizeScoreLayout,
   PREVIEW_BARS_CHOICES,
   previewNotes,
   previewWindowResult,
@@ -43,10 +44,6 @@ const UNAVAILABLE_MESSAGE = {
   "too-short": "曲が1小節に満たないため、小節単位のプレビューを作れません。",
 } as const;
 
-const ZOOM_BUTTON_CLASS =
-  "rounded-md border border-gray-300 dark:border-gray-600 px-2 py-0.5 text-sm text-gray-700 " +
-  "dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-40";
-
 /**
  * #179: **全ての作業ページの最上部**に固定する「楽譜とMIDI」ビュー。
  *
@@ -63,6 +60,8 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
   const setBars = useScoreViewStore((s) => s.setBars);
   const zoom = useScoreViewStore((s) => s.zoom);
   const setZoom = useScoreViewStore((s) => s.setZoom);
+  const layout = useScoreViewStore((s) => s.layout);
+  const setLayout = useScoreViewStore((s) => s.setLayout);
   const scoreQuery = useScore(projectId);
   const score = scoreQuery.data ?? null;
 
@@ -119,33 +118,37 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
             ))}
           </select>
         </label>
-        {/* ズームの増減(ボタン自体にaria-labelを付ける)。 */}
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setZoom(zoom - ZOOM_STEP)}
-            disabled={zoom <= ZOOM_MIN}
-            className={ZOOM_BUTTON_CLASS}
-            aria-label="楽譜を縮小"
-          >
-            −
-          </button>
+        <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+          縮尺
+          <input
+            type="range"
+            min={Math.round(ZOOM_MIN * 100)}
+            max={Math.round(ZOOM_MAX * 100)}
+            step={Math.round(ZOOM_STEP * 100)}
+            value={Math.round(zoom * 100)}
+            onChange={(event) => setZoom(Number(event.target.value) / 100)}
+            className="w-28"
+            aria-label="楽譜の縮尺"
+          />
           <span
-            className="w-12 text-center text-xs text-gray-500 dark:text-gray-400"
+            className="w-11 text-right text-xs text-gray-500 dark:text-gray-400"
             data-testid="score-zoom"
           >
             {Math.round(zoom * 100)}%
           </span>
-          <button
-            type="button"
-            onClick={() => setZoom(zoom + ZOOM_STEP)}
-            disabled={zoom >= ZOOM_MAX}
-            className={ZOOM_BUTTON_CLASS}
-            aria-label="楽譜を拡大"
+        </label>
+        <label className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300">
+          並べ方
+          <select
+            value={layout}
+            onChange={(event) => setLayout(normalizeScoreLayout(event.target.value))}
+            className="rounded-md border border-gray-300 px-2 py-1 text-sm dark:border-gray-600"
+            aria-label="5線譜の並べ方"
           >
-            ＋
-          </button>
-        </div>
+            <option value="single-line">横に1段</option>
+            <option value="wrap">幅に合わせる</option>
+          </select>
+        </label>
         <button
           type="button"
           onClick={() => void runner.run()}
@@ -185,30 +188,41 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
 
       {score && barWindow && (
         <div className="space-y-1">
-          {/* MIDIバーと5線譜を並べて置き、同じ区間を同時に見ながら補正する。 */}
-          <MidiBar notes={notes} window={barWindow} />
-          {notes.length === 0 && (
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              先頭{shownBars}小節に音符がありません。
-            </p>
-          )}
-          {showsOwnScore ? (
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              このページは自前の譜面(差分表示)が下にあるため、ここはMIDIバーのみ表示します。
-            </p>
-          ) : (
-            <ScorePreview
-              projectId={projectId}
-              score={score}
-              selectedNoteIds={NO_SELECTION}
-              fromBar={1}
-              toBar={barWindow.toBar}
-              showHeading={false}
-              // 5線譜は1本の横方向の段に並べる(楽譜清書ソフトと同じ見え方)。
-              singleHorizontalStaffline
-              zoom={zoom}
-            />
-          )}
+          {/* MIDIバーと5線譜を並べて置き、同じ区間を同時に見ながら補正する。
+              高さは上限付き(stickyで画面を占めるため、無制限だと楽譜より下の
+              セクションが常に隠れてしまう)。 */}
+          <div
+            className="max-h-[38vh] overflow-y-auto rounded-md border border-gray-200 bg-white dark:border-gray-700"
+            data-testid="score-main-scroll"
+          >
+            <div className="space-y-1 p-1">
+              <MidiBar notes={notes} window={barWindow} />
+              {notes.length === 0 && (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  先頭{shownBars}小節に音符がありません。
+                </p>
+              )}
+              {showsOwnScore ? (
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  このページは自前の譜面(差分表示)が下にあるため、ここはMIDIバーのみ表示します。
+                </p>
+              ) : (
+                <ScorePreview
+                  // 並べ方を切り替えたらOSMDインスタンスを作り直す(横並びは生成時
+                  // オプションのため。`ScorePreview`の`singleHorizontalStaffline`参照)。
+                  key={layout}
+                  projectId={projectId}
+                  score={score}
+                  selectedNoteIds={NO_SELECTION}
+                  fromBar={1}
+                  toBar={barWindow.toBar}
+                  showHeading={false}
+                  singleHorizontalStaffline={layout === "single-line"}
+                  zoom={zoom}
+                />
+              )}
+            </div>
+          </div>
         </div>
       )}
     </section>

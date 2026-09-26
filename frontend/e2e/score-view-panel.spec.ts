@@ -159,6 +159,8 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
       window.localStorage.removeItem("ame.scoreView.bars");
       // #179: 楽譜の拡大率も前回実行の値を持ち越さない(既定は100%)。
       window.localStorage.removeItem("ame.scoreView.zoom");
+      // #181: 5線譜の並べ方も前回実行の値を持ち越さない(既定は横に1段)。
+      window.localStorage.removeItem("ame.scoreView.layout");
       // #174: 量子化の設定も前回実行の値を持ち越さない。
       window.localStorage.removeItem("ame.quantize");
     });
@@ -246,6 +248,79 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
       await expect(panel.locator("div.bg-white svg").first()).toBeVisible();
     });
 
+    await test.step("楽譜より下のセクションが隠れない(#181)", async () => {
+      // ②ビート(補正UIが長いページ)を開く。
+      await steps.nth(1).click();
+      await expect(panel.getByTestId("midi-bar")).toBeVisible({ timeout: 15_000 });
+
+      const geometry = await page.evaluate(() => {
+        const scroller = document.scrollingElement ?? document.documentElement;
+        const panelEl = document.querySelector('[data-testid="score-view-panel"]');
+        const panelRect = panelEl?.getBoundingClientRect();
+        return {
+          innerHeight: window.innerHeight,
+          panelHeight: Math.round(panelRect?.height ?? 0),
+          canScroll: scroller.scrollHeight > scroller.clientHeight,
+        };
+      });
+      // stickyなパネルが画面を占め切ると、下のセクションをどうスクロールしても
+      // 見られなくなる(実測: viewport 770pxに対しパネル428pxが最上部に固定され、
+      // 内容の先頭がパネルの下へ潜っていた)。
+      expect(geometry.panelHeight).toBeLessThan(geometry.innerHeight * 0.8);
+
+      // 最下部までスクロールしたとき、内容の末尾が画面内に入っていること。
+      const readGeometry = () =>
+        page.evaluate(() => {
+          const rect = (el: Element | null) => {
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { top: Math.round(r.top), bottom: Math.round(r.bottom) };
+          };
+          const content = document.querySelector('[data-testid="step-content"]');
+          const last = content?.lastElementChild ?? null;
+          const panelEl = document.querySelector('[data-testid="score-view-panel"]');
+          return {
+            innerHeight: window.innerHeight,
+            panel: rect(panelEl),
+            lastSection: rect(last),
+            content: rect(content),
+          };
+        });
+
+      // 計測は固定待機ではなく条件が満たされるまで再評価する(固定待機は環境負荷で
+      // レイアウト確定前に測ってしまいflakyになる・LOW指摘)。
+      await expect
+        .poll(
+          async () => {
+            const scroller = await page.evaluate(() => {
+              const el = document.scrollingElement ?? document.documentElement;
+              el.scrollTop = el.scrollHeight;
+              return el.scrollTop;
+            });
+            const geometry = await readGeometry();
+            if (!geometry.lastSection || !geometry.content || !geometry.panel) return -1;
+            // 末尾が画面内(=一番下までスクロールすれば読める)、かつパネルの下に
+            // 内容が見えている(=パネルが画面を占め切っていない)。両方満たした
+            // 位置までスクロールできたときだけ正の値を返す。
+            const tailVisible = geometry.innerHeight + 1 - geometry.lastSection.bottom;
+            const hasRoomBelowPanel = geometry.content.bottom - geometry.panel.bottom;
+            return Math.min(scroller, tailVisible, hasRoomBelowPanel);
+          },
+          { timeout: 10_000 },
+        )
+        .toBeGreaterThan(0);
+
+      const atBottom = await readGeometry();
+      expect(atBottom.lastSection).not.toBeNull();
+      expect(atBottom.content).not.toBeNull();
+      if (atBottom.lastSection && atBottom.panel && atBottom.content) {
+        // 末尾が画面内(=一番下までスクロールすれば読める)。
+        expect(atBottom.lastSection.bottom).toBeLessThanOrEqual(atBottom.innerHeight + 1);
+        // パネルの下に内容が見えている(=パネルが画面を占め切っていない)。
+        expect(atBottom.content.bottom).toBeGreaterThan(atBottom.panel.bottom);
+      }
+    });
+
     await test.step("5線譜は1本の横方向の段に並び、ズームが反映される(#179)", async () => {
       const canvas = panel.getByTestId("score-preview-canvas");
       // 5線譜を横に並べる設定がOSMDインスタンスへ渡っている。
@@ -257,9 +332,7 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         .locator("svg")
         .first()
         .evaluate((el) => el.getBoundingClientRect().width);
-      for (let i = 0; i < 5; i += 1) {
-        await panel.getByLabel("楽譜を拡大").click();
-      }
+      await panel.getByLabel("楽譜の縮尺").fill("200");
       await expect(panel.getByTestId("score-zoom")).toHaveText("200%");
       await expect(canvas).toHaveAttribute("data-zoom", "2");
       const widthAt200 = await canvas
@@ -276,6 +349,16 @@ test("first N bars of MIDI and score are visible on every work page (#172)", asy
         scrollWidth: el.scrollWidth,
       }));
       expect(sizes.scrollWidth).toBeGreaterThan(sizes.clientWidth);
+
+      // 並べ方を「幅に合わせる」へ変えると、折り返して表示領域に収まる(#181)。
+      await panel.getByLabel("5線譜の並べ方").selectOption("wrap");
+      await expect(panel.getByTestId("score-preview-canvas")).toHaveAttribute(
+        "data-single-horizontal-staffline",
+        "false",
+      );
+      await expect
+        .poll(async () => canvas.evaluate((el) => el.scrollWidth - el.clientWidth))
+        .toBeLessThanOrEqual(1);
     });
 
     await test.step("パネルが全ページで閉じずに残っている(設定変更後も)", async () => {

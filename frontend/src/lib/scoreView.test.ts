@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { ScoreIR } from "../api/client";
 import {
   DEFAULT_PREVIEW_BARS,
+  DEFAULT_SCORE_LAYOUT,
   DEFAULT_ZOOM,
   midiBarRect,
   normalizePreviewBars,
+  normalizeScoreLayout,
   normalizeZoom,
   previewNotes,
   previewPitchRange,
@@ -12,8 +14,10 @@ import {
   previewWindow,
   previewWindowResult,
   readStoredPreviewBars,
+  readStoredScoreLayout,
   readStoredZoom,
   storePreviewBars,
+  storeScoreLayout,
   storeZoom,
   ZOOM_MAX,
   ZOOM_MIN,
@@ -244,5 +248,54 @@ describe("readStoredZoom / storeZoom (#179)", () => {
     expect(readStoredZoom(makeStorage({ "ame.scoreView.zoom": "x" }))).toBe(DEFAULT_ZOOM);
     expect(readStoredZoom(makeStorage({ "ame.scoreView.zoom": "100" }))).toBe(ZOOM_MAX);
     expect(readStoredZoom(makeStorage())).toBe(DEFAULT_ZOOM);
+  });
+});
+
+describe("normalizeScoreLayout / 保存 (#181)", () => {
+  function makeStorage(initial: Record<string, string> = {}): Storage {
+    const map = new Map(Object.entries(initial));
+    return {
+      getItem: (key: string) => map.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        map.set(key, value);
+      },
+      length: map.size,
+    } as unknown as Storage;
+  }
+
+  it("既定は横に1段(#179の要求)", () => {
+    expect(DEFAULT_SCORE_LAYOUT).toBe("single-line");
+    expect(normalizeScoreLayout(null)).toBe("single-line");
+    expect(normalizeScoreLayout("なにか")).toBe("single-line");
+  });
+
+  it("保存して読み戻せる", () => {
+    const storage = makeStorage();
+    storeScoreLayout(storage, "wrap");
+
+    expect(storage.getItem("ame.scoreView.layout")).toBe("wrap");
+    expect(readStoredScoreLayout(storage)).toBe("wrap");
+    expect(readStoredScoreLayout(makeStorage({ "ame.scoreView.layout": "x" }))).toBe("single-line");
+  });
+});
+
+describe("縮尺スライダーの刻みと既定値の整合 (#181レビュー指摘)", () => {
+  // rangeの有効値は min + n*step で決まる。既定の100%がその格子に乗っていないと、
+  // つまみが勝手な値へスナップし、初回ドラッグで意図しない倍率へ飛ぶ。
+  it("既定の100%と上下限が刻みの格子に乗る", () => {
+    const onGrid = (value: number) => {
+      const steps = (value - ZOOM_MIN) / ZOOM_STEP;
+      return Math.abs(steps - Math.round(steps)) < 1e-9;
+    };
+
+    expect(onGrid(DEFAULT_ZOOM)).toBe(true);
+    expect(onGrid(ZOOM_MAX)).toBe(true);
+  });
+
+  it("格子の値は丸めで動かない", () => {
+    for (let value = ZOOM_MIN; value <= ZOOM_MAX + 1e-9; value += ZOOM_STEP) {
+      expect(normalizeZoom(value)).toBeCloseTo(value, 9);
+    }
+    expect(normalizeZoom(DEFAULT_ZOOM)).toBe(DEFAULT_ZOOM);
   });
 });
