@@ -74,8 +74,8 @@ export const ZOOM_STEP = 0.2;
  */
 export function normalizeZoom(value: unknown): number {
   // 未保存(`null`/`undefined`)や空文字は「既定」として扱う。`Number(null)`は0に
-  // なってしまうため、数値化の前に弾く(保存値が無い利用者の既定が下限0.5へ
-  // 化けるのを防ぐ)。
+  // なってしまうため、数値化の前に弾く(保存値が無い利用者の既定が下限`ZOOM_MIN`
+  // へ化けるのを防ぐ)。
   if (value === null || value === undefined || value === "") return DEFAULT_ZOOM;
   const number = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(number)) return DEFAULT_ZOOM;

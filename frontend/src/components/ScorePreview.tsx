@@ -241,6 +241,12 @@ export function ScorePreview({
     // ここで握ってエラー表示に留め、プレビュー以外のUIを巻き込まない。
     // #179: 拡大率は描画の直前に確定させる(変更には再描画が必要なので、この
     // effectの依存に入れて1クリックごとに描き直す。debounceは掛けない)。
+    //
+    // `singleHorizontalStaffline`は**このeffectの本体で参照しない**ため依存に入れて
+    // いない(MIDDLEレビュー指摘)。この設定は表示範囲や拡大率と違い`setOptions`を
+    // 伴うと二重描画になるため、`OpenSheetMusicDisplay`の生成時オプションで確定して
+    // いる(上の生成effect、`renderSingleHorizontalStaffline`)。prop自体は静的なので、
+    // 途中で変更しても再生成しない(呼び出し側は`key`で作り直す)。
     applyZoom(osmd, zoom);
     try {
       osmd.render();
