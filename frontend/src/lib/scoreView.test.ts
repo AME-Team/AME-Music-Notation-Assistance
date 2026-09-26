@@ -4,7 +4,6 @@ import {
   DEFAULT_PREVIEW_BARS,
   DEFAULT_SCORE_LAYOUT,
   DEFAULT_ZOOM,
-  DEFAULT_ZOOM,
   midiBarRect,
   normalizePreviewBars,
   normalizeScoreLayout,
