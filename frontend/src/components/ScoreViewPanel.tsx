@@ -66,8 +66,15 @@ export function ScoreViewPanel({ projectId, activeStep }: ScoreViewPanelProps) {
   const score = scoreQuery.data ?? null;
 
   // 実行の直前に保存値を取り出す(古いクロージャの設定を送らないため)。
+  // `force`を立てるのは、このrunnerが**ボタン押下でのみ**走るため
+  // (`useStageRunner`は自分では実行せず、下の`runner.run()`を押下時に呼ぶだけ)。
+  // 入力(音源・ビート補正・設定)が前回と同じだと、ステージ側は「変更なし」と
+  // 判断してスキップし、ユーザーの明示操作でも何も起きない(#183の実報告)。
   const runner = useStageRunner(
-    () => runQuantizeStage(projectId, toStageParams(useQuantizeStore.getState().settings)),
+    () =>
+      runQuantizeStage(projectId, toStageParams(useQuantizeStore.getState().settings), {
+        force: true,
+      }),
     {
       invalidateKeys: [[...scoreKey(projectId)]],
       failureFallbackMessage: "先頭N小節の再作成に失敗しました",

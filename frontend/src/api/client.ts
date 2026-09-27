@@ -207,11 +207,14 @@ async function runStage(
   projectId: string,
   stage: string,
   params: Record<string, unknown> = {},
+  options: { force?: boolean } = {},
 ): Promise<{ job_id: string }> {
   const resp = await apiFetch(`/api/projects/${projectId}/stages/${stage}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ params }),
+    // `force`はAPIのトップレベル項目(`params`の中ではない)。入力が同じでも
+    // 作り直したいとき(ユーザーが明示的に「更新」を押したとき)に立てる(#183)。
+    body: JSON.stringify({ params, force: options.force ?? false }),
   });
   return (await resp.json()) as { job_id: string };
 }
@@ -251,8 +254,9 @@ export async function runTranscribeStage(projectId: string): Promise<{ job_id: s
 export async function runQuantizeStage(
   projectId: string,
   params: Record<string, unknown> = {},
+  options: { force?: boolean } = {},
 ): Promise<{ job_id: string }> {
-  return runStage(projectId, "quantize", params);
+  return runStage(projectId, "quantize", params, options);
 }
 
 export type ExportFormat = "musicxml" | "midi";

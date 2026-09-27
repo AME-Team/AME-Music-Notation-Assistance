@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from app.domain.score import ScoreIR
 from app.infra import storage
 from app.services.score_service import ScoreService
 from app.worker import dsp_main
@@ -1065,6 +1067,94 @@ def test_quantize_stage_reruns_when_only_tempo_map_changed(
 
     score = ScoreService(workspace_dir=tmp_path).read_score(project_id)
     assert [(t.bar, t.beat, t.bpm) for t in score.tempo_map] == [(1, 1.0, 90.0)]
+
+
+def test_quantize_stage_enforces_the_min_value_at_the_output_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回帰(#183): 出力境界で最小音符単位を不変条件として課す。
+
+    ノート単位の下限は`_quantize_note`にもあるが、経路が増えたときに素通りしない
+    よう、ステージの出力境界でも同じ下限を機械的に課す(要件: この設定のとき、
+    いかなる場合でも最小音符単位より短い音符を残さない)。
+
+    実測するのは配線と下限の値。下限の効果そのもの(短い音価の引き上げ)は
+    `TestEnforceMinDuration`が単体で検証する。
+    """
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    calls: list[int] = []
+    real_enforce = dsp_main.enforce_min_duration
+
+    def spy(
+        score: ScoreIR,
+        min_duration_tick: int,
+        *,
+        tick_to_sec: Callable[[float], float] | None = None,
+    ) -> int:
+        calls.append(min_duration_tick)
+        return real_enforce(score, min_duration_tick, tick_to_sec=tick_to_sec)
+
+    monkeypatch.setattr(dsp_main, "enforce_min_duration", spy)
+    dsp_main.run_quantize_stage(
+        "job2", project_id, tmp_path, {"quantize_min_value": "1/16"}
+    )
+
+    # divisions=480は四分音符あたりなので、16分音符は120tick。1回だけ、その下限で呼ぶ。
+    assert calls == [120]
+    durations = [
+        note.duration_tick
+        for part in ScoreService(workspace_dir=tmp_path).read_score(project_id).parts
+        for note in part.notes
+        if note.duration_tick is not None
+    ]
+    assert durations
+    assert min(durations) >= 120
+
+
+def test_quantize_stage_does_not_bound_durations_without_effective_strength(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#183: クオンタイズOFFでは音価の下限を課さない(生位置のままの契約・#177)。"""
+    project_id = "proj_test"
+    _setup_project_with_valid_source(tmp_path, project_id)
+    _write_stub_wav(storage.stems_dir(tmp_path, project_id) / "piano.wav")
+    monkeypatch.setattr(
+        dsp_main,
+        "run_piano_transcription",
+        _fake_transcription_result([(0.0, 0.5, 60, 90, False)]),
+    )
+    dsp_main.run_transcribe_stage("job1", project_id, tmp_path, {})
+    _write_beatmap(tmp_path, project_id)
+
+    calls: list[int] = []
+    real_enforce = dsp_main.enforce_min_duration
+
+    def spy(
+        score: ScoreIR,
+        min_duration_tick: int,
+        *,
+        tick_to_sec: Callable[[float], float] | None = None,
+    ) -> int:
+        calls.append(min_duration_tick)
+        return real_enforce(score, min_duration_tick, tick_to_sec=tick_to_sec)
+
+    monkeypatch.setattr(dsp_main, "enforce_min_duration", spy)
+    dsp_main.run_quantize_stage(
+        "job2", project_id, tmp_path, {"quantize_enabled": False}
+    )
+
+    # 1tick=「下限なし」を意味する(`enforce_min_duration`は何も変えない)。
+    assert calls == [1]
 
 
 def test_quantize_stage_sets_tick_spelling_voice_staff(
