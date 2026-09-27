@@ -7,8 +7,10 @@ Swing検出のそれぞれを、決定論的なロジックとして厚くテス
 
 from __future__ import annotations
 
-import pytest
+from typing import ClassVar
 
+import pytest
+from app.domain.score import Note, Part, ScoreIR, SourceInfo
 from app.pipeline.quantize import (
     DEFAULT_MIN_VALUE,
     DEFAULT_TOP_N,
@@ -16,6 +18,7 @@ from app.pipeline.quantize import (
     QuantizeSettings,
     beat_tick_anchors,
     detect_swing_ratio,
+    enforce_min_duration,
     min_grid_ticks,
     quantize_note_onsets,
     quantize_pedal_ticks,
@@ -477,7 +480,7 @@ class TestQuantizeSettings:
 
     # 1/32格子(60tick)ちょうどのオンセット。120bpm・4/4なので1拍=0.5秒=480tick。
     _ONETICK32_SEC = 0.0625
-    _NOTES = [(1, _ONETICK32_SEC, 0.5)]
+    _NOTES: ClassVar[list[tuple[int, float, float]]] = [(1, _ONETICK32_SEC, 0.5)]
 
     def _quantize(self, **kwargs) -> dict:
         settings = QuantizeSettings(**kwargs) if kwargs else None
@@ -671,3 +674,149 @@ class TestQuantizeSettings:
             "strength": 0.5,
             "enabled": False,
         }
+
+
+def _score_with_durations(divisions: int, durations: list[int | None]) -> ScoreIR:
+    """音価だけが異なるノートを並べた最小の`ScoreIR`(#183)。"""
+    score = ScoreIR(
+        project_id="proj_test",
+        source=SourceInfo(filename="song.mp3", duration_sec=10.0, sample_rate=44100),
+        divisions=divisions,
+    )
+    notes = [
+        Note(
+            id=score.allocate_note_id(),
+            onset_sec=i * 0.5,
+            duration_sec=0.5,
+            onset_tick=i * divisions,
+            duration_tick=duration,
+            midi=60,
+            velocity=80,
+            provenance="amt",
+        )
+        for i, duration in enumerate(durations)
+    ]
+    score.parts.append(Part(id="piano", name="Piano", midi_program=0, notes=notes))
+    return score
+
+
+class TestMinDurationTick:
+    """#183: 設定が保証する音価の下限(ノート単位と出力境界で共有する単一情報源)。"""
+
+    def test_effective_strength_uses_the_min_value_grid(self) -> None:
+        settings = QuantizeSettings(min_value="1/16", strength=1.0, enabled=True)
+
+        # divisions=480は四分音符あたりなので、16分音符は120tick。
+        assert settings.min_duration_tick(480) == 120
+        assert settings.min_duration_tick(480) == min_grid_ticks("1/16", 480)
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            QuantizeSettings(enabled=False),
+            QuantizeSettings(strength=0.0),
+        ],
+    )
+    def test_without_effective_strength_the_bound_is_one_tick(
+        self, settings: QuantizeSettings
+    ) -> None:
+        # 強さ0は「格子へ寄せない=生位置のまま」の契約なので下限を課さない(#177)。
+        assert settings.min_duration_tick(480) == 1
+
+
+class TestAnchorsContract:
+    """#183レビュー指摘: 渡したアンカーをそのまま使う(`[]`を偽値扱いしない)。"""
+
+    def test_keeps_an_explicit_empty_anchor_list(self) -> None:
+        # `None`のときだけ計算する。空リストを「未指定」と解釈して再計算すると、
+        # 呼び出し側が意図した写像と食い違う。**再計算した場合と結果が変わる入力**
+        # (2.0秒=5拍目)で確かめる(0秒のノートでは両者が同じtickになり区別できない)。
+        notes = [(1, 2.0, 0.5)]
+        empty_anchors: list[tuple[float, float]] = []
+
+        recomputed = quantize_note_onsets(
+            notes, _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4
+        )
+        given_empty = quantize_note_onsets(
+            notes, _BEATS_120BPM_4_4, _TIME_SIGNATURES_4_4, anchors=empty_anchors
+        )
+
+        # ビート列から計算すると5拍目の頭(4拍×480tick)。空アンカーなら写像が無く0tick。
+        assert recomputed[1].onset_tick == 1920
+        assert given_empty[1].onset_tick == 0
+
+    def test_uses_the_given_anchors_instead_of_recomputing(self) -> None:
+        # 倍の長さのアンカー(1拍=960tick相当)を渡すと、オンセットはその格子に乗る。
+        anchors: list[tuple[float, float]] = [(i * 0.5, i * 960) for i in range(16)]
+        notes = [(1, 2.0, 0.5)]  # 5拍目
+
+        result = quantize_note_onsets(notes, [], [], anchors=anchors)
+
+        assert result[1].onset_tick == 3840  # 4拍ぶん(5拍目の頭)
+
+
+class TestEnforceMinDuration:
+    """#183: 出力境界の不変条件(最小音符単位より短い音符を残さない)。"""
+
+    def test_raises_short_notes_to_the_minimum(self) -> None:
+        score = _score_with_durations(480, [1, 60, 120, 480])
+
+        raised = enforce_min_duration(score, 120)
+
+        assert raised == 2  # 1tickと60tickの2件だけ引き上げた
+        assert [n.duration_tick for n in score.parts[0].notes] == [120, 120, 120, 480]
+
+    def test_keeps_notes_without_a_quantized_duration(self) -> None:
+        # 未量子化・手編集のノート(`duration_tick=None`)は対象外。
+        score = _score_with_durations(480, [None, 30])
+
+        raised = enforce_min_duration(score, 120)
+
+        assert raised == 1
+        assert [n.duration_tick for n in score.parts[0].notes] == [None, 120]
+
+    def test_updates_duration_sec_through_the_same_mapping(self) -> None:
+        # `Note`はtick系と秒系を二重に持つため、下限を課したら秒も同じ写像で更新する。
+        score = _score_with_durations(480, [60])
+
+        raised = enforce_min_duration(score, 120, tick_to_sec=lambda tick: tick / 480.0)
+
+        note = score.parts[0].notes[0]
+        assert raised == 1
+        assert note.duration_tick == 120
+        assert note.duration_sec == pytest.approx(0.25)
+
+    def test_scales_duration_sec_by_the_original_ratio_without_a_mapping(self) -> None:
+        # 写像を渡せない場合(アンカーが空)は、元の「秒/tick」の比で比例スケールする。
+        # tickだけ直して秒を据え置くと、秒を参照する経路で要件が崩れるため。
+        score = _score_with_durations(480, [60])
+
+        assert enforce_min_duration(score, 120, tick_to_sec=None) == 1
+        assert score.parts[0].notes[0].duration_sec == pytest.approx(1.0)
+
+    def test_falls_back_to_the_ratio_when_the_mapping_is_unusable(self) -> None:
+        # `ticks_to_seconds`はアンカーが空だと0.0を返す。使えない写像のときも
+        # 比でスケールする(`duration_sec`の`gt=0`不変条件も守る)。
+        score = _score_with_durations(480, [60])
+
+        assert enforce_min_duration(score, 120, tick_to_sec=lambda _tick: 0.0) == 1
+        assert score.parts[0].notes[0].duration_sec == pytest.approx(1.0)
+
+    def test_leaves_duration_sec_alone_for_a_zero_length_note(self) -> None:
+        # `duration_tick=0`(ゼロ長)は比が取れないため据え置く。
+        score = _score_with_durations(480, [0])
+
+        assert enforce_min_duration(score, 120, tick_to_sec=None) == 1
+        assert score.parts[0].notes[0].duration_tick == 120
+        assert score.parts[0].notes[0].duration_sec == pytest.approx(0.5)
+
+    def test_is_a_noop_when_the_bound_is_one_tick(self) -> None:
+        score = _score_with_durations(480, [1, 30])
+
+        assert enforce_min_duration(score, 1) == 0
+        assert [n.duration_tick for n in score.parts[0].notes] == [1, 30]
+
+    def test_reports_the_number_of_raised_notes(self) -> None:
+        score = _score_with_durations(480, [10, 20, 30])
+
+        assert enforce_min_duration(score, 120) == 3

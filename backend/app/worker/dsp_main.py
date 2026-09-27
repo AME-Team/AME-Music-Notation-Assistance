@@ -45,8 +45,11 @@ from app.pipeline.quantize import (
     DEFAULT_QUANTIZE_STRENGTH,
     DEFAULT_TOP_N,
     QuantizeSettings,
+    beat_tick_anchors,
+    enforce_min_duration,
     quantize_note_onsets,
     quantize_pedal_ticks,
+    ticks_to_seconds,
 )
 from app.pipeline.refine.baseline import RefineNoteInput, estimate_key_fifths, refine_baseline
 from app.pipeline.separate import audio_fingerprint, params_hash, resolve_model, run_separation
@@ -496,7 +499,11 @@ _SINGLE_STAFF_STEM_NAMES = frozenset(QUANTIZABLE_STEM_NAMES) - {PIANO_STEM_NAME}
 # 仕組みで明示的に再計算させる)。v2: 拍子・テンポを`ScoreIR`へ取り込む修正。
 # #174: 最小音符単位・クオンタイズの強さ/入切を導入したため2→3(出力が変わる
 # ので、既存プロジェクトも一度は再実行される)。
-QUANTIZE_ALGO_VERSION = 3
+# #177/#183: 音価の下限(最小音符単位より短い音価を作らない)を導入したため3→4。
+# 上げ忘れると、入力が同じ既存プロジェクトは`should_skip_stage`でスキップされ、
+# 下限が効いていない古い`ScoreIR`が残り続ける(実報告: 16分を設定しても
+# 短い音符が残る)。
+QUANTIZE_ALGO_VERSION = 4
 
 
 def _initial_score_ir(project_id: str, workspace_dir: Path) -> ScoreIR:
@@ -1247,11 +1254,19 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     # (`domain/score.py`のクラス不変条件)ため、パート間の衝突は起こらない。
     all_active_notes = [n for notes in active_notes_by_part_id.values() for n in notes]
     onset_inputs = [(n.id, n.onset_sec, n.duration_sec) for n in all_active_notes]
+    # tick→秒の変換にも同じアンカーを使うため、ここで1回だけ計算して渡す
+    # (#183レビュー指摘: 二重計算すると写像が食い違いうる)。
+    quantize_anchors = beat_tick_anchors(
+        beatmap.get("beats", []),
+        beatmap.get("time_signatures", []),
+        score.divisions,
+    )
     quantized = quantize_note_onsets(
         onset_inputs,
         beatmap.get("beats", []),
         beatmap.get("time_signatures", []),
         divisions=score.divisions,
+        anchors=quantize_anchors,
         top_n=DEFAULT_TOP_N,
         # #174: 最小音符単位と適用度合い(入切・強さ)。
         settings=settings,
@@ -1348,6 +1363,33 @@ def run_quantize_stage(job_id: str, project_id: str, workspace_dir: Path, params
     # score_service.write_score(project_id, score) によって
     # score/current.json へ永続化される。ScoreService.ensure_chords() を
     # 用いて score.chords を最新ノート情報から確定させておく。
+    # #183: 出力境界でも最小音符単位を機械的に保証する。要件は「最小音符単位を
+    # 設定したらいかなる場合でもそれより短い音符を残さない」であり、ノート単位の
+    # 下限だけでは経路が増えたときに素通りしうる。
+    # 秒系の音価も、量子化本体が使ったのと**同じ**アンカーで更新する(渡さないと
+    # tickだけ下限に揃って`duration_sec`が短いまま残る)。
+    raised = enforce_min_duration(
+        score,
+        settings.min_duration_tick(score.divisions),
+        tick_to_sec=(
+            (lambda tick: ticks_to_seconds(tick, quantize_anchors))
+            # アンカーが空(`ticks_to_seconds`が0.0を返す)ときは渡さない。
+            if quantize_anchors
+            else None
+        ),
+    )
+    if raised:
+        emit(
+            {
+                "job_id": job_id,
+                "stage": "quantize",
+                "progress": 0.98,
+                "message": (
+                    f"最小音符単位({settings.min_value})より短い{raised}件の音価を引き上げました"
+                ),
+            }
+        )
+
     _emit_quantize_step("chords")
     ScoreService.ensure_chords(score, force_recompute=True)
 

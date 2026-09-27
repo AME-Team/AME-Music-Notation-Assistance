@@ -476,7 +476,7 @@ test("quantize settings (min note value, strength, on/off) reach the panel and t
     });
 
     await test.step("④の再実行が設定をパラメータで送る", async () => {
-      let posted: { params?: Record<string, unknown> } | null = null;
+      let posted: { params?: Record<string, unknown>; force?: boolean } | null = null;
       await page.route("**/stages/quantize/run", async (route) => {
         posted = JSON.parse(route.request().postData() ?? "{}");
         await route.fulfill({
@@ -492,6 +492,9 @@ test("quantize settings (min note value, strength, on/off) reach the panel and t
         quantize_strength: 0.4,
         quantize_enabled: true,
       });
+      // #183: ユーザーが明示的に押した操作なので、入力が前回と同じでも
+      // ステージ側で「変更なし」とスキップされないようforceを立てる。
+      expect(posted?.force).toBe(true);
     });
   } finally {
     await app.close();

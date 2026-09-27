@@ -14,9 +14,14 @@ from __future__ import annotations
 
 import bisect
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.pipeline.time_signature import time_signature_at_bar
+
+if TYPE_CHECKING:
+    from app.domain.score import ScoreIR
 
 # MusicXMLの `<divisions>`(四分音符あたりのtick数)の既定値(#27)。
 DEFAULT_DIVISIONS = 480
@@ -107,6 +112,18 @@ class QuantizeSettings:
     def applied_strength(self) -> float:
         """実際に格子へ寄せる比率(`enabled=False`なら0.0)。"""
         return self.strength if self.enabled else 0.0
+
+    def min_duration_tick(self, divisions: int) -> int:
+        """この設定が保証する音価の下限(tick)。
+
+        実効的な強さが0より大きいときだけ最小音符単位の格子1つぶんを下限にする
+        (MIDDLEレビュー指摘)。強さ0(`enabled=False`や強さ0%)は「格子へ寄せない=
+        生位置のまま」という契約なので、そこで音価だけを切り上げると終端位置が
+        生位置から動いてしまう。
+        """
+        if self.applied_strength <= 0.0:
+            return 1
+        return min_grid_ticks(self.min_value, divisions)
 
     def blend(self, raw_tick: float, target_tick: float) -> int:
         """生tickを目標tickへ寄せた整数tickを返す(#174の強さ)。"""
@@ -410,6 +427,7 @@ def quantize_note_onsets(
     divisions: int = DEFAULT_DIVISIONS,
     top_n: int = DEFAULT_TOP_N,
     settings: QuantizeSettings | None = None,
+    anchors: list[tuple[float, float]] | None = None,
 ) -> dict[int, QuantizedNote]:
     """ノート列を量子化する(#25)。
 
@@ -432,6 +450,10 @@ def quantize_note_onsets(
     `settings`(#174)で最小音符単位と適用度合いを指定する。省略時は既定
     (16分音符・強さ1.0・有効=従来と同じ完全なスナップ)。
 
+    `anchors`を渡すと、`beats`/`time_signatures`からのアンカー計算を省略して
+    それを使う(#183レビュー指摘)。呼び出し側がtick→秒の変換にも**同じ**アンカーを
+    使うことで、写像が量子化本体と食い違わないことをコードでも保証する。
+
     実効的な強さが0より大きいときは、`duration_tick`が最小音符単位の格子1つぶんを
     下回らないようにする(#177)。ただしオンセット側は最小音符単位より細かい格子
     (swing・3連符)を選びうるため、オンセット間隔が下限より短い隣接音符では、この
@@ -440,7 +462,10 @@ def quantize_note_onsets(
     """
     if settings is None:
         settings = DEFAULT_QUANTIZE_SETTINGS
-    anchors = beat_tick_anchors(beats, time_signatures, divisions)
+    # `None`のときだけ計算する(`[]`を渡されたらそれを尊重する。空リストを偽値として
+    # 再計算すると、呼び出し側が意図したアンカーと写像が食い違いうる)。
+    if anchors is None:
+        anchors = beat_tick_anchors(beats, time_signatures, divisions)
     raw_ticks = {
         note_id: _seconds_to_raw_tick(onset_sec, anchors) for note_id, onset_sec, _ in notes
     }
@@ -481,9 +506,7 @@ def quantize_note_onsets(
         # 下限を課すのは**実効的な強さが0より大きいとき**だけにする(MIDDLEレビュー
         # 指摘)。強さ0(`enabled=False`や強さ0%)は「格子へ寄せない=生位置のまま」という
         # 契約なので、そこで音価だけを切り上げると終端位置が生位置から動いてしまう。
-        min_duration_tick = 1
-        if settings.applied_strength > 0.0:
-            min_duration_tick = min_grid_ticks(settings.min_value, divisions)
+        min_duration_tick = settings.min_duration_tick(divisions)
         duration_tick = max(offset_tick - onset_tick, min_duration_tick)
 
         result[note_id] = QuantizedNote(
@@ -537,3 +560,59 @@ def quantize_pedal_ticks(
         stop_tick = max(stop_tick, min(start_tick + 1, max_tick))
         result.append((start_tick, stop_tick))
     return result
+
+
+def enforce_min_duration(
+    score: ScoreIR,
+    min_duration_tick: int,
+    *,
+    tick_to_sec: Callable[[float], float] | None = None,
+) -> int:
+    """`ScoreIR`の全ノートの音価を最小音符単位まで引き上げる(#183)。
+
+    要件は「最小音符単位を設定したら、いかなる場合でもそれより短い音符を残さない」
+    であり、ノート単位の下限(`QuantizeSettings.min_duration_tick`)だけでは、
+    経路が増えたときに素通りしうる。ステージの出力境界でも機械的に保証する。
+
+    対象は`duration_tick`を持つ全ノート。手編集(`provenance="user"`)のノートも
+    含める: `run_quantize_stage`はprovenanceを問わず音価を再計算する契約(#29)なので、
+    「手編集だから短い音価が残る」状態を作らない。なお`duration_tick=None`
+    (未量子化・編集途中)は触らない(このステージが音価を決めたノートだけが対象)。
+
+    音価を引き上げると次のノートと重なることがあるが、**下限を優先**する
+    (要件が「短い音符を残さない」であるため)。重なりの解消は書き出し側の責務。
+
+    `Note`はtick系と秒系の音価を二重に持つため、`tick_to_sec`を渡すと
+    `duration_sec`も同じ写像で更新する(渡さないと秒だけ短いまま残り、再生や
+    書き出しが秒を参照する経路で要件が崩れる)。
+
+    引き上げたノート数を返す(0件なら何も変えていない)。
+    """
+    if min_duration_tick <= 1:
+        return 0
+    raised = 0
+    for part in score.parts:
+        for note in part.notes:
+            if note.duration_tick is None or note.duration_tick >= min_duration_tick:
+                continue
+            old_duration_tick = note.duration_tick
+            note.duration_tick = min_duration_tick
+            new_duration_sec: float | None = None
+            if tick_to_sec is not None and note.onset_tick is not None:
+                mapped = tick_to_sec(note.onset_tick + min_duration_tick) - tick_to_sec(
+                    note.onset_tick
+                )
+                # `ticks_to_seconds`はアンカーが空だと0.0を返す。`Note.duration_sec`は
+                # `gt=0`の不変条件を持つため、正の値のときだけ採用する。
+                if mapped > 0.0:
+                    new_duration_sec = mapped
+            if new_duration_sec is None and old_duration_tick > 0:
+                # 写像が使えないときは元の「秒/tick」の比で比例スケールする。tickだけ
+                # 直して秒を据え置くと、秒を参照する経路(再生・書き出し)で要件が崩れる。
+                # `duration_tick=0`(ゼロ長)は比が取れず下限秒を導けないため据え置く
+                # (`duration_sec`に下限を課すと、対応するtickが無い値を作ることになる)。
+                new_duration_sec = note.duration_sec * (min_duration_tick / old_duration_tick)
+            if new_duration_sec is not None and new_duration_sec > 0.0:
+                note.duration_sec = new_duration_sec
+            raised += 1
+    return raised
