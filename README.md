@@ -298,3 +298,13 @@ Linux上のテストでは検出されない)。ジョブ失敗時にはリト�
 `slow` マーカーが付いたテストは `demucs-onnx`(htdemucs_6s, 約258MB)や `beat-this` の
 チェックポイント(約77MB)を実際にダウンロード・推論するため、既定の `pytest` 実行からは
 除外される(`pytest.ini` の `addopts`)。CI はこの2系統を別ステップとして両方実行する。
+
+## レビュー基盤(AME AI Review System)の参照ポリシー
+
+二重ゲート(Gate 1 = pre-commit / Gate 2 = PR)の参照先は次のとおり。
+
+- CI のラッパ(`review_command.yml` / `review_reply.yml`)は hub(`AME-Team/AME-AI-Review-System`)の移動メジャータグ `v0` を参照する。リリースごとに自動追随するため、配布先での更新作業は不要である。不変性が必要な場合は `ame-ai-reviewer init --ref v0.2.16` のようにリリースタグへ固定する(その場合は手作業の更新が必要)。
+- Gate 1 の wheel は `.pre-commit-config.yaml` の 3 フックに `#sha256=` 付きで固定する(現在 v0.2.16)。追随は `ame-ai-reviewer sync`、差分の確認だけなら `sync --check`(差分あり exit 1 / 判定不能 exit 2)。
+- リリース直後は CI(移動タグ)と Gate 1(固定ピン)の版がずれ得る。追随は `sync` の実行時点で揃う。判定差を避けるため、`sync --check` で定期的に突き合わせる。
+- ラッパの `checks: read` は Gate 2 が PR の check runs を読むための権限である(欠けると外部 CI ゲートが無言で無効化される)。`review_reply.yml` には前置 `if` を置かない(自己除外・コマンド除外・メンション判定は upstream が `comment_user` / `comment_body` に対して行う)。`review_command.yml` のジョブ `if` は維持する。
+- ラッパは `ame-ai-reviewer init` の生成物であり手で編集しない。リポジトリ固有の注記は本節に置く(`init --force` で再生成しても失われないように)。
